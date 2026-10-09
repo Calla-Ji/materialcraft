@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mc_core",
+    "crates/mc_gpu",
+    "crates/mc_nodes",
+    "crates/mc_export",
+    "crates/mc_app",
+    "crates/mc_cli",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
