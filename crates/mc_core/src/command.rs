@@ -262,6 +262,31 @@ impl Graph {
         }
         transaction
     }
+
+    /// Like [`Self::remove_node_transaction`], but for a whole batch of
+    /// nodes as a single undoable step — e.g. a "select all, then delete"
+    /// gesture. A connection between two nodes that are *both* in `ids`
+    /// would otherwise show up in each node's own transaction and get
+    /// disconnected twice; this dedupes by connection, not by node.
+    pub fn remove_nodes_transaction(&self, ids: &[NodeId]) -> Transaction {
+        let id_set: std::collections::HashSet<NodeId> = ids.iter().copied().collect();
+        let mut transaction: Transaction = self
+            .connections
+            .iter()
+            .filter(|c| id_set.contains(&c.from_node) || id_set.contains(&c.to_node))
+            .cloned()
+            .map(Command::Disconnect)
+            .collect();
+        for id in &id_set {
+            if let Some(node) = self.nodes.get(id) {
+                transaction.push(Command::RemoveNode {
+                    id: *id,
+                    node: node.clone(),
+                });
+            }
+        }
+        transaction
+    }
 }
 
 #[cfg(test)]
@@ -309,6 +334,44 @@ mod tests {
             graph.upstream(b, "input"),
             Some(a),
             "undo must restore the connection, not just the node"
+        );
+    }
+
+    #[test]
+    fn remove_nodes_transaction_deletes_a_shared_connection_exactly_once() {
+        let mut graph = Graph::new();
+        let mut history = History::new();
+        let a = graph.add_node(Node::new("perlin_noise"));
+        let b = graph.add_node(Node::new("levels"));
+        let c = graph.add_node(Node::new("invert"));
+        // a -> b -> c: the a-b connection touches two nodes that are both
+        // being removed together, which is the case that would double up a
+        // Disconnect command if the transaction weren't deduped by
+        // connection.
+        graph.connect(a, "output", b, "input").unwrap();
+        graph.connect(b, "output", c, "input").unwrap();
+
+        let transaction = graph.remove_nodes_transaction(&[a, b]);
+        history
+            .do_transaction(&mut graph, transaction)
+            .expect("a shared connection must only be disconnected once");
+        assert!(graph.node(a).is_none());
+        assert!(graph.node(b).is_none());
+        assert!(graph.node(c).is_some(), "c wasn't in the batch, must survive");
+        assert_eq!(graph.upstream(c, "input"), None);
+
+        assert!(history.undo(&mut graph));
+        assert!(graph.node(a).is_some());
+        assert!(graph.node(b).is_some());
+        assert_eq!(
+            graph.upstream(b, "input"),
+            Some(a),
+            "undo must restore the a->b connection"
+        );
+        assert_eq!(
+            graph.upstream(c, "input"),
+            Some(b),
+            "undo must restore the b->c connection"
         );
     }
 
