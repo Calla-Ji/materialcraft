@@ -37,6 +37,10 @@ const WIRE_HIT_DISTANCE: f32 = 12.0;
 const PREVIEW_DOT_RADIUS: f32 = 4.0;
 const PREVIEW_DOT_MARGIN: f32 = 12.0;
 const DOT_SPACING: f32 = 16.0;
+const HEADER_TEXT_LEFT: f32 = 8.0;
+/// Space reserved on the header's right side for the preview/delete dots, so
+/// the title text never runs underneath them.
+const HEADER_TEXT_RIGHT_RESERVED: f32 = PREVIEW_DOT_MARGIN + DOT_SPACING + 6.0;
 
 /// Which pin a wire-drag gesture started from, or that a drawn wire ends at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +113,47 @@ fn port_color(port_type: PortType) -> Color32 {
         PortType::Gray => Color32::from_gray(200),
         PortType::Color => Color32::from_rgb(230, 150, 60),
     }
+}
+
+/// The node header's title text: the generic `"Output: "` prefix (every
+/// Output node def has one — see `mc_nodes::defs`) is swapped for a much
+/// shorter `"ON "`, and whatever still doesn't fit the node's fixed width
+/// after that is truncated with `"..."` — long display names were bleeding
+/// right past the node's own edge, over its neighbors. Applies to any node,
+/// not just Output ones, since nothing stops a future node def from having
+/// just as long a name.
+fn node_title_text(
+    painter: &egui::Painter,
+    display_name: &str,
+    font_id: egui::FontId,
+    max_width: f32,
+) -> String {
+    let shortened = match display_name.strip_prefix("Output: ") {
+        Some(rest) => format!("ON {rest}"),
+        None => display_name.to_string(),
+    };
+
+    let fits = |s: &str| -> bool {
+        painter
+            .layout_no_wrap(s.to_string(), font_id.clone(), Color32::WHITE)
+            .size()
+            .x
+            <= max_width
+    };
+
+    if fits(&shortened) {
+        return shortened;
+    }
+
+    let mut truncated = shortened;
+    while !truncated.is_empty() {
+        let candidate = format!("{truncated}...");
+        if fits(&candidate) {
+            return candidate;
+        }
+        truncated.pop();
+    }
+    "...".to_string()
 }
 
 /// Node layout constants are defined at `zoom == 1` and scaled by `zoom`
@@ -466,14 +511,22 @@ pub fn show(
             ],
             Stroke::new(1.0, Color32::from_gray(60)),
         );
+        let title_font = egui::FontId::proportional(14.0 * zoom);
+        let title_max_width = (NODE_WIDTH - HEADER_TEXT_LEFT - HEADER_TEXT_RIGHT_RESERVED) * zoom;
+        let title_text = node_title_text(
+            &painter,
+            def.display_name,
+            title_font.clone(),
+            title_max_width,
+        );
         painter.text(
             Pos2::new(
-                rect.min.x + 8.0 * zoom,
+                rect.min.x + HEADER_TEXT_LEFT * zoom,
                 rect.min.y + HEADER_HEIGHT * zoom / 2.0,
             ),
             egui::Align2::LEFT_CENTER,
-            def.display_name,
-            egui::FontId::proportional(14.0 * zoom),
+            title_text,
+            title_font,
             Color32::WHITE,
         );
 
