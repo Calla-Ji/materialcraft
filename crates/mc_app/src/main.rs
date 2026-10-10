@@ -8,7 +8,9 @@
 
 mod export_dialog;
 mod graph_view;
+mod hdri;
 mod params_panel;
+mod viewport3d;
 
 use std::collections::HashMap;
 
@@ -30,6 +32,7 @@ struct MaterialCraftApp {
     add_node_search: String,
     param_drag: params_panel::DragState,
     export_dialog: export_dialog::ExportDialogState,
+    viewport3d: viewport3d::Viewport3d,
 
     preview_texture_id: Option<egui::TextureId>,
 }
@@ -105,7 +108,44 @@ impl eframe::App for MaterialCraftApp {
                         }
                     }
                     columns[1].heading("3D View");
-                    columns[1].weak("(sphere / cube / plane, PBR lit)");
+                    columns[1].horizontal(|ui| {
+                        egui::ComboBox::from_label("Mesh")
+                            .selected_text(self.viewport3d.mesh_kind.label())
+                            .show_ui(ui, |ui| {
+                                for kind in viewport3d::MeshKind::ALL {
+                                    ui.selectable_value(
+                                        &mut self.viewport3d.mesh_kind,
+                                        kind,
+                                        kind.label(),
+                                    );
+                                }
+                            });
+                        ui.add(
+                            egui::Slider::new(&mut self.viewport3d.height_scale, 0.0..=0.5)
+                                .text("Height Scale"),
+                        );
+                    });
+                    let desired = egui::vec2(
+                        columns[1].available_width(),
+                        columns[1].available_height().min(240.0),
+                    );
+                    let response =
+                        columns[1].allocate_response(desired, egui::Sense::click_and_drag());
+                    self.viewport3d.handle_input(&columns[1], &response);
+                    let texture_id = self.viewport3d.render(
+                        &self.gpu,
+                        &self.pool,
+                        &self.graph,
+                        &self.render_state,
+                        response.rect.width().max(1.0) as u32,
+                        response.rect.height().max(1.0) as u32,
+                    );
+                    columns[1].painter().image(
+                        texture_id,
+                        response.rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
                 });
             });
 
@@ -187,6 +227,7 @@ fn main() -> eframe::Result<()> {
                 .clone()
                 .expect("mc_app requires eframe's wgpu backend");
             let gpu = mc_gpu::Context::new(render_state.device.clone(), render_state.queue.clone());
+            let viewport3d = viewport3d::Viewport3d::new(&gpu);
 
             Ok(Box::new(MaterialCraftApp {
                 gpu,
@@ -201,6 +242,7 @@ fn main() -> eframe::Result<()> {
                 add_node_search: String::new(),
                 param_drag: None,
                 export_dialog: export_dialog::ExportDialogState::default(),
+                viewport3d,
                 preview_texture_id: None,
             }))
         }),

@@ -1079,6 +1079,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glam"
+version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc148d4ddd3930c52f9e5ae79b89805c6f07e9ff417e7b083e0348cea60a5aba"
+
+[[package]]
 name = "glifo"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1541,6 +1547,8 @@ dependencies = [
  "egui-snarl",
  "egui-wgpu",
  "env_logger",
+ "exr",
+ "glam",
  "log",
  "mc_core",
  "mc_export",
