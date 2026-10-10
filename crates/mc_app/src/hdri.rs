@@ -34,8 +34,43 @@ fn f32_to_f16_bits(value: f32) -> u16 {
     }
 }
 
-/// Decodes the embedded HDRI and uploads it as an `Rgba16Float` texture.
-pub fn load_environment_view(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+/// Solid-angle-weighted average color of an equirectangular environment map,
+/// used as a flat ambient/irradiance stand-in (see `viewport3d.wgsl`'s
+/// `ambient_color` uniform): a per-pixel raw sample of the HDRI looks like a
+/// sharp reflection even on the diffuse term, since equirect rows near the
+/// poles cover much less actual sky than rows near the equator, a plain
+/// unweighted average would be skewed toward the poles.
+fn weighted_average_color(width: usize, height: usize, pixels: &[f32]) -> [f32; 3] {
+    let mut sum = [0f64; 3];
+    let mut weight_total = 0f64;
+    for row in 0..height {
+        // `v` mirrors `equirect_uv`'s mapping (v=0 at the +Y pole, v=1 at
+        // -Y), so `v * PI` is the polar angle and `sin` of it is the
+        // standard equirect row weight.
+        let v = (row as f64 + 0.5) / height as f64;
+        let weight = (v * std::f64::consts::PI).sin();
+        for col in 0..width {
+            let index = (row * width + col) * 4;
+            sum[0] += pixels[index] as f64 * weight;
+            sum[1] += pixels[index + 1] as f64 * weight;
+            sum[2] += pixels[index + 2] as f64 * weight;
+        }
+        weight_total += weight * width as f64;
+    }
+    [
+        (sum[0] / weight_total) as f32,
+        (sum[1] / weight_total) as f32,
+        (sum[2] / weight_total) as f32,
+    ]
+}
+
+/// Decodes the embedded HDRI and uploads it as an `Rgba16Float` texture,
+/// alongside its solid-angle-weighted average color (see
+/// [`weighted_average_color`]).
+pub fn load_environment_view(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> (wgpu::TextureView, [f32; 3]) {
     let image = exr::prelude::read()
         .no_deep_data()
         .largest_resolution_level()
@@ -63,6 +98,7 @@ pub fn load_environment_view(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu
         .expect("bundled HDRI (assets/hdri/studio_small_03_1k.exr) is a valid EXR file");
 
     let (width, height, pixels) = image.layer_data.channel_data.pixels;
+    let average_color = weighted_average_color(width, height, &pixels);
     let width = width as u32;
     let height = height as u32;
 
@@ -105,5 +141,8 @@ pub fn load_environment_view(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu
         },
     );
 
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
+    (
+        texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        average_color,
+    )
 }

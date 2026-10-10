@@ -60,6 +60,7 @@ pub struct Viewport3d {
     meshes: HashMap<MeshKind, (wgpu::Buffer, wgpu::Buffer, u32)>,
     fallback: FallbackTextures,
     environment_view: wgpu::TextureView,
+    environment_ambient_color: Vec3,
 
     color_view: Option<wgpu::TextureView>,
     depth_view: Option<wgpu::TextureView>,
@@ -226,7 +227,9 @@ impl Viewport3d {
             height: solid_view(device, &gpu.queue, "fallback height", [128, 128, 128, 255]),
         };
 
-        let environment_view = crate::hdri::load_environment_view(device, &gpu.queue);
+        let (environment_view, environment_ambient_color) =
+            crate::hdri::load_environment_view(device, &gpu.queue);
+        let environment_ambient_color = Vec3::from(environment_ambient_color);
 
         Self {
             pipeline,
@@ -237,6 +240,7 @@ impl Viewport3d {
             meshes,
             fallback,
             environment_view,
+            environment_ambient_color,
             color_view: None,
             depth_view: None,
             texture_id: None,
@@ -394,6 +398,7 @@ impl Viewport3d {
             proj * view,
             eye,
             light_dir,
+            self.environment_ambient_color,
             self.height_scale,
             use_displacement,
         );
@@ -596,14 +601,16 @@ fn upload_mesh(
     (vertex_buffer, index_buffer, indices.len() as u32)
 }
 
-/// `view_proj`(mat4) + `camera_pos`(vec4) + `light_dir`(vec4) + 2 scalars +
-/// 2 padding floats = 112 bytes, matching `Uniforms` in viewport3d.wgsl.
-const UNIFORM_SIZE: usize = 112;
+/// `view_proj`(mat4) + `camera_pos`(vec4) + `light_dir`(vec4) +
+/// `ambient_color`(vec4) + 2 scalars + 2 padding floats = 128 bytes,
+/// matching `Uniforms` in viewport3d.wgsl.
+const UNIFORM_SIZE: usize = 128;
 
 fn uniform_bytes(
     view_proj: Mat4,
     camera_pos: Vec3,
     light_dir: Vec3,
+    ambient_color: Vec3,
     height_scale: f32,
     use_displacement: bool,
 ) -> [u8; UNIFORM_SIZE] {
@@ -620,6 +627,9 @@ fn uniform_bytes(
         put(component, &mut bytes, &mut offset);
     }
     for component in [light_dir.x, light_dir.y, light_dir.z, 0.0] {
+        put(component, &mut bytes, &mut offset);
+    }
+    for component in [ambient_color.x, ambient_color.y, ambient_color.z, 0.0] {
         put(component, &mut bytes, &mut offset);
     }
     put(height_scale, &mut bytes, &mut offset);

@@ -12,6 +12,11 @@ struct Uniforms {
     camera_pos: vec4<f32>,
     // Direction the light travels (from the light, toward the scene).
     light_dir: vec4<f32>,
+    // Solid-angle-weighted average color of the environment map — used as a
+    // flat ambient/irradiance fill instead of a raw per-pixel sample, which
+    // would paint a sharp, obviously-not-diffuse image of the sky onto the
+    // surface (see `fs_main`'s `ambient_diffuse`).
+    ambient_color: vec4<f32>,
     height_scale: f32,
     // 1 for the Plane mesh (the only one with a meaningful "up" to displace
     // along), 0 otherwise.
@@ -141,14 +146,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let light_color = vec3<f32>(3.0, 2.9, 2.7);
     let direct = (diffuse + specular) * light_color * n_dot_l;
 
-    // Procedural-sky ambient: a diffuse term from the sky in the normal's
-    // direction, plus a cheap (un-blurred, roughness-agnostic) specular
-    // reflection of the sky — not real image-based lighting, but gives the
-    // preview some non-black fill light and a sense of a reflective
-    // environment without needing a bundled HDRI.
-    let ambient_diffuse = sky_color(n) * base_color * (1.0 - metallic) * ao * 0.6;
+    // Environment ambient: a flat diffuse fill using the environment's
+    // average color (a per-pixel raw sample here would paint a sharp image
+    // of the sky onto every surface regardless of roughness — not what
+    // diffuse/irradiance lighting looks like), plus a specular reflection of
+    // the sky dampened by roughness below.
+    let ambient_diffuse = uniforms.ambient_color.rgb * base_color * (1.0 - metallic) * ao * 0.6;
     let reflection = reflect(-v, n);
-    let ambient_specular = sky_color(reflection) * f * ao;
+    // A single raw environment sample is mirror-sharp regardless of
+    // roughness (no mip chain to blur it — see the module doc comment's
+    // "known simplification" note), so even a "matte" rough surface showed
+    // a crisp reflection of the HDRI's bright softbox. Damp it toward zero
+    // as roughness increases: a cheap, non-physical stand-in for prefiltering
+    // that keeps smooth/metal surfaces mirror-like while rough ones go flat.
+    let specular_strength = pow(1.0 - roughness, 3.0);
+    let ambient_specular = sky_color(reflection) * f * ao * specular_strength;
 
     let color = direct + ambient_diffuse + ambient_specular;
 
