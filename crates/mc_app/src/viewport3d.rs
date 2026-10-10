@@ -8,8 +8,6 @@
 //! same idea as Blender's Material Preview shading mode or Unreal's material
 //! preview sphere, just scoped to exactly what CLAUDE.md asks for.
 
-use std::collections::HashMap;
-
 use glam::{Mat4, Vec3};
 
 const VERTEX_ATTRS: [wgpu::VertexAttribute; 3] =
@@ -26,16 +24,26 @@ pub enum MeshKind {
     Sphere,
     Cube,
     Plane,
+    RoundedCube,
+    RoundedCylinder,
 }
 
 impl MeshKind {
-    pub const ALL: [MeshKind; 3] = [MeshKind::Sphere, MeshKind::Cube, MeshKind::Plane];
+    pub const ALL: [MeshKind; 5] = [
+        MeshKind::Sphere,
+        MeshKind::Cube,
+        MeshKind::Plane,
+        MeshKind::RoundedCube,
+        MeshKind::RoundedCylinder,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             MeshKind::Sphere => "Sphere",
             MeshKind::Cube => "Cube",
             MeshKind::Plane => "Plane",
+            MeshKind::RoundedCube => "Rounded Cube",
+            MeshKind::RoundedCylinder => "Rounded Cylinder",
         }
     }
 }
@@ -57,7 +65,13 @@ pub struct Viewport3d {
     uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    meshes: HashMap<MeshKind, (wgpu::Buffer, wgpu::Buffer, u32)>,
+    // Built lazily and rebuilt whenever `(mesh_kind, tessellation)` changes,
+    // rather than every `MeshKind` pre-built once at a fixed quality — see
+    // `tessellated_mesh`. The tessellation value is rounded to a whole
+    // percent for the comparison key so tiny float jitter doesn't trigger a
+    // rebuild on every frame.
+    current_mesh: (wgpu::Buffer, wgpu::Buffer, u32),
+    current_mesh_key: (MeshKind, u32),
     fallback: FallbackTextures,
     environment_view: wgpu::TextureView,
     environment_ambient_color: Vec3,
@@ -69,6 +83,7 @@ pub struct Viewport3d {
 
     pub mesh_kind: MeshKind,
     pub height_scale: f32,
+    pub tessellation: f32,
     yaw: f32,
     pitch: f32,
     distance: f32,
@@ -200,13 +215,12 @@ impl Viewport3d {
             ..Default::default()
         });
 
-        let mut meshes = HashMap::new();
-        meshes.insert(
-            MeshKind::Sphere,
-            upload_mesh(device, generate_sphere(24, 48)),
+        let initial_tessellation = 0.5;
+        let current_mesh = upload_mesh(
+            device,
+            tessellated_mesh(MeshKind::Sphere, initial_tessellation),
         );
-        meshes.insert(MeshKind::Cube, upload_mesh(device, generate_cube()));
-        meshes.insert(MeshKind::Plane, upload_mesh(device, generate_plane(64)));
+        let current_mesh_key = (MeshKind::Sphere, tessellation_bucket(initial_tessellation));
 
         let fallback = FallbackTextures {
             base_color: solid_view(
@@ -216,11 +230,15 @@ impl Viewport3d {
                 [140, 140, 140, 255],
             ),
             normal: solid_view(device, &gpu.queue, "fallback normal", [128, 128, 255, 255]),
+            // Fully rough (and, via `metallic` below, fully non-metal) by
+            // default, so connecting a node to either Output clearly reads
+            // as a change from a neutral matte baseline rather than from an
+            // arbitrary partial value.
             roughness: solid_view(
                 device,
                 &gpu.queue,
                 "fallback roughness",
-                [180, 180, 180, 255],
+                [255, 255, 255, 255],
             ),
             metallic: solid_view(device, &gpu.queue, "fallback metallic", [0, 0, 0, 255]),
             ao: solid_view(device, &gpu.queue, "fallback ao", [255, 255, 255, 255]),
@@ -237,7 +255,8 @@ impl Viewport3d {
             uniform_bind_group,
             texture_bind_group_layout,
             sampler,
-            meshes,
+            current_mesh,
+            current_mesh_key,
             fallback,
             environment_view,
             environment_ambient_color,
@@ -247,6 +266,7 @@ impl Viewport3d {
             size: (0, 0),
             mesh_kind: MeshKind::Sphere,
             height_scale: 0.15,
+            tessellation: initial_tessellation,
             yaw: 0.6,
             pitch: 0.35,
             distance: 3.0,
@@ -405,10 +425,16 @@ impl Viewport3d {
         gpu.queue.write_buffer(&self.uniform_buffer, 0, &bytes);
 
         let texture_bind_group = self.build_texture_bind_group(&gpu.device, pool, graph);
-        let (vertex_buffer, index_buffer, index_count) = self
-            .meshes
-            .get(&self.mesh_kind)
-            .expect("every MeshKind has a mesh built in Viewport3d::new");
+
+        let desired_key = (self.mesh_kind, tessellation_bucket(self.tessellation));
+        if desired_key != self.current_mesh_key {
+            self.current_mesh = upload_mesh(
+                &gpu.device,
+                tessellated_mesh(self.mesh_kind, self.tessellation),
+            );
+            self.current_mesh_key = desired_key;
+        }
+        let (vertex_buffer, index_buffer, index_count) = &self.current_mesh;
 
         let mut encoder = gpu
             .device
@@ -640,6 +666,37 @@ fn uniform_bytes(
     bytes
 }
 
+/// Rounds `tessellation` (0.0..1.0) to a whole percent, so the "has anything
+/// actually changed" check in `render` compares integers instead of floats.
+fn tessellation_bucket(tessellation: f32) -> u32 {
+    (tessellation.clamp(0.0, 1.0) * 100.0).round() as u32
+}
+
+fn lerp_segments(low: u32, high: u32, t: f32) -> u32 {
+    (low as f32 + (high as f32 - low as f32) * t.clamp(0.0, 1.0)).round() as u32
+}
+
+/// Builds the given mesh kind at a quality level driven by `tessellation`
+/// (0.0 = coarsest, 1.0 = finest). `Cube` ignores it — a flat-faced box has
+/// no use for extra subdivision — everything else scales its segment counts
+/// between a usable minimum and a smooth maximum.
+fn tessellated_mesh(kind: MeshKind, tessellation: f32) -> (Vec<Vertex>, Vec<u32>) {
+    match kind {
+        MeshKind::Sphere => generate_sphere(
+            lerp_segments(8, 48, tessellation),
+            lerp_segments(16, 96, tessellation),
+        ),
+        MeshKind::Cube => generate_cube(),
+        MeshKind::Plane => generate_plane(lerp_segments(8, 128, tessellation)),
+        MeshKind::RoundedCube => generate_rounded_cube(lerp_segments(4, 32, tessellation), 0.25),
+        MeshKind::RoundedCylinder => generate_rounded_cylinder(
+            lerp_segments(16, 96, tessellation),
+            lerp_segments(2, 16, tessellation),
+            0.3,
+        ),
+    }
+}
+
 fn generate_sphere(rings: u32, segments: u32) -> (Vec<Vertex>, Vec<u32>) {
     let mut vertices = Vec::new();
     for ring in 0..=rings {
@@ -705,6 +762,174 @@ fn generate_cube() -> (Vec<Vertex>, Vec<u32>) {
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
     (vertices, indices)
+}
+
+/// A cube with filleted edges/corners: each face is a `segments`×`segments`
+/// grid on the unit cube, then every vertex is pulled outward from an
+/// "inner" box (half-extent `1 - radius`) by `radius` along the direction
+/// it was clamped in. On the flat middle of a face that direction is just
+/// the face normal (so the vertex doesn't move at all); near an edge or
+/// corner it's the diagonal away from the inner box, tracing out exactly the
+/// quarter-cylinder/eighth-sphere fillet a real rounded box has there.
+fn generate_rounded_cube(segments: u32, radius: f32) -> (Vec<Vertex>, Vec<u32>) {
+    let radius = radius.clamp(0.0, 1.0);
+    let inner = 1.0 - radius;
+    let faces: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
+        ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        ([0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
+        ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+        ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+        ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+    ];
+
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for (normal, right, up) in faces {
+        let normal = Vec3::from(normal);
+        let right = Vec3::from(right);
+        let up = Vec3::from(up);
+        let base = vertices.len() as u32;
+        for j in 0..=segments {
+            let v = j as f32 / segments as f32 * 2.0 - 1.0;
+            for i in 0..=segments {
+                let u = i as f32 / segments as f32 * 2.0 - 1.0;
+                let p = normal + right * u + up * v;
+                let clamped = p.clamp(Vec3::splat(-inner), Vec3::splat(inner));
+                let delta = p - clamped;
+                let n = if delta.length_squared() > 1e-12 {
+                    delta.normalize()
+                } else {
+                    normal
+                };
+                let position = clamped + n * radius;
+                vertices.push(Vertex {
+                    position: position.to_array(),
+                    normal: n.to_array(),
+                    uv: [i as f32 / segments as f32, 1.0 - j as f32 / segments as f32],
+                });
+            }
+        }
+        let stride = segments + 1;
+        for j in 0..segments {
+            for i in 0..segments {
+                let a = base + j * stride + i;
+                let b = a + 1;
+                let c = a + stride;
+                let d = c + 1;
+                indices.extend_from_slice(&[a, b, d, a, d, c]);
+            }
+        }
+    }
+    (vertices, indices)
+}
+
+/// One point of the 2D (radial-distance, height) profile that
+/// [`revolve`] sweeps around the Y axis to build a surface of revolution —
+/// `(nr, ny)` is that profile curve's own outward normal, not a 3D one.
+struct ProfilePoint {
+    r: f32,
+    y: f32,
+    nr: f32,
+    ny: f32,
+}
+
+/// Sweeps a profile curve around the Y axis in `segments` angular steps,
+/// the same ring-by-ring construction [`generate_sphere`] uses for its
+/// lines of latitude — a cylinder, cone, torus, or (as used by
+/// [`generate_rounded_cylinder`]) a rounded cylinder are all just different
+/// profiles through this one function.
+fn revolve(profile: &[ProfilePoint], segments: u32) -> (Vec<Vertex>, Vec<u32>) {
+    let mut vertices = Vec::new();
+    for (ring, p) in profile.iter().enumerate() {
+        let v = ring as f32 / (profile.len() - 1) as f32;
+        for seg in 0..=segments {
+            let u = seg as f32 / segments as f32;
+            let theta = u * std::f32::consts::TAU;
+            let (sin_t, cos_t) = theta.sin_cos();
+            vertices.push(Vertex {
+                position: [p.r * cos_t, p.y, p.r * sin_t],
+                normal: [p.nr * cos_t, p.ny, p.nr * sin_t],
+                uv: [u, v],
+            });
+        }
+    }
+
+    let stride = segments + 1;
+    let mut indices = Vec::new();
+    for ring in 0..profile.len() as u32 - 1 {
+        for seg in 0..segments {
+            let a = ring * stride + seg;
+            let b = a + stride;
+            let c = a + 1;
+            let d = b + 1;
+            indices.extend_from_slice(&[a, b, c, c, b, d]);
+        }
+    }
+    (vertices, indices)
+}
+
+/// A cylinder with filleted top/bottom rim edges, built as a surface of
+/// revolution: flat top cap → quarter-circle fillet → straight side wall →
+/// quarter-circle fillet → flat bottom cap.
+fn generate_rounded_cylinder(
+    radial_segments: u32,
+    fillet_segments: u32,
+    fillet_radius: f32,
+) -> (Vec<Vertex>, Vec<u32>) {
+    let radius = 1.0_f32;
+    let half_height = 1.0_f32;
+    let fillet = fillet_radius.clamp(0.0, radius.min(half_height));
+    let flat_radius = radius - fillet;
+    let flat_half_height = half_height - fillet;
+
+    let mut profile = Vec::new();
+    profile.push(ProfilePoint {
+        r: 0.0,
+        y: half_height,
+        nr: 0.0,
+        ny: 1.0,
+    });
+    profile.push(ProfilePoint {
+        r: flat_radius,
+        y: half_height,
+        nr: 0.0,
+        ny: 1.0,
+    });
+    for i in 1..=fillet_segments {
+        let t = i as f32 / fillet_segments as f32 * std::f32::consts::FRAC_PI_2;
+        let (nr, ny) = (t.sin(), t.cos());
+        profile.push(ProfilePoint {
+            r: flat_radius + fillet * nr,
+            y: flat_half_height + fillet * ny,
+            nr,
+            ny,
+        });
+    }
+    profile.push(ProfilePoint {
+        r: radius,
+        y: -flat_half_height,
+        nr: 1.0,
+        ny: 0.0,
+    });
+    for i in 1..=fillet_segments {
+        let t = i as f32 / fillet_segments as f32 * std::f32::consts::FRAC_PI_2;
+        let (nr, ny) = (t.cos(), -t.sin());
+        profile.push(ProfilePoint {
+            r: flat_radius + fillet * nr,
+            y: -flat_half_height + fillet * ny,
+            nr,
+            ny,
+        });
+    }
+    profile.push(ProfilePoint {
+        r: 0.0,
+        y: -half_height,
+        nr: 0.0,
+        ny: -1.0,
+    });
+
+    revolve(&profile, radial_segments)
 }
 
 fn generate_plane(segments: u32) -> (Vec<Vertex>, Vec<u32>) {

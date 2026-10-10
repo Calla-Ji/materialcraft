@@ -14,6 +14,20 @@ pub fn show(
     selected: Option<mc_core::NodeId>,
     dragging: &mut DragState,
 ) {
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            show_inner(ui, graph, history, selected, dragging);
+        });
+}
+
+fn show_inner(
+    ui: &mut egui::Ui,
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    selected: Option<mc_core::NodeId>,
+    dragging: &mut DragState,
+) {
     let Some(id) = selected else {
         ui.weak("(select a node to edit its parameters)");
         return;

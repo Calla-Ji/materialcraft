@@ -9,3 +9,15 @@ its source and license.
   [Poly Haven](https://polyhaven.com/a/studio_small_03). License: CC0 (public domain). Used by
   `mc_app`'s 3D viewport (`crates/mc_app/src/hdri.rs`) as the sky and reflection environment.
   Downloaded at 1k resolution to keep the repository small.
+
+## Fonts
+
+- `assets/fonts/MaterialIconsRound-Regular.otf` — "Material Icons" (Round style) by Google, from
+  the [material-design-icons](https://github.com/google/material-design-icons) repository.
+  License: Apache License 2.0. Used by `mc_app`'s 3D viewport toolbar
+  (`crates/mc_app/src/viewport3d_panels.rs`) for the Mesh/Material/Camera/Environment icon
+  buttons, via specific glyph codepoints (not the whole icon set, but the font is bundled
+  in full since Apache-2.0 doesn't require subsetting).
+- `assets/fonts/Geist-Regular.ttf` — "Geist" by Vercel, in collaboration with basement.studio,
+  from the [geist-font](https://github.com/vercel/geist-font) repository. License: SIL Open Font
+  License 1.1. Used as `mc_app`'s UI typeface throughout, replacing egui's default font.

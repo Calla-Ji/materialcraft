@@ -1,21 +1,25 @@
 //! mc_app: the desktop application shell.
 //!
 //! Owns the window and the overall panel layout (menu, 2D/3D previews, node
-//! graph, parameter panel). M3 wires the node editor (egui-snarl) to a real
-//! `mc_core::Graph`: add nodes from a search menu, connect them (with Gray/
-//! Color type checking), edit params in a generic panel, and undo/redo —
-//! see `graph_view.rs` for how the UI mirrors the graph.
+//! graph, parameter panel). The node editor (`canvas.rs`) is a fully custom
+//! pan/zoom/select/connect canvas built directly on egui, reading and
+//! writing `mc_core::Graph` through the same `Command`/`Transaction` API as
+//! every other part of the app: add nodes from a search menu, connect them
+//! (with Gray/Color type checking), edit params in a generic panel, and
+//! undo/redo.
 
 mod add_node_menu;
+mod canvas;
+mod dock;
 mod export_dialog;
-mod graph_view;
 mod hdri;
 mod params_panel;
 mod viewport3d;
+mod viewport3d_panels;
 
 use std::collections::HashMap;
 
-use graph_view::{sync_snarl_from_graph, GraphViewer, NodeUi};
+use canvas::CanvasState;
 
 /// Root application state for the eframe event loop.
 struct MaterialCraftApp {
@@ -25,16 +29,17 @@ struct MaterialCraftApp {
 
     graph: mc_core::Graph,
     history: mc_core::History,
-    snarl: egui_snarl::Snarl<NodeUi>,
-    core_to_ui: HashMap<mc_core::NodeId, egui_snarl::NodeId>,
+    canvas: CanvasState,
     thumbnail_ids: HashMap<mc_core::NodeId, egui::TextureId>,
 
     selected: Option<mc_core::NodeId>,
-    add_node_search: String,
     add_node_menu: Option<add_node_menu::AddNodeMenu>,
+    pending_wire_connect: Option<canvas::DroppedWire>,
     param_drag: params_panel::DragState,
     export_dialog: export_dialog::ExportDialogState,
     viewport3d: viewport3d::Viewport3d,
+    viewport_panels: viewport3d_panels::ViewportPanels,
+    dock: dock::DockLayout,
 
     preview_texture_id: Option<egui::TextureId>,
 }
@@ -69,134 +74,250 @@ impl eframe::App for MaterialCraftApp {
             });
         });
 
-        // Reflect the previous frame's edits (including anything undo/redo
-        // just changed) into the editor widget, then re-evaluate whatever
-        // that left dirty, before any panel reads from `self.pool`.
-        sync_snarl_from_graph(&self.graph, &mut self.snarl, &mut self.core_to_ui);
+        // Re-evaluate whatever the previous frame's edits (including
+        // anything undo/redo just changed) left dirty, before any panel
+        // reads from `self.pool`.
         if let Err(err) =
             mc_nodes::registry::evaluate(&mut self.gpu, &mut self.pool, &mut self.graph)
         {
             log::warn!("graph evaluation error: {err}");
         }
 
-        egui::Panel::right("parameters")
-            .default_size(280.0)
-            .show(ui, |ui| {
-                params_panel::show(
-                    ui,
-                    &mut self.graph,
-                    &mut self.history,
-                    self.selected,
-                    &mut self.param_drag,
-                );
-            });
+        // 2D View, 3D View, Node Graph, and Parameters are dock cells (see
+        // dock.rs) laid out from raw rects we own, rather than
+        // `egui::Window`/Panel/columns — none of those auto-size to content,
+        // so nothing here can corrupt a sibling's measured size the way the
+        // old nested layout did, and dragging a border always keeps both
+        // neighbors flush since they read the same stored split ratio.
+        let bounds = ui.available_rect_before_wrap();
 
-        egui::Panel::top("previews")
-            .default_size(260.0)
-            .resizable(true)
-            .show(ui, |ui| {
-                ui.columns(2, |columns| {
-                    columns[0].heading("2D View");
-                    match self.preview_texture() {
-                        Some(texture_id) => {
-                            let size = columns[0]
-                                .available_height()
-                                .min(columns[0].available_width());
-                            columns[0].image(egui::load::SizedTexture::new(
-                                texture_id,
-                                egui::Vec2::splat(size),
-                            ));
-                        }
-                        None => {
-                            columns[0].weak("(select a node to preview it)");
-                        }
+        self.viewport_panels.update_anim(ui.ctx());
+        let drawer_width = self.viewport_panels.current_width();
+        let preview_texture_id = self.preview_texture();
+        let mut canvas_output = None;
+
+        // Disjoint borrows of the fields each dock cell's content needs, so
+        // the closure below doesn't have to borrow `self` as a whole while
+        // `self.dock` is already borrowed by the `show` call it's passed to.
+        let MaterialCraftApp {
+            dock,
+            graph,
+            history,
+            canvas,
+            thumbnail_ids,
+            selected,
+            param_drag,
+            viewport3d,
+            viewport_panels,
+            gpu,
+            pool,
+            render_state,
+            ..
+        } = self;
+
+        dock.show(
+            ui,
+            bounds,
+            |id| match id {
+                dock::CrateId::TwoDView => "2D View",
+                dock::CrateId::ThreeDView => "3D View",
+                dock::CrateId::NodeGraph => "Node Graph",
+                dock::CrateId::Parameters => "Parameters",
+            },
+            &mut |ui, id| match id {
+                dock::CrateId::Parameters => {
+                    params_panel::show(ui, graph, history, *selected, param_drag);
+                }
+                dock::CrateId::TwoDView => match preview_texture_id {
+                    Some(texture_id) => {
+                        let size = ui.available_height().min(ui.available_width());
+                        ui.image(egui::load::SizedTexture::new(
+                            texture_id,
+                            egui::Vec2::splat(size),
+                        ));
                     }
-                    columns[1].heading("3D View");
-                    columns[1].horizontal_wrapped(|ui| {
-                        egui::ComboBox::from_label("Mesh")
-                            .width(50.0)
-                            .selected_text(self.viewport3d.mesh_kind.label())
-                            .show_ui(ui, |ui| {
-                                for kind in viewport3d::MeshKind::ALL {
-                                    ui.selectable_value(
-                                        &mut self.viewport3d.mesh_kind,
-                                        kind,
-                                        kind.label(),
-                                    );
-                                }
-                            });
-                        ui.label("Height Scale");
-                        ui.scope(|ui| {
-                            ui.spacing_mut().slider_width = 50.0;
-                            ui.add(egui::Slider::new(
-                                &mut self.viewport3d.height_scale,
-                                0.0..=0.5,
-                            ));
+                    None => {
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(8.0);
+                            ui.weak("(select a node to preview it)");
                         });
-                    });
-                    let desired =
-                        egui::vec2(columns[1].available_width(), columns[1].available_height());
-                    let response =
-                        columns[1].allocate_response(desired, egui::Sense::click_and_drag());
-                    self.viewport3d.handle_input(&columns[1], &response);
-                    let texture_id = self.viewport3d.render(
-                        &self.gpu,
-                        &self.pool,
-                        &self.graph,
-                        &self.render_state,
-                        response.rect.width().max(1.0) as u32,
-                        response.rect.height().max(1.0) as u32,
+                    }
+                },
+                dock::CrateId::ThreeDView => {
+                    const TOOLBAR_WIDTH: f32 = 38.0;
+                    let full_rect = ui.available_rect_before_wrap();
+                    let divider_stroke = ui.visuals().window_stroke();
+
+                    let toolbar_rect = egui::Rect::from_min_size(
+                        full_rect.min,
+                        egui::vec2(TOOLBAR_WIDTH, full_rect.height()),
                     );
-                    columns[1].painter().image(
+                    {
+                        let mut toolbar_ui =
+                            ui.new_child(egui::UiBuilder::new().max_rect(toolbar_rect));
+                        toolbar_ui.set_clip_rect(toolbar_rect);
+                        viewport_panels.toolbar_vertical(&mut toolbar_ui);
+                    }
+                    ui.painter().vline(
+                        toolbar_rect.right(),
+                        toolbar_rect.y_range(),
+                        divider_stroke,
+                    );
+
+                    // The viewport always fills everything right of the
+                    // toolbar — the side panel overlaps it instead of
+                    // squeezing it narrower, matching the classic N-panel
+                    // behavior (Blender) rather than a push-aside layout.
+                    let viewport_rect = egui::Rect::from_min_max(
+                        egui::pos2(toolbar_rect.right() + 1.0, full_rect.top()),
+                        full_rect.max,
+                    );
+                    let response = ui.interact(
+                        viewport_rect,
+                        ui.id().with("viewport3d_interact"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    viewport3d.handle_input(ui, &response);
+                    let texture_id = viewport3d.render(
+                        gpu,
+                        pool,
+                        graph,
+                        render_state,
+                        viewport_rect.width().max(1.0) as u32,
+                        viewport_rect.height().max(1.0) as u32,
+                    );
+                    ui.painter().image(
                         texture_id,
-                        response.rect,
+                        viewport_rect,
                         egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                         egui::Color32::WHITE,
                     );
-                });
+
+                    if drawer_width > 0.5 {
+                        let drawer_rect = egui::Rect::from_min_size(
+                            egui::pos2(viewport_rect.right() - drawer_width, viewport_rect.top()),
+                            egui::vec2(drawer_width, viewport_rect.height()),
+                        );
+                        ui.painter()
+                            .rect_filled(drawer_rect, 0.0, ui.visuals().panel_fill);
+                        ui.painter().rect_stroke(
+                            drawer_rect,
+                            0.0,
+                            divider_stroke,
+                            egui::StrokeKind::Inside,
+                        );
+                        // Absorbs clicks/drags over empty space in the
+                        // drawer so they don't fall through to the
+                        // viewport's orbit-drag interact underneath it.
+                        ui.interact(
+                            drawer_rect,
+                            ui.id().with("viewport3d_drawer_bg"),
+                            egui::Sense::click_and_drag(),
+                        );
+
+                        let inner_rect = drawer_rect.shrink2(egui::vec2(10.0, 8.0));
+                        let mut drawer_ui =
+                            ui.new_child(egui::UiBuilder::new().max_rect(inner_rect));
+                        drawer_ui.set_clip_rect(inner_rect);
+                        let ui = &mut drawer_ui;
+
+                        let kind = viewport_panels.visible_kind();
+                        ui.heading(kind.title());
+                        ui.weak(kind.description());
+                        ui.separator();
+                        match kind {
+                            viewport3d_panels::PanelKind::Mesh => {
+                                egui::ComboBox::from_label("Shape")
+                                    .selected_text(viewport3d.mesh_kind.label())
+                                    .show_ui(ui, |ui| {
+                                        for mesh_kind in viewport3d::MeshKind::ALL {
+                                            ui.selectable_value(
+                                                &mut viewport3d.mesh_kind,
+                                                mesh_kind,
+                                                mesh_kind.label(),
+                                            );
+                                        }
+                                    });
+                            }
+                            viewport3d_panels::PanelKind::Material => {
+                                ui.spacing_mut().slider_width = 80.0;
+                                ui.add(
+                                    egui::Slider::new(&mut viewport3d.height_scale, 0.0..=0.5)
+                                        .text("Height Scale"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut viewport3d.tessellation, 0.0..=1.0)
+                                        .text("Tessellation Density"),
+                                );
+                            }
+                            viewport3d_panels::PanelKind::Camera
+                            | viewport3d_panels::PanelKind::Environment => {}
+                        }
+                    }
+                }
+                dock::CrateId::NodeGraph => {
+                    canvas_output = Some(canvas::show(
+                        ui,
+                        graph,
+                        history,
+                        canvas,
+                        selected,
+                        gpu,
+                        pool,
+                        render_state,
+                        thumbnail_ids,
+                    ));
+                }
+            },
+        );
+
+        let canvas_output = canvas_output.unwrap_or(canvas::CanvasOutput {
+            open_add_menu_at: None,
+            dropped_wire: None,
+        });
+
+        // Cmd+A (select all) / Delete, skipped while a text field (e.g. the
+        // add-node search box, a parameter's numeric entry) has focus, so
+        // those keys keep doing normal text editing instead of being
+        // hijacked into graph-wide actions.
+        if ui.memory(|m| m.focused()).is_none() {
+            let (select_all, delete_pressed) = ui.ctx().input(|i| {
+                (
+                    i.modifiers.command && i.key_pressed(egui::Key::A),
+                    i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
+                )
             });
 
-        let mut snarl_response = None;
-        egui::CentralPanel::default().show(ui, |ui| {
-            let style = egui_snarl::ui::SnarlStyle::new();
-            let mut viewer = GraphViewer {
-                graph: &mut self.graph,
-                history: &mut self.history,
-                selected: &mut self.selected,
-                add_node_search: &mut self.add_node_search,
-                gpu: &mut self.gpu,
-                pool: &mut self.pool,
-                render_state: &self.render_state,
-                thumbnail_ids: &mut self.thumbnail_ids,
-            };
-            // `Snarl::show` itself discards the interaction `Response` we
-            // need for `add_node_menu` below — `SnarlWidget::show` is the
-            // lower-level entry point that returns it.
-            snarl_response = Some(
-                egui_snarl::ui::SnarlWidget::new()
-                    .id_salt("material_graph")
-                    .style(style)
-                    .show(&mut self.snarl, &mut viewer, ui),
-            );
-        });
-        let snarl_response = snarl_response.expect("CentralPanel::show always runs add_contents");
+            if select_all {
+                self.canvas.selected = self.graph.nodes().map(|(id, _)| id).collect();
+            }
 
-        // Right-click-on-empty-canvas now opens our own screen-space popup
-        // (see add_node_menu.rs) instead of egui-snarl's built-in one, which
-        // doesn't account for the canvas's pan/zoom transform.
-        //
-        // `snarl_response` lives inside egui-snarl's own transformed layer,
-        // so egui already reports its `interact_pointer_pos()` in graph-space
-        // (egui-snarl relies on this same behavior itself, e.g. for rect-
-        // selection) — no manual pan/zoom math needed for `graph_pos`. The
-        // popup itself is a plain `egui::Area` outside that layer, so it
-        // needs the real, untransformed screen-space pointer position.
-        if self.add_node_menu.is_none() && snarl_response.secondary_clicked() {
-            if let (Some(graph_pos), Some(screen_pos)) = (
-                snarl_response.interact_pointer_pos(),
-                ui.ctx().input(|i| i.pointer.interact_pos()),
-            ) {
+            if delete_pressed && !self.canvas.selected.is_empty() {
+                let ids: Vec<mc_core::NodeId> = self.canvas.selected.iter().copied().collect();
+                let transaction = self.graph.remove_nodes_transaction(&ids);
+                let _ = self.history.do_transaction(&mut self.graph, transaction);
+                if self.selected.is_some_and(|id| ids.contains(&id)) {
+                    self.selected = None;
+                }
+                self.canvas.selected.clear();
+            }
+        }
+
+        if self.add_node_menu.is_none() {
+            if let Some(dropped) = canvas_output.dropped_wire {
+                self.add_node_menu = Some(add_node_menu::AddNodeMenu::open_for_dropped_wire(
+                    dropped.screen_pos,
+                    dropped.graph_pos,
+                    add_node_menu::DropFilter {
+                        port_type: dropped.from_port_type,
+                        need_input: dropped.from_is_output,
+                    },
+                ));
+                self.pending_wire_connect = Some(dropped);
+            } else if let Some((screen_pos, graph_pos)) = canvas_output.open_add_menu_at {
                 self.add_node_menu = Some(add_node_menu::AddNodeMenu::open(screen_pos, graph_pos));
+                self.pending_wire_connect = None;
             }
         }
         if let Some((def, graph_pos)) = add_node_menu::show(ui.ctx(), &mut self.add_node_menu) {
@@ -211,6 +332,16 @@ impl eframe::App for MaterialCraftApp {
                     .graph
                     .set_node_position(core_id, [graph_pos.x, graph_pos.y]);
                 self.selected = Some(core_id);
+                self.canvas.selected.clear();
+                self.canvas.selected.insert(core_id);
+                if let Some(dropped) = self.pending_wire_connect.take() {
+                    canvas::connect_dropped_wire(
+                        &mut self.graph,
+                        &mut self.history,
+                        &dropped,
+                        core_id,
+                    );
+                }
             }
         }
 
@@ -258,6 +389,39 @@ impl MaterialCraftApp {
     }
 }
 
+/// Replaces egui's default fonts with Geist (body text) and registers
+/// Material Icons Round under its own named family, used explicitly wherever
+/// an icon glyph is needed (see `viewport3d_panels.rs`) rather than mixed
+/// into the body font — both bundled under `assets/fonts/`, see ASSETS.md.
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    fonts.font_data.insert(
+        "geist".to_owned(),
+        egui::FontData::from_static(include_bytes!("../../../assets/fonts/Geist-Regular.ttf"))
+            .into(),
+    );
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "geist".to_owned());
+
+    fonts.font_data.insert(
+        "material_icons_round".to_owned(),
+        egui::FontData::from_static(include_bytes!(
+            "../../../assets/fonts/MaterialIconsRound-Regular.otf"
+        ))
+        .into(),
+    );
+    fonts.families.insert(
+        egui::FontFamily::Name("material_icons_round".into()),
+        vec!["material_icons_round".to_owned()],
+    );
+
+    ctx.set_fonts(fonts);
+}
+
 fn main() -> eframe::Result<()> {
     env_logger::init();
 
@@ -271,6 +435,7 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            install_fonts(&cc.egui_ctx);
 
             let render_state = cc
                 .wgpu_render_state
@@ -285,15 +450,16 @@ fn main() -> eframe::Result<()> {
                 render_state,
                 graph: mc_core::Graph::new(),
                 history: mc_core::History::new(),
-                snarl: egui_snarl::Snarl::new(),
-                core_to_ui: HashMap::new(),
+                canvas: CanvasState::default(),
                 thumbnail_ids: HashMap::new(),
                 selected: None,
-                add_node_search: String::new(),
                 add_node_menu: None,
+                pending_wire_connect: None,
                 param_drag: None,
                 export_dialog: export_dialog::ExportDialogState::default(),
                 viewport3d,
+                viewport_panels: viewport3d_panels::ViewportPanels::default(),
+                dock: dock::DockLayout::default(),
                 preview_texture_id: None,
             }))
         }),
