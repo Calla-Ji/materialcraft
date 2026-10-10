@@ -5,7 +5,7 @@
 //! remaining node's GPU work by its `kind`. Each evaluated node's texture
 //! lives in the [`mc_gpu::TexturePool`] under the key from [`texture_key`].
 
-use crate::{levels, perlin};
+use crate::{blend, levels, perlin};
 
 /// The texture pool key a node's own output is stored under.
 pub fn texture_key(id: mc_core::NodeId) -> String {
@@ -61,6 +61,28 @@ pub fn evaluate(
                 let input_key = texture_key(input_id);
                 let params = levels::LevelsParams::from_graph(&node.params);
                 levels::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "blend" => {
+                let base_id = graph
+                    .upstream(id, "base")
+                    .ok_or_else(|| EvalError::MissingInput(id, "base".to_string()))?;
+                let blend_id = graph
+                    .upstream(id, "blend")
+                    .ok_or_else(|| EvalError::MissingInput(id, "blend".to_string()))?;
+                let base_key = texture_key(base_id);
+                let blend_key = texture_key(blend_id);
+                let mask_key = graph.upstream(id, "mask").map(texture_key);
+                let params = blend::BlendParams::from_graph(&node.params);
+                blend::dispatch(
+                    gpu,
+                    pool,
+                    &base_key,
+                    &blend_key,
+                    mask_key.as_deref(),
+                    &key,
+                    resolution,
+                    &params,
+                );
             }
             other => return Err(EvalError::UnknownKind(id, other.to_string())),
         }

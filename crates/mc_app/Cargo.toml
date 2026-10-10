@@ -7,9 +7,11 @@ license.workspace = true
 [dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["wgpu", "default_fonts", "persistence"] }
 egui = "0.36.2"
+egui-snarl = "0.12.0"
 egui-wgpu = "0.36.2"
 env_logger = "0.11.11"
 log = "0.4.34"
+mc_core = { version = "0.1.0", path = "../mc_core" }
 mc_gpu = { version = "0.1.0", path = "../mc_gpu" }
 mc_nodes = { version = "0.1.0", path = "../mc_nodes" }
 wgpu = "30.0.1"

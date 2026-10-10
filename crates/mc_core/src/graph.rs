@@ -75,19 +75,19 @@ pub struct Graph {
     pub format_version: u32,
     #[serde(default)]
     pub settings: GraphSettings,
-    nodes: BTreeMap<NodeId, Node>,
-    connections: Vec<Connection>,
+    pub(crate) nodes: BTreeMap<NodeId, Node>,
+    pub(crate) connections: Vec<Connection>,
 
     /// Derived from `nodes` after load, never persisted (see `from_json`).
     #[serde(skip, default)]
-    next_id: u64,
+    pub(crate) next_id: u64,
     /// Which nodes have been explicitly invalidated (new, edited, or
     /// downstream of something that was) since they were last evaluated.
     #[serde(skip, default)]
-    dirty: HashSet<NodeId>,
+    pub(crate) dirty: HashSet<NodeId>,
     /// The evaluation hash each node had the last time it was evaluated.
     #[serde(skip, default)]
-    evaluated_hashes: HashMap<NodeId, u64>,
+    pub(crate) evaluated_hashes: HashMap<NodeId, u64>,
 }
 
 impl Graph {
@@ -105,23 +105,19 @@ impl Graph {
 
     pub fn add_node(&mut self, node: Node) -> NodeId {
         let id = NodeId(self.next_id);
-        self.next_id += 1;
-        self.nodes.insert(id, node);
-        self.dirty.insert(id);
+        self.do_command(crate::command::Command::AddNode { id, node })
+            .expect("adding a node at a fresh id never fails");
         id
     }
 
-    /// Remove a node and any connections touching it. Anything downstream of
+    /// Remove a node and any connections touching it (as a single undoable
+    /// transaction — see `remove_node_transaction`). Anything downstream of
     /// it loses an input and is marked dirty (it'll fall back to that
     /// input's default).
     pub fn remove_node(&mut self, id: NodeId) {
-        let downstream = self.downstream_of(id);
-        self.connections
-            .retain(|c| c.from_node != id && c.to_node != id);
-        self.nodes.remove(&id);
-        self.evaluated_hashes.remove(&id);
-        self.dirty.remove(&id);
-        self.dirty.extend(downstream);
+        for command in self.remove_node_transaction(id) {
+            let _ = self.do_command(command);
+        }
     }
 
     pub fn node(&self, id: NodeId) -> Option<&Node> {
@@ -136,16 +132,30 @@ impl Graph {
         &self.connections
     }
 
+    /// Update a node's editor canvas position. Purely cosmetic — it doesn't
+    /// affect evaluation, so unlike other edits it isn't undo-tracked (a
+    /// dragged node snapping back on undo would be surprising).
+    pub fn set_node_position(&mut self, id: NodeId, position: [f32; 2]) -> Result<(), GraphError> {
+        let node = self.nodes.get_mut(&id).ok_or(GraphError::NoSuchNode(id))?;
+        node.position = position;
+        Ok(())
+    }
+
     pub fn set_param(
         &mut self,
         id: NodeId,
         name: &str,
         value: ParamValue,
     ) -> Result<(), GraphError> {
-        let node = self.nodes.get_mut(&id).ok_or(GraphError::NoSuchNode(id))?;
-        node.params.insert(name.to_string(), value);
-        self.mark_dirty_downstream(id);
-        Ok(())
+        if !self.nodes.contains_key(&id) {
+            return Err(GraphError::NoSuchNode(id));
+        }
+        self.do_command(crate::command::Command::SetParam {
+            id,
+            name: name.to_string(),
+            value,
+        })
+        .map(|_| ())
     }
 
     /// Connect `from_node:from_port` to `to_node:to_port`, replacing any
@@ -159,40 +169,21 @@ impl Graph {
         to_node: NodeId,
         to_port: &str,
     ) -> Result<(), GraphError> {
-        if !self.nodes.contains_key(&from_node) {
-            return Err(GraphError::NoSuchNode(from_node));
+        for command in self.connect_transaction(from_node, from_port, to_node, to_port)? {
+            self.do_command(command)?;
         }
-        if !self.nodes.contains_key(&to_node) {
-            return Err(GraphError::NoSuchNode(to_node));
-        }
-
-        let mut trial = self.connections.clone();
-        trial.retain(|c| !(c.to_node == to_node && c.to_port == to_port));
-        trial.push(Connection {
-            from_node,
-            from_port: from_port.to_string(),
-            to_node,
-            to_port: to_port.to_string(),
-        });
-
-        if Self::topo_order(&self.nodes, &trial).is_none() {
-            return Err(GraphError::WouldCreateCycle {
-                from: from_node,
-                from_port: from_port.to_string(),
-                to: to_node,
-                to_port: to_port.to_string(),
-            });
-        }
-
-        self.connections = trial;
-        self.mark_dirty_downstream(to_node);
         Ok(())
     }
 
     pub fn disconnect(&mut self, to_node: NodeId, to_port: &str) {
-        self.connections
-            .retain(|c| !(c.to_node == to_node && c.to_port == to_port));
-        self.mark_dirty_downstream(to_node);
+        if let Some(existing) = self
+            .connections
+            .iter()
+            .find(|c| c.to_node == to_node && c.to_port == to_port)
+            .cloned()
+        {
+            let _ = self.do_command(crate::command::Command::Disconnect(existing));
+        }
     }
 
     /// The node feeding `(to_node, to_port)`, if any.
@@ -211,7 +202,7 @@ impl Graph {
         Self::topo_order(&self.nodes, &self.connections).ok_or(GraphError::Cycle)
     }
 
-    fn topo_order(
+    pub(crate) fn topo_order(
         nodes: &BTreeMap<NodeId, Node>,
         connections: &[Connection],
     ) -> Option<Vec<NodeId>> {
@@ -252,7 +243,7 @@ impl Graph {
 
     /// Every node reachable by following connections forward from `start`,
     /// not including `start` itself.
-    fn downstream_of(&self, start: NodeId) -> HashSet<NodeId> {
+    pub(crate) fn downstream_of(&self, start: NodeId) -> HashSet<NodeId> {
         let mut adjacency: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         for connection in &self.connections {
             adjacency
@@ -274,7 +265,7 @@ impl Graph {
         seen
     }
 
-    fn mark_dirty_downstream(&mut self, start: NodeId) {
+    pub(crate) fn mark_dirty_downstream(&mut self, start: NodeId) {
         self.dirty.insert(start);
         self.dirty.extend(self.downstream_of(start));
     }

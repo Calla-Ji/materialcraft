@@ -731,6 +731,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-scale"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16194efd2800275df80448afa0ee11d3e23ce0220f6754e1af53fec8e9b7467a"
+dependencies = [
+ "egui",
+]
+
+[[package]]
+name = "egui-snarl"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "247c36a1f3b71fb25597f16f9396687641fec220a8116d5093941138fae59e61"
+dependencies = [
+ "ahash",
+ "egui",
+ "egui-scale",
+ "slab",
+ "smallvec",
+]
+
+[[package]]
 name = "egui-wgpu"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1540,9 +1562,11 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "egui-snarl",
  "egui-wgpu",
  "env_logger",
  "log",
+ "mc_core",
  "mc_gpu",
  "mc_nodes",
  "wgpu",

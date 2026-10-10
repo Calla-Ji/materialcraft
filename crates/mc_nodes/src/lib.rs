@@ -2,6 +2,8 @@
 //! shader that implements each one. [`registry`] bridges mc_core's generic
 //! graph model to actually dispatching each node's GPU work.
 
+pub mod blend;
+pub mod defs;
 pub mod levels;
 pub mod perlin;
 pub mod registry;
@@ -189,6 +191,116 @@ mod levels_tests {
 }
 
 #[cfg(test)]
+mod blend_tests {
+    use super::blend::{dispatch, BlendMode, BlendParams};
+    use super::perlin::{dispatch as perlin_dispatch, PerlinParams};
+    use super::test_support::{assert_tiles_seamlessly, RESOLUTION};
+
+    fn render(params: &BlendParams) -> Vec<u8> {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        perlin_dispatch(
+            &mut gpu,
+            &mut pool,
+            "base",
+            RESOLUTION,
+            &PerlinParams {
+                seed: 1,
+                ..PerlinParams::default()
+            },
+        );
+        perlin_dispatch(
+            &mut gpu,
+            &mut pool,
+            "blend",
+            RESOLUTION,
+            &PerlinParams {
+                seed: 2,
+                ..PerlinParams::default()
+            },
+        );
+        dispatch(
+            &mut gpu, &mut pool, "base", "blend", None, "output", RESOLUTION, params,
+        );
+        let texture = pool.texture("output").expect("blend texture");
+        gpu.read_rgba8(texture, RESOLUTION)
+    }
+
+    #[test]
+    fn blend_preserves_tiling_of_its_inputs() {
+        assert_tiles_seamlessly(&render(&BlendParams::default()), RESOLUTION);
+    }
+
+    #[test]
+    fn blend_is_deterministic() {
+        let params = BlendParams {
+            mode: BlendMode::Multiply,
+            opacity: 0.7,
+        };
+        assert_eq!(
+            render(&params),
+            render(&params),
+            "same inputs + params produced different pixels"
+        );
+    }
+
+    #[test]
+    fn blend_copy_at_full_opacity_outputs_the_blend_layer() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        perlin_dispatch(
+            &mut gpu,
+            &mut pool,
+            "base",
+            RESOLUTION,
+            &PerlinParams {
+                seed: 1,
+                ..PerlinParams::default()
+            },
+        );
+        perlin_dispatch(
+            &mut gpu,
+            &mut pool,
+            "blend",
+            RESOLUTION,
+            &PerlinParams {
+                seed: 2,
+                ..PerlinParams::default()
+            },
+        );
+        let blend_only = gpu.read_rgba8(pool.texture("blend").unwrap(), RESOLUTION);
+
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "base",
+            "blend",
+            None,
+            "output",
+            RESOLUTION,
+            &BlendParams {
+                mode: BlendMode::Copy,
+                opacity: 1.0,
+            },
+        );
+        let output = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
+
+        assert_eq!(
+            blend_only, output,
+            "Copy mode at opacity 1.0 with no mask must pass the blend layer straight through"
+        );
+    }
+
+    #[test]
+    fn blend_mode_name_round_trips() {
+        for name in BlendMode::NAMES {
+            let mode = BlendMode::from_name(name).expect("every declared name parses");
+            assert_eq!(mode.name(), name);
+        }
+    }
+}
+
+#[cfg(test)]
 mod registry_tests {
     use super::registry::{evaluate, resolve_texture_key};
 
@@ -213,6 +325,45 @@ mod registry_tests {
         assert_eq!(pixels.len(), 64 * 64 * 4);
 
         for id in [noise, levels, output] {
+            assert!(
+                !graph.needs_evaluation(id),
+                "node {id:?} should be marked up to date after evaluate()"
+            );
+        }
+    }
+
+    /// CLAUDE.md's M3 acceptance demo: a 4-node graph (Noise → Levels →
+    /// Blend → Output) evaluates headlessly. Blend's second input comes from
+    /// a second Perlin node so Blend has two genuinely different layers to
+    /// combine.
+    #[test]
+    fn evaluates_noise_levels_blend_output_graph() {
+        let mut graph = mc_core::Graph::new();
+        let noise_a = graph.add_node(
+            mc_core::Node::new("perlin_noise").with_param("seed", mc_core::ParamValue::Seed(1)),
+        );
+        let noise_b = graph.add_node(
+            mc_core::Node::new("perlin_noise").with_param("seed", mc_core::ParamValue::Seed(2)),
+        );
+        let levels = graph.add_node(mc_core::Node::new("levels"));
+        let blend = graph.add_node(mc_core::Node::new("blend"));
+        let output = graph.add_node(mc_core::Node::new("output_base_color"));
+
+        graph.connect(noise_a, "output", levels, "input").unwrap();
+        graph.connect(levels, "output", blend, "base").unwrap();
+        graph.connect(noise_b, "output", blend, "blend").unwrap();
+        graph.connect(blend, "output", output, "input").unwrap();
+        graph.settings.resolution = 64;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let key = resolve_texture_key(&graph, output).expect("output resolves to a texture");
+        let pixels = gpu.read_rgba8(pool.texture(&key).expect("texture exists"), 64);
+        assert_eq!(pixels.len(), 64 * 64 * 4);
+
+        for id in [noise_a, noise_b, levels, blend, output] {
             assert!(
                 !graph.needs_evaluation(id),
                 "node {id:?} should be marked up to date after evaluate()"

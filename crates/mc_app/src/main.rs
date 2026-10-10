@@ -1,20 +1,34 @@
 //! mc_app: the desktop application shell.
 //!
 //! Owns the window and the overall panel layout (menu, 2D/3D previews, node
-//! graph, parameter panel). M1 adds the first real content: a single
-//! hardcoded Perlin Noise node, dispatched on the GPU and shown in the 2D
-//! view. There's no graph model or dirty-tracking yet (that's mc_core, M2),
-//! so for now the node is simply re-evaluated every frame.
+//! graph, parameter panel). M3 wires the node editor (egui-snarl) to a real
+//! `mc_core::Graph`: add nodes from a search menu, connect them (with Gray/
+//! Color type checking), edit params in a generic panel, and undo/redo —
+//! see `graph_view.rs` for how the UI mirrors the graph.
 
-const PREVIEW_RESOLUTION: u32 = 512;
-const PREVIEW_KEY: &str = "preview";
+mod graph_view;
+mod params_panel;
+
+use std::collections::HashMap;
+
+use graph_view::{sync_snarl_from_graph, GraphViewer, NodeUi};
 
 /// Root application state for the eframe event loop.
 struct MaterialCraftApp {
     gpu: mc_gpu::Context,
     pool: mc_gpu::TexturePool,
     render_state: egui_wgpu::RenderState,
-    perlin_params: mc_nodes::perlin::PerlinParams,
+
+    graph: mc_core::Graph,
+    history: mc_core::History,
+    snarl: egui_snarl::Snarl<NodeUi>,
+    core_to_ui: HashMap<mc_core::NodeId, egui_snarl::NodeId>,
+    thumbnail_ids: HashMap<mc_core::NodeId, egui::TextureId>,
+
+    selected: Option<mc_core::NodeId>,
+    add_node_search: String,
+    param_drag: params_panel::DragState,
+
     preview_texture_id: Option<egui::TextureId>,
 }
 
@@ -29,65 +43,44 @@ impl eframe::App for MaterialCraftApp {
                 ui.label("Save");
                 ui.label("Save As");
                 ui.label("Export…");
-                ui.label("Undo");
-                ui.label("Redo");
+                ui.separator();
+                if ui
+                    .add_enabled(self.history.can_undo(), egui::Button::new("Undo"))
+                    .clicked()
+                {
+                    self.history.undo(&mut self.graph);
+                }
+                if ui
+                    .add_enabled(self.history.can_redo(), egui::Button::new("Redo"))
+                    .clicked()
+                {
+                    self.history.redo(&mut self.graph);
+                }
                 ui.label("Examples");
             });
         });
 
-        egui::Panel::right("parameters")
-            .default_size(260.0)
-            .show(ui, |ui| {
-                ui.heading("Parameters");
-                ui.label("Perlin Noise");
-                ui.add(egui::Slider::new(&mut self.perlin_params.scale, 1..=32).text("Scale"));
-                ui.add(egui::Slider::new(&mut self.perlin_params.octaves, 1..=8).text("Octaves"));
-                ui.add(
-                    egui::Slider::new(&mut self.perlin_params.persistence, 0.1..=1.0)
-                        .text("Persistence"),
-                );
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut self.perlin_params.seed).prefix("Seed: "));
-                    if ui.button("🎲").clicked() {
-                        self.perlin_params.seed = self.perlin_params.seed.wrapping_add(1);
-                    }
-                });
-            });
+        // Reflect the previous frame's edits (including anything undo/redo
+        // just changed) into the editor widget, then re-evaluate whatever
+        // that left dirty, before any panel reads from `self.pool`.
+        sync_snarl_from_graph(&self.graph, &mut self.snarl, &mut self.core_to_ui);
+        if let Err(err) =
+            mc_nodes::registry::evaluate(&mut self.gpu, &mut self.pool, &mut self.graph)
+        {
+            log::warn!("graph evaluation error: {err}");
+        }
 
-        // Re-evaluate the node and refresh its preview texture every frame.
-        // Caching/dirty-tracking so only *changed* nodes re-run is mc_core's
-        // job (M2) — for this single hardcoded node it's not needed yet.
-        mc_nodes::perlin::dispatch(
-            &mut self.gpu,
-            &mut self.pool,
-            PREVIEW_KEY,
-            PREVIEW_RESOLUTION,
-            &self.perlin_params,
-        );
-        let view = self.pool.view(PREVIEW_KEY).expect("just dispatched above");
-        let texture_id = match self.preview_texture_id {
-            Some(id) => {
-                self.render_state
-                    .renderer
-                    .write()
-                    .update_egui_texture_from_wgpu_texture(
-                        &self.gpu.device,
-                        view,
-                        wgpu::FilterMode::Linear,
-                        id,
-                    );
-                id
-            }
-            None => {
-                let id = self.render_state.renderer.write().register_native_texture(
-                    &self.gpu.device,
-                    view,
-                    wgpu::FilterMode::Linear,
+        egui::Panel::right("parameters")
+            .default_size(280.0)
+            .show(ui, |ui| {
+                params_panel::show(
+                    ui,
+                    &mut self.graph,
+                    &mut self.history,
+                    self.selected,
+                    &mut self.param_drag,
                 );
-                self.preview_texture_id = Some(id);
-                id
-            }
-        };
+            });
 
         egui::Panel::top("previews")
             .default_size(260.0)
@@ -95,20 +88,71 @@ impl eframe::App for MaterialCraftApp {
             .show(ui, |ui| {
                 ui.columns(2, |columns| {
                     columns[0].heading("2D View");
-                    let preview_size = columns[0].available_height().min(240.0);
-                    columns[0].image(egui::load::SizedTexture::new(
-                        texture_id,
-                        egui::Vec2::splat(preview_size),
-                    ));
+                    match self.preview_texture() {
+                        Some(texture_id) => {
+                            let size = columns[0].available_height().min(240.0);
+                            columns[0].image(egui::load::SizedTexture::new(
+                                texture_id,
+                                egui::Vec2::splat(size),
+                            ));
+                        }
+                        None => {
+                            columns[0].weak("(select a node to preview it)");
+                        }
+                    }
                     columns[1].heading("3D View");
                     columns[1].weak("(sphere / cube / plane, PBR lit)");
                 });
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("Node Graph");
-            ui.weak("(right-click to add a node)");
+            let style = egui_snarl::ui::SnarlStyle::new();
+            let mut viewer = GraphViewer {
+                graph: &mut self.graph,
+                history: &mut self.history,
+                selected: &mut self.selected,
+                add_node_search: &mut self.add_node_search,
+                gpu: &mut self.gpu,
+                pool: &mut self.pool,
+                render_state: &self.render_state,
+                thumbnail_ids: &mut self.thumbnail_ids,
+            };
+            self.snarl.show(&mut viewer, &style, "material_graph", ui);
         });
+    }
+}
+
+impl MaterialCraftApp {
+    /// The selected node's resolved output texture, registered/updated as an
+    /// egui texture for the 2D view.
+    fn preview_texture(&mut self) -> Option<egui::TextureId> {
+        let id = self.selected?;
+        let key = mc_nodes::registry::resolve_texture_key(&self.graph, id)?;
+        let view = self.pool.view(&key)?.clone();
+
+        Some(match self.preview_texture_id {
+            Some(texture_id) => {
+                self.render_state
+                    .renderer
+                    .write()
+                    .update_egui_texture_from_wgpu_texture(
+                        &self.gpu.device,
+                        &view,
+                        wgpu::FilterMode::Linear,
+                        texture_id,
+                    );
+                texture_id
+            }
+            None => {
+                let texture_id = self.render_state.renderer.write().register_native_texture(
+                    &self.gpu.device,
+                    &view,
+                    wgpu::FilterMode::Linear,
+                );
+                self.preview_texture_id = Some(texture_id);
+                texture_id
+            }
+        })
     }
 }
 
@@ -136,7 +180,14 @@ fn main() -> eframe::Result<()> {
                 gpu,
                 pool: mc_gpu::TexturePool::default(),
                 render_state,
-                perlin_params: mc_nodes::perlin::PerlinParams::default(),
+                graph: mc_core::Graph::new(),
+                history: mc_core::History::new(),
+                snarl: egui_snarl::Snarl::new(),
+                core_to_ui: HashMap::new(),
+                thumbnail_ids: HashMap::new(),
+                selected: None,
+                add_node_search: String::new(),
+                param_drag: None,
                 preview_texture_id: None,
             }))
         }),

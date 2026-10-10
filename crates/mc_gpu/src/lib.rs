@@ -100,6 +100,37 @@ impl Context {
         pipeline
     }
 
+    /// Fill `key`'s texture in `pool` with a single solid RGBA color (0-255
+    /// per channel), creating it at `size x size` if needed. Used for a
+    /// node's optional inputs that fall back to a flat default (e.g. Blend's
+    /// mask defaulting to solid white) rather than running a shader over
+    /// them.
+    pub fn fill_rgba8(&self, pool: &mut TexturePool, key: &str, size: u32, color: [u8; 4]) {
+        pool.get_or_create(&self.device, key, size, wgpu::TextureFormat::Rgba8Unorm);
+        let texture = pool.texture(key).expect("just created above");
+
+        let pixels: Vec<u8> = color.repeat((size * size) as usize);
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size * 4),
+                rows_per_image: Some(size),
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
     /// Read a square `Rgba8Unorm` texture back to a tightly-packed `Vec<u8>`
     /// of `resolution * resolution * 4` bytes (one row after another, no
     /// padding) — used for PNG export and for tests that inspect pixels.
@@ -208,7 +239,8 @@ impl TexturePool {
                 format,
                 usage: wgpu::TextureUsages::STORAGE_BINDING
                     | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

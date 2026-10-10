@@ -5,6 +5,7 @@
 //! unit-tested on its own. Actually running a node's shader lives in
 //! `mc_nodes`.
 
+mod command;
 mod connection;
 mod graph;
 mod id;
@@ -12,6 +13,7 @@ mod node;
 mod param;
 mod port;
 
+pub use command::{Command, History, Transaction};
 pub use connection::Connection;
 pub use graph::{Graph, GraphError, GraphSettings, LoadError, NormalFormat, FORMAT_VERSION};
 pub use id::NodeId;
