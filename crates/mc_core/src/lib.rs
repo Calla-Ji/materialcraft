@@ -1,14 +1,20 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! mc_core: the graph model — nodes, connections, parameter values,
+//! topological evaluation order, and dirty/cache tracking.
+//!
+//! Deliberately independent of the GPU and UI (CLAUDE.md §5) so it can be
+//! unit-tested on its own. Actually running a node's shader lives in
+//! `mc_nodes`.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod connection;
+mod graph;
+mod id;
+mod node;
+mod param;
+mod port;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use connection::Connection;
+pub use graph::{Graph, GraphError, GraphSettings, LoadError, NormalFormat, FORMAT_VERSION};
+pub use id::NodeId;
+pub use node::Node;
+pub use param::{GradientStop, ParamValue};
+pub use port::PortType;

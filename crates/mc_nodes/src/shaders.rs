@@ -39,6 +39,7 @@ fn embedded_source(file_name: &str) -> &'static str {
     match file_name {
         "common.wgsl" => include_str!("../shaders/common.wgsl"),
         "perlin_noise.wgsl" => include_str!("../shaders/perlin_noise.wgsl"),
+        "levels.wgsl" => include_str!("../shaders/levels.wgsl"),
         other => panic!("mc_nodes: unknown shader file {other:?}"),
     }
 }

@@ -34,6 +34,34 @@ impl Default for PerlinParams {
     }
 }
 
+impl PerlinParams {
+    /// Reads a graph node's generic param map into typed `PerlinParams`,
+    /// falling back to defaults for anything missing or the wrong type.
+    pub fn from_graph(params: &std::collections::BTreeMap<String, mc_core::ParamValue>) -> Self {
+        let defaults = Self::default();
+        Self {
+            scale: params
+                .get("scale")
+                .and_then(mc_core::ParamValue::as_int)
+                .map(|v| v.max(1) as u32)
+                .unwrap_or(defaults.scale),
+            octaves: params
+                .get("octaves")
+                .and_then(mc_core::ParamValue::as_int)
+                .map(|v| v.max(1) as u32)
+                .unwrap_or(defaults.octaves),
+            persistence: params
+                .get("persistence")
+                .and_then(mc_core::ParamValue::as_float)
+                .unwrap_or(defaults.persistence),
+            seed: params
+                .get("seed")
+                .and_then(mc_core::ParamValue::as_seed)
+                .unwrap_or(defaults.seed),
+        }
+    }
+}
+
 /// Evaluate the Perlin Noise node at `resolution x resolution` into the
 /// texture pool slot `key`. Fetch the result with `pool.view(key)` /
 /// `pool.texture(key)` afterwards.
