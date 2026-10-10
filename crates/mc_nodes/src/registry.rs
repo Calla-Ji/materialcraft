@@ -6,8 +6,9 @@
 //! lives in the [`mc_gpu::TexturePool`] under the key from [`texture_key`].
 
 use crate::{
-    blend, blur, fractal_sum, gradient_linear, gradient_radial, height_to_normal, histogram_scan,
-    invert, levels, perlin, shape, tile_generator, transform2d, uniform_color, voronoi, warp,
+    blend, blur, checker, clamp, fractal_sum, gradient_linear, gradient_radial,
+    grayscale_conversion, height_to_normal, histogram_scan, invert, levels, perlin, shape,
+    threshold, tile_generator, transform2d, uniform_color, voronoi, warp,
 };
 
 /// The texture pool key a node's own output is stored under.
@@ -172,6 +173,33 @@ pub fn evaluate(
                 let input_key = texture_key(input_id);
                 let params = height_to_normal::HeightToNormalParams::from_graph(&node.params);
                 height_to_normal::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "clamp" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = clamp::ClampParams::from_graph(&node.params);
+                clamp::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "threshold" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = threshold::ThresholdParams::from_graph(&node.params);
+                threshold::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "grayscale_conversion" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                grayscale_conversion::dispatch(gpu, pool, &input_key, &key, resolution);
+            }
+            "checker" => {
+                let params = checker::CheckerParams::from_graph(&node.params);
+                checker::dispatch(gpu, pool, &key, resolution, &params);
             }
             other => return Err(EvalError::UnknownKind(id, other.to_string())),
         }

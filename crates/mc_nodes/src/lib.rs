@@ -7,11 +7,14 @@
 
 pub mod blend;
 pub mod blur;
+pub mod checker;
+pub mod clamp;
 pub mod defs;
 pub mod export;
 pub mod fractal_sum;
 pub mod gradient_linear;
 pub mod gradient_radial;
+pub mod grayscale_conversion;
 pub mod height_to_normal;
 pub mod histogram_scan;
 pub mod invert;
@@ -22,6 +25,7 @@ mod shaders;
 pub mod shape;
 #[cfg(test)]
 mod test_support;
+pub mod threshold;
 pub mod tile_generator;
 pub mod transform2d;
 pub mod uniform_color;

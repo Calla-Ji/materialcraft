@@ -54,6 +54,10 @@ fn embedded_source(file_name: &str) -> &'static str {
         "transform2d.wgsl" => include_str!("../shaders/transform2d.wgsl"),
         "histogram_scan.wgsl" => include_str!("../shaders/histogram_scan.wgsl"),
         "height_to_normal.wgsl" => include_str!("../shaders/height_to_normal.wgsl"),
+        "clamp.wgsl" => include_str!("../shaders/clamp.wgsl"),
+        "threshold.wgsl" => include_str!("../shaders/threshold.wgsl"),
+        "grayscale_conversion.wgsl" => include_str!("../shaders/grayscale_conversion.wgsl"),
+        "checker.wgsl" => include_str!("../shaders/checker.wgsl"),
         other => panic!("mc_nodes: unknown shader file {other:?}"),
     }
 }
