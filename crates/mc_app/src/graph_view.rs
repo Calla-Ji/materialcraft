@@ -22,6 +22,16 @@ pub struct NodeUi {
     pub core_id: mc_core::NodeId,
 }
 
+/// Node defs matching the (lowercased) search query, or all of them if it's
+/// empty.
+fn matching_node_defs(
+    query: &str,
+) -> impl Iterator<Item = &'static mc_nodes::defs::NodeDef> + use<'_> {
+    mc_nodes::defs::all_node_defs()
+        .iter()
+        .filter(move |def| query.is_empty() || def.display_name.to_lowercase().contains(query))
+}
+
 fn port_color(port_type: mc_core::PortType) -> egui::Color32 {
     match port_type {
         mc_core::PortType::Gray => egui::Color32::from_gray(200),
@@ -261,26 +271,27 @@ impl egui_snarl::ui::SnarlViewer<NodeUi> for GraphViewer<'_> {
     }
 
     fn show_graph_menu(&mut self, pos: egui::Pos2, ui: &mut egui::Ui, _snarl: &mut Snarl<NodeUi>) {
-        ui.set_min_width(200.0);
+        ui.set_width(220.0);
         show_search_box(ui, self.add_node_search);
         ui.separator();
 
         let query = self.add_node_search.to_lowercase();
-        for def in mc_nodes::defs::all_node_defs() {
-            if !query.is_empty() && !def.display_name.to_lowercase().contains(&query) {
-                continue;
-            }
-            if ui.button(def.display_name).clicked() {
-                let node = def.instantiate();
-                let (core_id, transaction) = self.graph.add_node_transaction(node);
-                if self.history.do_transaction(self.graph, transaction).is_ok() {
-                    let _ = self.graph.set_node_position(core_id, [pos.x, pos.y]);
-                    *self.selected = Some(core_id);
+        egui::ScrollArea::vertical()
+            .max_height(320.0)
+            .show(ui, |ui| {
+                for def in matching_node_defs(&query) {
+                    if ui.button(def.display_name).clicked() {
+                        let node = def.instantiate();
+                        let (core_id, transaction) = self.graph.add_node_transaction(node);
+                        if self.history.do_transaction(self.graph, transaction).is_ok() {
+                            let _ = self.graph.set_node_position(core_id, [pos.x, pos.y]);
+                            *self.selected = Some(core_id);
+                        }
+                        self.add_node_search.clear();
+                        ui.close();
+                    }
                 }
-                self.add_node_search.clear();
-                ui.close();
-            }
-        }
+            });
     }
 
     fn has_dropped_wire_menu(&mut self, _src_pins: AnyPins, _snarl: &mut Snarl<NodeUi>) -> bool {
@@ -299,108 +310,114 @@ impl egui_snarl::ui::SnarlViewer<NodeUi> for GraphViewer<'_> {
         src_pins: AnyPins,
         snarl: &mut Snarl<NodeUi>,
     ) {
-        ui.set_min_width(200.0);
+        ui.set_width(220.0);
         show_search_box(ui, self.add_node_search);
         ui.separator();
 
         let query = self.add_node_search.to_lowercase();
-        for def in mc_nodes::defs::all_node_defs() {
-            if !query.is_empty() && !def.display_name.to_lowercase().contains(&query) {
-                continue;
-            }
+        egui::ScrollArea::vertical()
+            .max_height(320.0)
+            .show(ui, |ui| {
+                for def in matching_node_defs(&query) {
+                    let compatible = match src_pins {
+                        AnyPins::Out(pins) => pins.iter().any(|pin| {
+                            self.node_def_of(snarl, pin.node)
+                                .and_then(|d| d.outputs.get(pin.output))
+                                .is_some_and(|from| {
+                                    def.inputs.iter().any(|to| {
+                                        mc_nodes::defs::ports_compatible(
+                                            from.port_type,
+                                            to.port_type,
+                                        )
+                                    })
+                                })
+                        }),
+                        AnyPins::In(pins) => pins.iter().any(|pin| {
+                            self.node_def_of(snarl, pin.node)
+                                .and_then(|d| d.inputs.get(pin.input))
+                                .is_some_and(|to| {
+                                    def.outputs.iter().any(|from| {
+                                        mc_nodes::defs::ports_compatible(
+                                            from.port_type,
+                                            to.port_type,
+                                        )
+                                    })
+                                })
+                        }),
+                    };
+                    if !compatible {
+                        continue;
+                    }
 
-            let compatible = match src_pins {
-                AnyPins::Out(pins) => pins.iter().any(|pin| {
-                    self.node_def_of(snarl, pin.node)
-                        .and_then(|d| d.outputs.get(pin.output))
-                        .is_some_and(|from| {
-                            def.inputs.iter().any(|to| {
-                                mc_nodes::defs::ports_compatible(from.port_type, to.port_type)
-                            })
-                        })
-                }),
-                AnyPins::In(pins) => pins.iter().any(|pin| {
-                    self.node_def_of(snarl, pin.node)
-                        .and_then(|d| d.inputs.get(pin.input))
-                        .is_some_and(|to| {
-                            def.outputs.iter().any(|from| {
-                                mc_nodes::defs::ports_compatible(from.port_type, to.port_type)
-                            })
-                        })
-                }),
-            };
-            if !compatible {
-                continue;
-            }
+                    if ui.button(def.display_name).clicked() {
+                        let node = def.instantiate();
+                        let (core_id, transaction) = self.graph.add_node_transaction(node);
+                        if self.history.do_transaction(self.graph, transaction).is_ok() {
+                            let _ = self.graph.set_node_position(core_id, [pos.x, pos.y]);
+                            *self.selected = Some(core_id);
 
-            if ui.button(def.display_name).clicked() {
-                let node = def.instantiate();
-                let (core_id, transaction) = self.graph.add_node_transaction(node);
-                if self.history.do_transaction(self.graph, transaction).is_ok() {
-                    let _ = self.graph.set_node_position(core_id, [pos.x, pos.y]);
-                    *self.selected = Some(core_id);
-
-                    match src_pins {
-                        AnyPins::Out(pins) => {
-                            for pin in pins {
-                                let from_core = snarl[pin.node].core_id;
-                                let Some(from_port) = self
-                                    .node_def_of(snarl, pin.node)
-                                    .and_then(|d| d.outputs.get(pin.output))
-                                else {
-                                    continue;
-                                };
-                                let Some(to_port) = def.inputs.iter().find(|to| {
-                                    mc_nodes::defs::ports_compatible(
-                                        from_port.port_type,
-                                        to.port_type,
-                                    )
-                                }) else {
-                                    continue;
-                                };
-                                if let Ok(tx) = self.graph.connect_transaction(
-                                    from_core,
-                                    from_port.name,
-                                    core_id,
-                                    to_port.name,
-                                ) {
-                                    let _ = self.history.do_transaction(self.graph, tx);
+                            match src_pins {
+                                AnyPins::Out(pins) => {
+                                    for pin in pins {
+                                        let from_core = snarl[pin.node].core_id;
+                                        let Some(from_port) = self
+                                            .node_def_of(snarl, pin.node)
+                                            .and_then(|d| d.outputs.get(pin.output))
+                                        else {
+                                            continue;
+                                        };
+                                        let Some(to_port) = def.inputs.iter().find(|to| {
+                                            mc_nodes::defs::ports_compatible(
+                                                from_port.port_type,
+                                                to.port_type,
+                                            )
+                                        }) else {
+                                            continue;
+                                        };
+                                        if let Ok(tx) = self.graph.connect_transaction(
+                                            from_core,
+                                            from_port.name,
+                                            core_id,
+                                            to_port.name,
+                                        ) {
+                                            let _ = self.history.do_transaction(self.graph, tx);
+                                        }
+                                    }
+                                }
+                                AnyPins::In(pins) => {
+                                    for pin in pins {
+                                        let to_core = snarl[pin.node].core_id;
+                                        let Some(to_port) = self
+                                            .node_def_of(snarl, pin.node)
+                                            .and_then(|d| d.inputs.get(pin.input))
+                                        else {
+                                            continue;
+                                        };
+                                        let Some(from_port) = def.outputs.iter().find(|from| {
+                                            mc_nodes::defs::ports_compatible(
+                                                from.port_type,
+                                                to_port.port_type,
+                                            )
+                                        }) else {
+                                            continue;
+                                        };
+                                        if let Ok(tx) = self.graph.connect_transaction(
+                                            core_id,
+                                            from_port.name,
+                                            to_core,
+                                            to_port.name,
+                                        ) {
+                                            let _ = self.history.do_transaction(self.graph, tx);
+                                        }
+                                    }
                                 }
                             }
                         }
-                        AnyPins::In(pins) => {
-                            for pin in pins {
-                                let to_core = snarl[pin.node].core_id;
-                                let Some(to_port) = self
-                                    .node_def_of(snarl, pin.node)
-                                    .and_then(|d| d.inputs.get(pin.input))
-                                else {
-                                    continue;
-                                };
-                                let Some(from_port) = def.outputs.iter().find(|from| {
-                                    mc_nodes::defs::ports_compatible(
-                                        from.port_type,
-                                        to_port.port_type,
-                                    )
-                                }) else {
-                                    continue;
-                                };
-                                if let Ok(tx) = self.graph.connect_transaction(
-                                    core_id,
-                                    from_port.name,
-                                    to_core,
-                                    to_port.name,
-                                ) {
-                                    let _ = self.history.do_transaction(self.graph, tx);
-                                }
-                            }
-                        }
+                        self.add_node_search.clear();
+                        ui.close();
                     }
                 }
-                self.add_node_search.clear();
-                ui.close();
-            }
-        }
+            });
     }
 
     fn has_node_menu(&mut self, _node: &NodeUi) -> bool {
