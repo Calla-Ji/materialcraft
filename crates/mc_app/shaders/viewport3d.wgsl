@@ -1,6 +1,7 @@
 // viewport3d.wgsl — the 3D preview's render pipeline (CLAUDE.md §9's "3D
 // View": GGX metallic-roughness PBR, a simple procedural sky instead of a
-// bundled HDRI, height used as vertex displacement on the Plane mesh).
+// bundled HDRI, height used as vertex displacement, normal mapping from a
+// real per-vertex tangent basis — both on every mesh, not just the Plane).
 //
 // Unlike the node shaders in mc_nodes, this is a traditional vertex+fragment
 // render pipeline, not a compute shader, and it's the only thing in mc_app
@@ -18,17 +19,19 @@ struct Uniforms {
     // surface (see `fs_main`'s `ambient_diffuse`).
     ambient_color: vec4<f32>,
     height_scale: f32,
-    // 1 for the Plane mesh (the only one with a meaningful "up" to displace
-    // along), 0 otherwise.
-    use_displacement: u32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
 }
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    // Direction UV's U axis runs across the surface — computed per mesh in
+    // `viewport3d.rs`'s `compute_tangents`, from the actual UV layout rather
+    // than guessed in the shader (see `fs_main`).
+    @location(3) tangent: vec3<f32>,
 }
 
 struct VertexOutput {
@@ -36,6 +39,7 @@ struct VertexOutput {
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) world_tangent: vec3<f32>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -53,40 +57,25 @@ struct VertexOutput {
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    var position = in.position;
-    if uniforms.use_displacement != 0u {
-        // Vertex shaders can't use implicit-derivative texture sampling, so
-        // this needs an explicit LOD.
-        let height = textureSampleLevel(height_tex, tex_sampler, in.uv, 0.0).r;
-        position = position + in.normal * (height - 0.5) * uniforms.height_scale;
-    }
+    // Every generated mesh (and any mesh a user imports later) carries a
+    // real per-vertex normal, so displacing along it is meaningful
+    // everywhere — not just on a flat plane. Vertex shaders can't use
+    // implicit-derivative texture sampling, so this needs an explicit LOD.
+    let height = textureSampleLevel(height_tex, tex_sampler, in.uv, 0.0).r;
+    let position = in.position + in.normal * (height - 0.5) * uniforms.height_scale;
 
     out.world_pos = position;
     // Not re-deriving the normal from the displaced surface (that would need
-    // finite differences or precomputed tangents) — using the flat mesh
-    // normal is a simplification, fine for a quick preview.
+    // finite differences) — using the flat mesh normal is a simplification,
+    // fine for a quick preview.
     out.world_normal = in.normal;
+    out.world_tangent = in.tangent;
     out.uv = in.uv;
     out.clip_position = uniforms.view_proj * vec4<f32>(position, 1.0);
     return out;
 }
 
 const PI: f32 = 3.14159265358979;
-
-// Builds an orthonormal (tangent, bitangent, normal) basis from just a
-// normal — no precomputed per-vertex tangents needed. Standard branchless
-// construction (Duff et al., "Building an Orthonormal Basis, Revisited").
-// Used to fake tangent-space normal mapping on meshes that don't carry real
-// tangents (good enough for a procedural preview, not a physically exact
-// tangent space).
-fn make_basis(n: vec3<f32>) -> mat3x3<f32> {
-    let sign = select(-1.0, 1.0, n.z >= 0.0);
-    let a = -1.0 / (sign + n.z);
-    let b = n.x * n.y * a;
-    let tangent = vec3<f32>(1.0 + sign * n.x * n.x * a, sign * b, -sign * n.x);
-    let bitangent = vec3<f32>(b, sign + n.y * n.y * a, -n.y);
-    return mat3x3<f32>(tangent, bitangent, n);
-}
 
 // Standard equirectangular (latitude/longitude) mapping: u wraps around the
 // horizon, v runs from the +Y pole (0) to the -Y pole (1).
@@ -104,7 +93,14 @@ fn sky_color(direction: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let geometric_normal = normalize(in.world_normal);
-    let tbn = make_basis(geometric_normal);
+    // Re-orthogonalize per pixel (Gram-Schmidt): interpolating the tangent
+    // and normal separately across a triangle doesn't keep them exactly
+    // perpendicular.
+    let tangent = normalize(
+        in.world_tangent - geometric_normal * dot(geometric_normal, in.world_tangent)
+    );
+    let bitangent = cross(geometric_normal, tangent);
+    let tbn = mat3x3<f32>(tangent, bitangent, geometric_normal);
     let sampled_normal = textureSample(normal_tex, tex_sampler, in.uv).xyz * 2.0 - 1.0;
     let n = normalize(tbn * sampled_normal);
 

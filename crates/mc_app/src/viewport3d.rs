@@ -10,13 +10,20 @@
 
 use glam::{Mat4, Vec3};
 
-const VERTEX_ATTRS: [wgpu::VertexAttribute; 3] =
-    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
+const VERTEX_ATTRS: [wgpu::VertexAttribute; 4] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x3];
 
 struct Vertex {
     position: [f32; 3],
     normal: [f32; 3],
     uv: [f32; 2],
+    /// Direction of increasing U across the surface — filled in by
+    /// `compute_tangents` after a mesh's positions/normals/UVs are built, not
+    /// set by hand per-generator. Lets the shader build a real tangent-space
+    /// basis for normal mapping instead of faking one from the normal alone,
+    /// which only looked right on the Plane (see `compute_tangents`'s doc
+    /// comment) by coincidence.
+    tangent: [f32; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -412,7 +419,6 @@ impl Viewport3d {
         let proj =
             glam::camera::rh::proj::directx::perspective(60f32.to_radians(), aspect, 0.1, 100.0);
         let light_dir = Vec3::new(-0.4, -1.0, -0.3).normalize();
-        let use_displacement = self.mesh_kind == MeshKind::Plane;
 
         let bytes = uniform_bytes(
             proj * view,
@@ -420,7 +426,6 @@ impl Viewport3d {
             light_dir,
             self.environment_ambient_color,
             self.height_scale,
-            use_displacement,
         );
         gpu.queue.write_buffer(&self.uniform_buffer, 0, &bytes);
 
@@ -593,6 +598,9 @@ fn upload_mesh(
         for c in v.uv {
             vertex_bytes.extend_from_slice(&c.to_le_bytes());
         }
+        for c in v.tangent {
+            vertex_bytes.extend_from_slice(&c.to_le_bytes());
+        }
     }
     let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("viewport3d mesh vertices"),
@@ -628,8 +636,8 @@ fn upload_mesh(
 }
 
 /// `view_proj`(mat4) + `camera_pos`(vec4) + `light_dir`(vec4) +
-/// `ambient_color`(vec4) + 2 scalars + 2 padding floats = 128 bytes,
-/// matching `Uniforms` in viewport3d.wgsl.
+/// `ambient_color`(vec4) + 1 scalar + 3 padding floats = 128 bytes, matching
+/// `Uniforms` in viewport3d.wgsl.
 const UNIFORM_SIZE: usize = 128;
 
 fn uniform_bytes(
@@ -638,7 +646,6 @@ fn uniform_bytes(
     light_dir: Vec3,
     ambient_color: Vec3,
     height_scale: f32,
-    use_displacement: bool,
 ) -> [u8; UNIFORM_SIZE] {
     let mut bytes = [0u8; UNIFORM_SIZE];
     let mut offset = 0;
@@ -659,8 +666,7 @@ fn uniform_bytes(
         put(component, &mut bytes, &mut offset);
     }
     put(height_scale, &mut bytes, &mut offset);
-    bytes[offset..offset + 4].copy_from_slice(&(use_displacement as u32).to_le_bytes());
-    offset += 4;
+    put(0.0, &mut bytes, &mut offset);
     put(0.0, &mut bytes, &mut offset);
     put(0.0, &mut bytes, &mut offset);
     bytes
@@ -677,21 +683,26 @@ fn lerp_segments(low: u32, high: u32, t: f32) -> u32 {
 }
 
 /// Builds the given mesh kind at a quality level driven by `tessellation`
-/// (0.0 = coarsest, 1.0 = finest). `Cube` ignores it — a flat-faced box has
-/// no use for extra subdivision — everything else scales its segment counts
-/// between a usable minimum and a smooth maximum.
+/// (0.0 = coarsest, 1.0 = finest), scaling each mesh's segment counts between
+/// a usable minimum and a smooth maximum. Every mesh gets *some* subdivision
+/// now, even flat-faced ones (`Cube`, and the straight side wall of
+/// `RoundedCylinder`) — height displacement can only bend a face as a ruled
+/// surface between however many vertices it has, so an undivided flat quad
+/// showed none of a height map's actual detail, just the illusion of it from
+/// normal mapping's shading.
 fn tessellated_mesh(kind: MeshKind, tessellation: f32) -> (Vec<Vertex>, Vec<u32>) {
     match kind {
         MeshKind::Sphere => generate_sphere(
-            lerp_segments(8, 48, tessellation),
-            lerp_segments(16, 96, tessellation),
+            lerp_segments(8, 96, tessellation),
+            lerp_segments(16, 192, tessellation),
         ),
-        MeshKind::Cube => generate_cube(),
-        MeshKind::Plane => generate_plane(lerp_segments(8, 128, tessellation)),
-        MeshKind::RoundedCube => generate_rounded_cube(lerp_segments(4, 32, tessellation), 0.25),
+        MeshKind::Cube => generate_rounded_cube(lerp_segments(4, 64, tessellation), 0.0),
+        MeshKind::Plane => generate_plane(lerp_segments(8, 256, tessellation)),
+        MeshKind::RoundedCube => generate_rounded_cube(lerp_segments(4, 64, tessellation), 0.25),
         MeshKind::RoundedCylinder => generate_rounded_cylinder(
-            lerp_segments(16, 96, tessellation),
-            lerp_segments(2, 16, tessellation),
+            lerp_segments(16, 192, tessellation),
+            lerp_segments(2, 24, tessellation),
+            lerp_segments(2, 48, tessellation),
             0.3,
         ),
     }
@@ -710,10 +721,19 @@ fn generate_sphere(rings: u32, segments: u32) -> (Vec<Vertex>, Vec<u32>) {
             let x = r * theta.cos();
             let z = r * theta.sin();
             let position = [x, y, z];
+            // At a pole, every vertex around this "ring" sits at the exact
+            // same 3D point despite having a different u — height
+            // displacement moves each by however much *its own* u happens
+            // to sample, which tears that single point into a star/rosette.
+            // Giving them all the same u instead means they displace
+            // together, by construction. Same pinch every UV sphere/cone has
+            // at its poles, just put to use here rather than worked around.
+            let pole_safe_u = if r.abs() < 1e-5 { 0.0 } else { u };
             vertices.push(Vertex {
                 position,
                 normal: position,
-                uv: [u, v],
+                uv: [pole_safe_u, v],
+                tangent: [0.0; 3],
             });
         }
     }
@@ -729,38 +749,7 @@ fn generate_sphere(rings: u32, segments: u32) -> (Vec<Vertex>, Vec<u32>) {
             indices.extend_from_slice(&[a, b, c, c, b, d]);
         }
     }
-    (vertices, indices)
-}
-
-fn generate_cube() -> (Vec<Vertex>, Vec<u32>) {
-    // (face normal, right axis, up axis) for each of the 6 faces.
-    let faces: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
-        ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
-        ([0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
-        ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
-        ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
-        ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
-        ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
-    ];
-
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
-    for (normal, right, up) in faces {
-        let normal = Vec3::from(normal);
-        let right = Vec3::from(right);
-        let up = Vec3::from(up);
-        let base = vertices.len() as u32;
-        for (du, dv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-            let position = normal + right * du + up * dv;
-            let uv = [du * 0.5 + 0.5, 1.0 - (dv * 0.5 + 0.5)];
-            vertices.push(Vertex {
-                position: position.to_array(),
-                normal: normal.to_array(),
-                uv,
-            });
-        }
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-    }
+    compute_tangents(&mut vertices, &indices);
     (vertices, indices)
 }
 
@@ -771,6 +760,12 @@ fn generate_cube() -> (Vec<Vertex>, Vec<u32>) {
 /// the face normal (so the vertex doesn't move at all); near an edge or
 /// corner it's the diagonal away from the inner box, tracing out exactly the
 /// quarter-cylinder/eighth-sphere fillet a real rounded box has there.
+///
+/// `radius: 0.0` degenerates cleanly to a plain sharp-edged cube (`clamped`
+/// never actually clamps anything, so every vertex just stays where the grid
+/// put it) — `MeshKind::Cube` uses exactly that rather than a separate
+/// unsubdivided cube generator, since a flat-faced-but-undivided mesh has no
+/// geometry for height displacement to bend.
 fn generate_rounded_cube(segments: u32, radius: f32) -> (Vec<Vertex>, Vec<u32>) {
     let radius = radius.clamp(0.0, 1.0);
     let inner = 1.0 - radius;
@@ -807,6 +802,7 @@ fn generate_rounded_cube(segments: u32, radius: f32) -> (Vec<Vertex>, Vec<u32>) 
                     position: position.to_array(),
                     normal: n.to_array(),
                     uv: [i as f32 / segments as f32, 1.0 - j as f32 / segments as f32],
+                    tangent: [0.0; 3],
                 });
             }
         }
@@ -821,6 +817,7 @@ fn generate_rounded_cube(segments: u32, radius: f32) -> (Vec<Vertex>, Vec<u32>) 
             }
         }
     }
+    compute_tangents(&mut vertices, &indices);
     (vertices, indices)
 }
 
@@ -847,10 +844,16 @@ fn revolve(profile: &[ProfilePoint], segments: u32) -> (Vec<Vertex>, Vec<u32>) {
             let u = seg as f32 / segments as f32;
             let theta = u * std::f32::consts::TAU;
             let (sin_t, cos_t) = theta.sin_cos();
+            // Same pole pinch as `generate_sphere`: at the center of a flat
+            // cap (`p.r == 0`), every vertex around this ring is the same 3D
+            // point — give them the same u so they all get the same height
+            // displacement instead of tearing that point into a star.
+            let pole_safe_u = if p.r.abs() < 1e-5 { 0.0 } else { u };
             vertices.push(Vertex {
                 position: [p.r * cos_t, p.y, p.r * sin_t],
                 normal: [p.nr * cos_t, p.ny, p.nr * sin_t],
-                uv: [u, v],
+                uv: [pole_safe_u, v],
+                tangent: [0.0; 3],
             });
         }
     }
@@ -866,6 +869,7 @@ fn revolve(profile: &[ProfilePoint], segments: u32) -> (Vec<Vertex>, Vec<u32>) {
             indices.extend_from_slice(&[a, b, c, c, b, d]);
         }
     }
+    compute_tangents(&mut vertices, &indices);
     (vertices, indices)
 }
 
@@ -875,6 +879,7 @@ fn revolve(profile: &[ProfilePoint], segments: u32) -> (Vec<Vertex>, Vec<u32>) {
 fn generate_rounded_cylinder(
     radial_segments: u32,
     fillet_segments: u32,
+    wall_segments: u32,
     fillet_radius: f32,
 ) -> (Vec<Vertex>, Vec<u32>) {
     let radius = 1.0_f32;
@@ -883,13 +888,16 @@ fn generate_rounded_cylinder(
     let flat_radius = radius - fillet;
     let flat_half_height = half_height - fillet;
 
+    // No flat caps: the mesh is open-ended, just the rounded rim curving
+    // into the side wall and back out the other end — a flat cap built from
+    // a fan of triangles meeting at the center point is exactly what was
+    // causing the mapping problems (the center point is one 3D position
+    // shared by every vertex around that fan, each sampling a different
+    // part of the height/normal textures, which either tore the fan apart
+    // under displacement or, pinned to a single UV to stop that, left the
+    // whole cap without real texture detail). Simplest fix is to not have
+    // that fan at all.
     let mut profile = Vec::new();
-    profile.push(ProfilePoint {
-        r: 0.0,
-        y: half_height,
-        nr: 0.0,
-        ny: 1.0,
-    });
     profile.push(ProfilePoint {
         r: flat_radius,
         y: half_height,
@@ -904,6 +912,21 @@ fn generate_rounded_cylinder(
             y: flat_half_height + fillet * ny,
             nr,
             ny,
+        });
+    }
+    // The straight side wall, same radius/normal throughout — subdivided
+    // along its height so vertex displacement has enough geometry to
+    // actually trace the height map's detail. A single edge from top to
+    // bottom (as this used to be) can only bend the whole wall as one flat
+    // ruled strip between two displaced rings, which isn't fine enough to
+    // show anything but the broadest height variation.
+    for i in 1..wall_segments {
+        let t = i as f32 / wall_segments as f32;
+        profile.push(ProfilePoint {
+            r: radius,
+            y: flat_half_height - t * (2.0 * flat_half_height),
+            nr: 1.0,
+            ny: 0.0,
         });
     }
     profile.push(ProfilePoint {
@@ -922,12 +945,8 @@ fn generate_rounded_cylinder(
             ny,
         });
     }
-    profile.push(ProfilePoint {
-        r: 0.0,
-        y: -half_height,
-        nr: 0.0,
-        ny: -1.0,
-    });
+    // The lower fillet loop above already ends exactly on the bottom rim —
+    // no closing cap here either, same reasoning as the top.
 
     revolve(&profile, radial_segments)
 }
@@ -944,6 +963,7 @@ fn generate_plane(segments: u32) -> (Vec<Vertex>, Vec<u32>) {
                 position: [x, 0.0, z],
                 normal: [0.0, 1.0, 0.0],
                 uv: [u, 1.0 - v],
+                tangent: [0.0; 3],
             });
         }
     }
@@ -959,5 +979,73 @@ fn generate_plane(segments: u32) -> (Vec<Vertex>, Vec<u32>) {
             indices.extend_from_slice(&[a, c, b, b, c, d]);
         }
     }
+    compute_tangents(&mut vertices, &indices);
     (vertices, indices)
+}
+
+/// Computes a per-vertex tangent (the direction UV's U axis actually runs
+/// across the surface) from each triangle's position/UV gradient — the
+/// standard technique (Lengyel), averaged across every triangle a vertex
+/// touches and re-orthogonalized against its normal. This is what lets the
+/// shader build a real tangent-space basis for normal mapping instead of
+/// faking one from the normal alone (which only happened to look right on
+/// the Plane, where the normal is constant and the UV layout lines up with
+/// it by coincidence — see `viewport3d.wgsl`).
+///
+/// Deliberately driven only by `position`/`normal`/`uv`, not by any
+/// knowledge of which primitive generated them, so it works unchanged for
+/// every mesh here *and* for a future user-imported mesh (CLAUDE.md's
+/// mesh-import punch list item) — that code will just need to call this too.
+fn compute_tangents(vertices: &mut [Vertex], indices: &[u32]) {
+    let mut accumulated = vec![Vec3::ZERO; vertices.len()];
+
+    for tri in indices.as_chunks::<3>().0 {
+        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+        let p0 = Vec3::from(vertices[i0].position);
+        let p1 = Vec3::from(vertices[i1].position);
+        let p2 = Vec3::from(vertices[i2].position);
+        let uv0 = vertices[i0].uv;
+        let uv1 = vertices[i1].uv;
+        let uv2 = vertices[i2].uv;
+
+        let edge1 = p1 - p0;
+        let edge2 = p2 - p0;
+        let duv1 = [uv1[0] - uv0[0], uv1[1] - uv0[1]];
+        let duv2 = [uv2[0] - uv0[0], uv2[1] - uv0[1]];
+
+        let denom = duv1[0] * duv2[1] - duv2[0] * duv1[1];
+        if denom.abs() < 1e-12 {
+            // Degenerate UV triangle (e.g. zero UV area) — contributes no
+            // usable tangent direction; its vertices still get one from
+            // whichever other triangles they're part of.
+            continue;
+        }
+        let r = 1.0 / denom;
+        let tangent = (edge1 * duv2[1] - edge2 * duv1[1]) * r;
+        if tangent.is_finite() {
+            accumulated[i0] += tangent;
+            accumulated[i1] += tangent;
+            accumulated[i2] += tangent;
+        }
+    }
+
+    for (vertex, accumulated_tangent) in vertices.iter_mut().zip(accumulated) {
+        let normal = Vec3::from(vertex.normal);
+        let tangent =
+            (accumulated_tangent - normal * normal.dot(accumulated_tangent)).normalize_or_zero();
+        let tangent = if tangent != Vec3::ZERO {
+            tangent
+        } else {
+            // No triangle contributed a usable tangent (e.g. a sphere's pole,
+            // where every triangle degenerates to a point) — any direction
+            // perpendicular to the normal is as good as another there.
+            let arbitrary = if normal.x.abs() < 0.9 {
+                Vec3::X
+            } else {
+                Vec3::Y
+            };
+            (arbitrary - normal * normal.dot(arbitrary)).normalize()
+        };
+        vertex.tangent = tangent.to_array();
+    }
 }
