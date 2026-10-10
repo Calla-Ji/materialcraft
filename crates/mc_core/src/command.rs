@@ -357,7 +357,10 @@ mod tests {
             .expect("a shared connection must only be disconnected once");
         assert!(graph.node(a).is_none());
         assert!(graph.node(b).is_none());
-        assert!(graph.node(c).is_some(), "c wasn't in the batch, must survive");
+        assert!(
+            graph.node(c).is_some(),
+            "c wasn't in the batch, must survive"
+        );
         assert_eq!(graph.upstream(c, "input"), None);
 
         assert!(history.undo(&mut graph));
