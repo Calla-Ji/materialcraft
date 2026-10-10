@@ -12,6 +12,8 @@ egui-wgpu = "0.36.2"
 env_logger = "0.11.11"
 log = "0.4.34"
 mc_core = { version = "0.1.0", path = "../mc_core" }
+mc_export = { version = "0.1.0", path = "../mc_export" }
 mc_gpu = { version = "0.1.0", path = "../mc_gpu" }
 mc_nodes = { version = "0.1.0", path = "../mc_nodes" }
+rfd = "0.17.2"
 wgpu = "30.0.1"

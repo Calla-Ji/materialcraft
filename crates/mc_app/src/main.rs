@@ -6,6 +6,7 @@
 //! Color type checking), edit params in a generic panel, and undo/redo —
 //! see `graph_view.rs` for how the UI mirrors the graph.
 
+mod export_dialog;
 mod graph_view;
 mod params_panel;
 
@@ -28,6 +29,7 @@ struct MaterialCraftApp {
     selected: Option<mc_core::NodeId>,
     add_node_search: String,
     param_drag: params_panel::DragState,
+    export_dialog: export_dialog::ExportDialogState,
 
     preview_texture_id: Option<egui::TextureId>,
 }
@@ -42,7 +44,9 @@ impl eframe::App for MaterialCraftApp {
                 ui.label("Open");
                 ui.label("Save");
                 ui.label("Save As");
-                ui.label("Export…");
+                if ui.button("Export…").clicked() {
+                    self.export_dialog.open = true;
+                }
                 ui.separator();
                 if ui
                     .add_enabled(self.history.can_undo(), egui::Button::new("Undo"))
@@ -119,6 +123,14 @@ impl eframe::App for MaterialCraftApp {
             };
             self.snarl.show(&mut viewer, &style, "material_graph", ui);
         });
+
+        export_dialog::show(
+            ui.ctx(),
+            &mut self.export_dialog,
+            &mut self.gpu,
+            &mut self.pool,
+            &mut self.graph,
+        );
     }
 }
 
@@ -188,6 +200,7 @@ fn main() -> eframe::Result<()> {
                 selected: None,
                 add_node_search: String::new(),
                 param_drag: None,
+                export_dialog: export_dialog::ExportDialogState::default(),
                 preview_texture_id: None,
             }))
         }),
