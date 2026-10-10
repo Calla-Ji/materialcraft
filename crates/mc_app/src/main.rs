@@ -112,8 +112,9 @@ impl eframe::App for MaterialCraftApp {
                         }
                     }
                     columns[1].heading("3D View");
-                    columns[1].horizontal(|ui| {
+                    columns[1].horizontal_wrapped(|ui| {
                         egui::ComboBox::from_label("Mesh")
+                            .width(50.0)
                             .selected_text(self.viewport3d.mesh_kind.label())
                             .show_ui(ui, |ui| {
                                 for kind in viewport3d::MeshKind::ALL {
@@ -124,10 +125,14 @@ impl eframe::App for MaterialCraftApp {
                                     );
                                 }
                             });
-                        ui.add(
-                            egui::Slider::new(&mut self.viewport3d.height_scale, 0.0..=0.5)
-                                .text("Height Scale"),
-                        );
+                        ui.label("Height Scale");
+                        ui.scope(|ui| {
+                            ui.spacing_mut().slider_width = 50.0;
+                            ui.add(egui::Slider::new(
+                                &mut self.viewport3d.height_scale,
+                                0.0..=0.5,
+                            ));
+                        });
                     });
                     let desired =
                         egui::vec2(columns[1].available_width(), columns[1].available_height());
