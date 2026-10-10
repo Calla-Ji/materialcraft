@@ -22,9 +22,8 @@ pub struct ParamSpec {
     pub kind: ParamSpecKind,
 }
 
-/// A param's type and allowed range/options. New variants (Bool, Color,
-/// Vec2, Gradient) get added here once a node that needs them exists —
-/// Perlin Noise, Levels, and Blend only need these four.
+/// A param's type and allowed range/options. New variants (Bool, Vec2,
+/// Gradient) get added here once a node that needs them exists.
 pub enum ParamSpecKind {
     Float {
         min: f32,
@@ -43,6 +42,9 @@ pub enum ParamSpecKind {
         options: &'static [&'static str],
         default: &'static str,
     },
+    Color {
+        default: [f32; 4],
+    },
 }
 
 impl ParamSpec {
@@ -52,6 +54,7 @@ impl ParamSpec {
             ParamSpecKind::Int { default, .. } => ParamValue::Int(default),
             ParamSpecKind::Seed { default } => ParamValue::Seed(default),
             ParamSpecKind::Enum { default, .. } => ParamValue::Enum(default.to_string()),
+            ParamSpecKind::Color { default } => ParamValue::Color(default),
         }
     }
 }
@@ -293,6 +296,561 @@ static NODE_DEFS: &[NodeDef] = &[
                     min: 0.0,
                     max: 1.0,
                     default: 1.0,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "voronoi",
+        display_name: "Voronoi",
+        category: "Generators/Noise",
+        tooltip: "Cellular noise — distances to a scattered set of points.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "scale",
+                display_name: "Scale",
+                tooltip: "How many cells tile across the texture.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 32,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "jitter",
+                display_name: "Jitter",
+                tooltip: "How far each cell's point can move from center.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the pattern without changing its character.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+            ParamSpec {
+                name: "mode",
+                display_name: "Mode",
+                tooltip: "Which cellular distance to output.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::voronoi::VoronoiMode::NAMES,
+                    default: "F1",
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "fractal_sum",
+        display_name: "Fractal Sum",
+        category: "Generators/Noise",
+        tooltip: "Several octaves of a base noise, summed (fBm).",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "base",
+                display_name: "Base Noise",
+                tooltip: "Which noise type to layer.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::fractal_sum::FractalBase::NAMES,
+                    default: "Perlin",
+                },
+            },
+            ParamSpec {
+                name: "scale",
+                display_name: "Scale",
+                tooltip: "Base noise cells tiling across the texture.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 32,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "octaves",
+                display_name: "Octaves",
+                tooltip: "How many layers are summed.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 8,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "lacunarity",
+                display_name: "Lacunarity",
+                tooltip: "Frequency multiplier per octave.",
+                kind: ParamSpecKind::Float {
+                    min: 1.0,
+                    max: 4.0,
+                    default: 2.0,
+                },
+            },
+            ParamSpec {
+                name: "gain",
+                display_name: "Gain",
+                tooltip: "Amplitude multiplier per octave.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the pattern without changing its character.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "tile_generator",
+        display_name: "Tile Generator",
+        category: "Generators/Patterns",
+        tooltip: "A brick or grid pattern — Offset 0.5 for a classic running-bond brick layout.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "rows",
+                display_name: "Rows",
+                tooltip: "Must be even for seamless vertical tiling of the brick stagger.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 32,
+                    default: 6,
+                },
+            },
+            ParamSpec {
+                name: "columns",
+                display_name: "Columns",
+                tooltip: "Grid columns.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 32,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "offset",
+                display_name: "Offset",
+                tooltip: "Stagger alternate rows by this fraction of a column (0.5 = brick).",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "gap",
+                display_name: "Gap",
+                tooltip: "Mortar gap width.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.4,
+                    default: 0.06,
+                },
+            },
+            ParamSpec {
+                name: "bevel",
+                display_name: "Bevel",
+                tooltip: "How much of each tile's edge softens toward the gap.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.4,
+                    default: 0.08,
+                },
+            },
+            ParamSpec {
+                name: "size_jitter",
+                display_name: "Size Jitter",
+                tooltip: "Per-tile random shrink.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.08,
+                },
+            },
+            ParamSpec {
+                name: "rotation_jitter",
+                display_name: "Rotation Jitter",
+                tooltip: "Per-tile random tilt.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "luminance_jitter",
+                display_name: "Luminance Jitter",
+                tooltip: "Per-tile random brightness variation.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.15,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the per-tile randomness.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "shape",
+        display_name: "Shape",
+        category: "Generators/Patterns",
+        tooltip: "A single disc, square, polygon, or star, centered in the tile.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "kind",
+                display_name: "Kind",
+                tooltip: "Which shape to draw.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::shape::ShapeKind::NAMES,
+                    default: "Disc",
+                },
+            },
+            ParamSpec {
+                name: "sides",
+                display_name: "Sides",
+                tooltip: "Vertex/point count for Polygon and Star.",
+                kind: ParamSpecKind::Int {
+                    min: 3,
+                    max: 12,
+                    default: 5,
+                },
+            },
+            ParamSpec {
+                name: "size",
+                display_name: "Size",
+                tooltip: "How large the shape is.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 1.0,
+                    default: 0.6,
+                },
+            },
+            ParamSpec {
+                name: "softness",
+                display_name: "Softness",
+                tooltip: "How soft the edge is.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.05,
+                },
+            },
+            ParamSpec {
+                name: "rotation",
+                display_name: "Rotation",
+                tooltip: "Fraction of a full turn.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "gradient_linear",
+        display_name: "Gradient Linear",
+        category: "Generators/Patterns",
+        tooltip: "A left-to-right ramp from black to white.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[],
+    },
+    NodeDef {
+        kind: "gradient_radial",
+        display_name: "Gradient Radial",
+        category: "Generators/Patterns",
+        tooltip: "A ramp from black at the center to white at the given radius.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[ParamSpec {
+            name: "radius",
+            display_name: "Radius",
+            tooltip: "Distance from center where the ramp reaches white.",
+            kind: ParamSpecKind::Float {
+                min: 0.05,
+                max: 1.0,
+                default: 0.5,
+            },
+        }],
+    },
+    NodeDef {
+        kind: "uniform_color",
+        display_name: "Uniform Color",
+        category: "Generators/Patterns",
+        tooltip: "A flat, solid color fill.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[ParamSpec {
+            name: "color",
+            display_name: "Color",
+            tooltip: "The fill color.",
+            kind: ParamSpecKind::Color {
+                default: [0.5, 0.5, 0.5, 1.0],
+            },
+        }],
+    },
+    NodeDef {
+        kind: "invert",
+        display_name: "Invert",
+        category: "Filters/Adjustments",
+        tooltip: "Flips light and dark: output = 1 - input.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[],
+    },
+    NodeDef {
+        kind: "histogram_scan",
+        display_name: "Histogram Scan",
+        category: "Filters/Blending & Masking",
+        tooltip: "Threshold/window the input around a position.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "position",
+                display_name: "Position",
+                tooltip: "Where the transition is centered.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "contrast",
+                display_name: "Contrast",
+                tooltip: "How sharp the transition is (1 = hard edge).",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "blur",
+        display_name: "Blur",
+        category: "Filters/Spatial",
+        tooltip: "Gaussian blur — softens detail.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[ParamSpec {
+            name: "radius",
+            display_name: "Radius",
+            tooltip: "Blur radius, in UV space.",
+            kind: ParamSpecKind::Float {
+                min: 0.0,
+                max: 0.1,
+                default: 0.01,
+            },
+        }],
+    },
+    NodeDef {
+        kind: "warp",
+        display_name: "Warp",
+        category: "Filters/Spatial",
+        tooltip: "Distort an input by the gradient of an intensity map.",
+        inputs: &[
+            PortSpec {
+                name: "input",
+                display_name: "Input",
+                port_type: PortType::Color,
+            },
+            PortSpec {
+                name: "intensity",
+                display_name: "Intensity",
+                port_type: PortType::Gray,
+            },
+        ],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[ParamSpec {
+            name: "amount",
+            display_name: "Amount",
+            tooltip: "Warp strength.",
+            kind: ParamSpecKind::Float {
+                min: 0.0,
+                max: 0.2,
+                default: 0.05,
+            },
+        }],
+    },
+    NodeDef {
+        kind: "transform2d",
+        display_name: "Transform 2D",
+        category: "Filters/Spatial",
+        tooltip: "Offset, rotate, and scale, with wrap-around tiling.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "offset_x",
+                display_name: "Offset X",
+                tooltip: "Horizontal offset.",
+                kind: ParamSpecKind::Float {
+                    min: -1.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "offset_y",
+                display_name: "Offset Y",
+                tooltip: "Vertical offset.",
+                kind: ParamSpecKind::Float {
+                    min: -1.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "rotation",
+                display_name: "Rotation",
+                tooltip: "Fraction of a full turn. Only multiples of 0.25 stay exactly tileable.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "scale_x",
+                display_name: "Scale X",
+                tooltip: "Horizontal scale.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 4.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
+                name: "scale_y",
+                display_name: "Scale Y",
+                tooltip: "Vertical scale.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 4.0,
+                    default: 1.0,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "height_to_normal",
+        display_name: "Height to Normal",
+        category: "Converters",
+        tooltip: "Converts a height map to a tangent-space normal map.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Gray,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "intensity",
+                display_name: "Intensity",
+                tooltip: "How strongly height differences tilt the normal.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 10.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
+                name: "format",
+                display_name: "Format",
+                tooltip: "OpenGL (Y+) for Blender, DirectX (Y-) for Unreal.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::height_to_normal::NormalFormat::NAMES,
+                    default: "OpenGL",
                 },
             },
         ],

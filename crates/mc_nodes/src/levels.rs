@@ -139,3 +139,75 @@ fn pack_params(resolution: u32, params: &LevelsParams) -> [u8; 32] {
     bytes[20..24].copy_from_slice(&params.out_high.to_le_bytes());
     bytes
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{dispatch, LevelsParams};
+    use crate::perlin::{dispatch as perlin_dispatch, PerlinParams};
+    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+
+    fn render(params: &LevelsParams) -> Vec<u8> {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        perlin_dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            RESOLUTION,
+            &PerlinParams::default(),
+        );
+        dispatch(&mut gpu, &mut pool, "input", "output", RESOLUTION, params);
+        let texture = pool.texture("output").expect("levels texture");
+        gpu.read_rgba8(texture, RESOLUTION)
+    }
+
+    /// Levels is a pointwise remap (no neighborhood sampling), so it can't
+    /// introduce a seam on its own — but a real implementation bug (e.g.
+    /// sampling the wrong pixel) could, so this is still worth checking.
+    #[test]
+    fn preserves_tiling_of_its_input() {
+        assert_tiles_seamlessly(&render(&LevelsParams::default()), RESOLUTION);
+    }
+
+    #[test]
+    fn is_deterministic() {
+        let params = LevelsParams {
+            gamma: 1.8,
+            ..LevelsParams::default()
+        };
+        assert_eq!(
+            render(&params),
+            render(&params),
+            "same input + params produced different pixels"
+        );
+    }
+
+    #[test]
+    fn default_params_are_a_no_op() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        perlin_dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            RESOLUTION,
+            &PerlinParams::default(),
+        );
+        let before = gpu.read_rgba8(pool.texture("input").unwrap(), RESOLUTION);
+
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            "output",
+            RESOLUTION,
+            &LevelsParams::default(),
+        );
+        let after = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
+
+        assert_eq!(
+            before, after,
+            "identity levels params must not change pixels"
+        );
+    }
+}

@@ -124,6 +124,25 @@ pub fn show(
                     );
                 }
             }
+            mc_nodes::defs::ParamSpecKind::Color { default } => {
+                let mut value = match &current {
+                    Some(mc_core::ParamValue::Color(c)) => *c,
+                    _ => *default,
+                };
+                ui.horizontal(|ui| {
+                    ui.label(param.display_name);
+                    let response = ui.color_edit_button_rgba_unmultiplied(&mut value);
+                    if response.changed() {
+                        commit_once(
+                            graph,
+                            history,
+                            id,
+                            param.name,
+                            mc_core::ParamValue::Color(value),
+                        );
+                    }
+                });
+            }
         }
     }
 }

@@ -64,3 +64,41 @@ fn perlin_2d(uv: vec2<f32>, period: i32, seed: u32) -> f32 {
     let nx1 = mix(n01, n11, u);
     return mix(nx0, nx1, v);
 }
+
+// Wraps an integer pixel coordinate into [0, size) — repeat addressing for
+// `textureLoad`, which (unlike `textureSample`) has no built-in wrap mode.
+fn wrap_coord(coord: i32, size: i32) -> i32 {
+    return ((coord % size) + size) % size;
+}
+
+// Tileable 2D Voronoi/Worley "cells": returns (F1, F2), the distances to the
+// nearest and second-nearest jittered points. Each cell gets one point,
+// placed randomly inside it and wrapped to `period` the same way `gradient`
+// above wraps its lattice, so cells tile exactly.
+fn voronoi_f1f2(uv: vec2<f32>, period: i32, jitter: f32, seed: u32) -> vec2<f32> {
+    let p = uv * f32(period);
+    let cell = vec2<i32>(floor(p));
+    let local = fract(p);
+
+    var f1 = 1e9;
+    var f2 = 1e9;
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            let neighbor = cell + vec2<i32>(dx, dy);
+            let wrapped = vec2<i32>(
+                wrap_coord(neighbor.x, period),
+                wrap_coord(neighbor.y, period),
+            );
+            let rand = vec2<f32>(hash2(wrapped, seed), hash2(wrapped, seed + 7919u));
+            let point_pos = vec2<f32>(f32(dx), f32(dy)) + 0.5 + (rand - 0.5) * jitter;
+            let dist = length(point_pos - local);
+            if dist < f1 {
+                f2 = f1;
+                f1 = dist;
+            } else if dist < f2 {
+                f2 = dist;
+            }
+        }
+    }
+    return vec2<f32>(f1, f2);
+}

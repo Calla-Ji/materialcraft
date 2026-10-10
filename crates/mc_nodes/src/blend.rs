@@ -218,3 +218,113 @@ fn pack_params(resolution: u32, params: &BlendParams) -> [u8; 16] {
     bytes[8..12].copy_from_slice(&params.opacity.to_le_bytes());
     bytes
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{dispatch, BlendMode, BlendParams};
+    use crate::perlin::{dispatch as perlin_dispatch, PerlinParams};
+    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+
+    fn render(params: &BlendParams) -> Vec<u8> {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        perlin_dispatch(
+            &mut gpu,
+            &mut pool,
+            "base",
+            RESOLUTION,
+            &PerlinParams {
+                seed: 1,
+                ..PerlinParams::default()
+            },
+        );
+        perlin_dispatch(
+            &mut gpu,
+            &mut pool,
+            "blend",
+            RESOLUTION,
+            &PerlinParams {
+                seed: 2,
+                ..PerlinParams::default()
+            },
+        );
+        dispatch(
+            &mut gpu, &mut pool, "base", "blend", None, "output", RESOLUTION, params,
+        );
+        let texture = pool.texture("output").expect("blend texture");
+        gpu.read_rgba8(texture, RESOLUTION)
+    }
+
+    #[test]
+    fn preserves_tiling_of_its_inputs() {
+        assert_tiles_seamlessly(&render(&BlendParams::default()), RESOLUTION);
+    }
+
+    #[test]
+    fn is_deterministic() {
+        let params = BlendParams {
+            mode: BlendMode::Multiply,
+            opacity: 0.7,
+        };
+        assert_eq!(
+            render(&params),
+            render(&params),
+            "same inputs + params produced different pixels"
+        );
+    }
+
+    #[test]
+    fn copy_at_full_opacity_outputs_the_blend_layer() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        perlin_dispatch(
+            &mut gpu,
+            &mut pool,
+            "base",
+            RESOLUTION,
+            &PerlinParams {
+                seed: 1,
+                ..PerlinParams::default()
+            },
+        );
+        perlin_dispatch(
+            &mut gpu,
+            &mut pool,
+            "blend",
+            RESOLUTION,
+            &PerlinParams {
+                seed: 2,
+                ..PerlinParams::default()
+            },
+        );
+        let blend_only = gpu.read_rgba8(pool.texture("blend").unwrap(), RESOLUTION);
+
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "base",
+            "blend",
+            None,
+            "output",
+            RESOLUTION,
+            &BlendParams {
+                mode: BlendMode::Copy,
+                opacity: 1.0,
+            },
+        );
+        let output = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
+
+        assert_eq!(
+            blend_only, output,
+            "Copy mode at opacity 1.0 with no mask must pass the blend layer straight through"
+        );
+    }
+
+    #[test]
+    fn mode_name_round_trips() {
+        for name in BlendMode::NAMES {
+            let mode = BlendMode::from_name(name).expect("every declared name parses");
+            assert_eq!(mode.name(), name);
+        }
+    }
+}

@@ -29,6 +29,38 @@ fn port_color(port_type: mc_core::PortType) -> egui::Color32 {
     }
 }
 
+/// Renders the add-node search box as a type-ahead label rather than a real
+/// `TextEdit`: egui-snarl's menu popup closes on any click, including a
+/// click into a text field to focus it, so there's no way to click-then-type
+/// into one. Typed characters are instead captured directly from this
+/// frame's input events, which doesn't require focus at all.
+fn show_search_box(ui: &mut egui::Ui, search: &mut String) {
+    ui.input(|input| {
+        for event in &input.events {
+            match event {
+                egui::Event::Text(text) => search.push_str(text),
+                egui::Event::Key {
+                    key: egui::Key::Backspace,
+                    pressed: true,
+                    ..
+                } => {
+                    search.pop();
+                }
+                _ => {}
+            }
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.label("Search:");
+        if search.is_empty() {
+            ui.weak("(just start typing)");
+        } else {
+            ui.label(egui::RichText::new(search.as_str()).strong());
+        }
+    });
+}
+
 /// Reconciles `snarl`'s nodes and wires to match `graph`, adding/removing UI
 /// nodes as needed and fully rebuilding the wire set (cheap at the node
 /// counts this app deals with, and far simpler than patching it
@@ -230,7 +262,7 @@ impl egui_snarl::ui::SnarlViewer<NodeUi> for GraphViewer<'_> {
 
     fn show_graph_menu(&mut self, pos: egui::Pos2, ui: &mut egui::Ui, _snarl: &mut Snarl<NodeUi>) {
         ui.set_min_width(200.0);
-        ui.text_edit_singleline(self.add_node_search);
+        show_search_box(ui, self.add_node_search);
         ui.separator();
 
         let query = self.add_node_search.to_lowercase();
@@ -268,7 +300,7 @@ impl egui_snarl::ui::SnarlViewer<NodeUi> for GraphViewer<'_> {
         snarl: &mut Snarl<NodeUi>,
     ) {
         ui.set_min_width(200.0);
-        ui.text_edit_singleline(self.add_node_search);
+        show_search_box(ui, self.add_node_search);
         ui.separator();
 
         let query = self.add_node_search.to_lowercase();

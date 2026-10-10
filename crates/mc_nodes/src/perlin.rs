@@ -1,7 +1,7 @@
 //! Generators / Noise / Perlin Noise.
 //!
 //! Display name: "Perlin Noise". Tooltip: "Classic gradient noise — smooth,
-//! organic variation." The only node wired up so far (M1).
+//! organic variation."
 //!
 //! Output is stored as an `Rgba8Unorm` texture (gray value broadcast to RGB,
 //! alpha = 1) so it can be shown directly in egui's 2D view and read back for
@@ -136,4 +136,53 @@ fn pack_params(resolution: u32, params: &PerlinParams) -> [u8; 32] {
     bytes[12..16].copy_from_slice(&params.seed.to_le_bytes());
     bytes[16..20].copy_from_slice(&params.persistence.to_le_bytes());
     bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dispatch, PerlinParams};
+    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+
+    fn render(params: &PerlinParams) -> Vec<u8> {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        dispatch(&mut gpu, &mut pool, "test", RESOLUTION, params);
+        let texture = pool.texture("test").expect("perlin texture");
+        gpu.read_rgba8(texture, RESOLUTION)
+    }
+
+    #[test]
+    fn tiles_seamlessly() {
+        assert_tiles_seamlessly(&render(&PerlinParams::default()), RESOLUTION);
+    }
+
+    /// Hard rule #3 (CLAUDE.md §6): same graph + same seed = bit-identical
+    /// output on the same GPU.
+    #[test]
+    fn is_deterministic() {
+        let params = PerlinParams {
+            seed: 42,
+            ..PerlinParams::default()
+        };
+        assert_eq!(
+            render(&params),
+            render(&params),
+            "same params + seed produced different pixels"
+        );
+    }
+
+    /// Changing the seed should actually change the output, otherwise the
+    /// determinism test above would pass trivially.
+    #[test]
+    fn seed_changes_output() {
+        let a = render(&PerlinParams {
+            seed: 1,
+            ..PerlinParams::default()
+        });
+        let b = render(&PerlinParams {
+            seed: 2,
+            ..PerlinParams::default()
+        });
+        assert_ne!(a, b, "different seeds produced identical pixels");
+    }
 }

@@ -5,7 +5,10 @@
 //! remaining node's GPU work by its `kind`. Each evaluated node's texture
 //! lives in the [`mc_gpu::TexturePool`] under the key from [`texture_key`].
 
-use crate::{blend, levels, perlin};
+use crate::{
+    blend, blur, fractal_sum, gradient_linear, gradient_radial, height_to_normal, histogram_scan,
+    invert, levels, perlin, shape, tile_generator, transform2d, uniform_color, voronoi, warp,
+};
 
 /// The texture pool key a node's own output is stored under.
 pub fn texture_key(id: mc_core::NodeId) -> String {
@@ -84,6 +87,92 @@ pub fn evaluate(
                     &params,
                 );
             }
+            "voronoi" => {
+                let params = voronoi::VoronoiParams::from_graph(&node.params);
+                voronoi::dispatch(gpu, pool, &key, resolution, &params);
+            }
+            "fractal_sum" => {
+                let params = fractal_sum::FractalSumParams::from_graph(&node.params);
+                fractal_sum::dispatch(gpu, pool, &key, resolution, &params);
+            }
+            "tile_generator" => {
+                let params = tile_generator::TileGeneratorParams::from_graph(&node.params);
+                tile_generator::dispatch(gpu, pool, &key, resolution, &params);
+            }
+            "shape" => {
+                let params = shape::ShapeParams::from_graph(&node.params);
+                shape::dispatch(gpu, pool, &key, resolution, &params);
+            }
+            "gradient_linear" => {
+                gradient_linear::dispatch(gpu, pool, &key, resolution);
+            }
+            "gradient_radial" => {
+                let params = gradient_radial::GradientRadialParams::from_graph(&node.params);
+                gradient_radial::dispatch(gpu, pool, &key, resolution, &params);
+            }
+            "uniform_color" => {
+                let params = uniform_color::UniformColorParams::from_graph(&node.params);
+                uniform_color::dispatch(gpu, pool, &key, resolution, &params);
+            }
+            "invert" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                invert::dispatch(gpu, pool, &input_key, &key, resolution);
+            }
+            "histogram_scan" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = histogram_scan::HistogramScanParams::from_graph(&node.params);
+                histogram_scan::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "blur" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = blur::BlurParams::from_graph(&node.params);
+                blur::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "warp" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let intensity_id = graph
+                    .upstream(id, "intensity")
+                    .ok_or_else(|| EvalError::MissingInput(id, "intensity".to_string()))?;
+                let input_key = texture_key(input_id);
+                let intensity_key = texture_key(intensity_id);
+                let params = warp::WarpParams::from_graph(&node.params);
+                warp::dispatch(
+                    gpu,
+                    pool,
+                    &input_key,
+                    &intensity_key,
+                    &key,
+                    resolution,
+                    &params,
+                );
+            }
+            "transform2d" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = transform2d::Transform2DParams::from_graph(&node.params);
+                transform2d::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "height_to_normal" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = height_to_normal::HeightToNormalParams::from_graph(&node.params);
+                height_to_normal::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
             other => return Err(EvalError::UnknownKind(id, other.to_string())),
         }
         graph.mark_evaluated(id);
@@ -102,5 +191,94 @@ pub fn resolve_texture_key(graph: &mc_core::Graph, node: mc_core::NodeId) -> Opt
         resolve_texture_key(graph, upstream)
     } else {
         Some(texture_key(node))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{evaluate, resolve_texture_key};
+
+    /// CLAUDE.md's M2 acceptance check: a 3-node graph (Noise → Levels →
+    /// Output) evaluates headlessly.
+    #[test]
+    fn evaluates_noise_levels_output_graph() {
+        let mut graph = mc_core::Graph::new();
+        let noise = graph.add_node(mc_core::Node::new("perlin_noise"));
+        let levels = graph.add_node(mc_core::Node::new("levels"));
+        let output = graph.add_node(mc_core::Node::new("output_base_color"));
+        graph.connect(noise, "output", levels, "input").unwrap();
+        graph.connect(levels, "output", output, "input").unwrap();
+        graph.settings.resolution = 64;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let key = resolve_texture_key(&graph, output).expect("output resolves to a texture");
+        let pixels = gpu.read_rgba8(pool.texture(&key).expect("texture exists"), 64);
+        assert_eq!(pixels.len(), 64 * 64 * 4);
+
+        for id in [noise, levels, output] {
+            assert!(
+                !graph.needs_evaluation(id),
+                "node {id:?} should be marked up to date after evaluate()"
+            );
+        }
+    }
+
+    /// CLAUDE.md's M3 acceptance demo: a 4-node graph (Noise → Levels →
+    /// Blend → Output) evaluates headlessly. Blend's second input comes from
+    /// a second Perlin node so Blend has two genuinely different layers to
+    /// combine.
+    #[test]
+    fn evaluates_noise_levels_blend_output_graph() {
+        let mut graph = mc_core::Graph::new();
+        let noise_a = graph.add_node(
+            mc_core::Node::new("perlin_noise").with_param("seed", mc_core::ParamValue::Seed(1)),
+        );
+        let noise_b = graph.add_node(
+            mc_core::Node::new("perlin_noise").with_param("seed", mc_core::ParamValue::Seed(2)),
+        );
+        let levels = graph.add_node(mc_core::Node::new("levels"));
+        let blend = graph.add_node(mc_core::Node::new("blend"));
+        let output = graph.add_node(mc_core::Node::new("output_base_color"));
+
+        graph.connect(noise_a, "output", levels, "input").unwrap();
+        graph.connect(levels, "output", blend, "base").unwrap();
+        graph.connect(noise_b, "output", blend, "blend").unwrap();
+        graph.connect(blend, "output", output, "input").unwrap();
+        graph.settings.resolution = 64;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let key = resolve_texture_key(&graph, output).expect("output resolves to a texture");
+        let pixels = gpu.read_rgba8(pool.texture(&key).expect("texture exists"), 64);
+        assert_eq!(pixels.len(), 64 * 64 * 4);
+
+        for id in [noise_a, noise_b, levels, blend, output] {
+            assert!(
+                !graph.needs_evaluation(id),
+                "node {id:?} should be marked up to date after evaluate()"
+            );
+        }
+    }
+
+    #[test]
+    fn re_evaluating_an_unchanged_graph_is_a_cache_hit() {
+        let mut graph = mc_core::Graph::new();
+        let noise = graph.add_node(mc_core::Node::new("perlin_noise"));
+        graph.settings.resolution = 32;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).unwrap();
+        assert!(!graph.needs_evaluation(noise));
+
+        // Nothing changed, so a second evaluate() pass should be a no-op —
+        // verified indirectly: it must not error and the node stays clean.
+        evaluate(&mut gpu, &mut pool, &mut graph).unwrap();
+        assert!(!graph.needs_evaluation(noise));
     }
 }
