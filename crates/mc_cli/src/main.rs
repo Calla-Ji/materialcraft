@@ -1,10 +1,13 @@
 //! mc_cli: headless rendering, with no window.
 //!
-//! M4: builds the `bricks` example graph (CLAUDE.md's M4 acceptance target),
+//! Builds the `bricks` example graph (CLAUDE.md's M4 acceptance target),
 //! saves it to `examples/graphs/bricks.mcgraph`, reloads it (exercising the
 //! real file round trip, not just an in-memory one), evaluates it via
-//! `mc_nodes::registry::evaluate`, and exports every Output node's texture
-//! to a PNG under `out/` for a quick look.
+//! `mc_nodes::registry::evaluate`, dumps a quick-look PNG per output under
+//! `out/`, and (M5) exports the full material via `mc_nodes::export` for
+//! both the Blender and Unreal presets — proving the naming/packing/
+//! color-space pipeline end to end, at a resolution different from the
+//! graph's own live-preview resolution.
 //!
 //! The real `mc_cli render <graph.mcgraph> --res … --preset …` command needs
 //! an argument-parsing crate that isn't in CLAUDE.md §3's approved
@@ -59,9 +62,21 @@ fn build_bricks_graph() -> mc_core::Graph {
             .with_param("intensity", mc_core::ParamValue::Float(2.0)),
     );
 
+    let roughness = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.65, 0.65, 0.65, 1.0])),
+    );
+    let metallic = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.0, 0.0, 0.0, 1.0])),
+    );
+
     let out_base_color = graph.add_node(mc_core::Node::new("output_base_color"));
     let out_normal = graph.add_node(mc_core::Node::new("output_normal"));
     let out_height = graph.add_node(mc_core::Node::new("output_height"));
+    let out_roughness = graph.add_node(mc_core::Node::new("output_roughness"));
+    let out_metallic = graph.add_node(mc_core::Node::new("output_metallic"));
+    let out_ao = graph.add_node(mc_core::Node::new("output_ambient_occlusion"));
 
     graph
         .connect(mortar_color, "output", colorize, "base")
@@ -91,6 +106,16 @@ fn build_bricks_graph() -> mc_core::Graph {
     graph
         .connect(bricks, "output", out_height, "input")
         .unwrap();
+    graph
+        .connect(roughness, "output", out_roughness, "input")
+        .unwrap();
+    graph
+        .connect(metallic, "output", out_metallic, "input")
+        .unwrap();
+    // The mortar/bricks height pattern doubles as a crude ambient-occlusion
+    // proxy: mortar gaps (dark) read as occluded, brick faces (bright) as
+    // unoccluded — good enough for a demo graph, not a real AO bake.
+    graph.connect(bricks, "output", out_ao, "input").unwrap();
 
     graph
 }
@@ -110,13 +135,13 @@ fn main() -> anyhow::Result<()> {
         .context("failed to evaluate graph")?;
 
     let resolution = graph.settings.resolution;
-    let outputs = [
+    let quick_looks = [
         ("output_base_color", "bricks_base_color.png"),
         ("output_normal", "bricks_normal.png"),
         ("output_height", "bricks_height.png"),
     ];
 
-    for (kind, file_name) in outputs {
+    for (kind, file_name) in quick_looks {
         let node_id = graph
             .nodes()
             .find(|(_, node)| node.kind == kind)
@@ -135,7 +160,30 @@ fn main() -> anyhow::Result<()> {
         image.save(&image_path)?;
         println!("Wrote {image_path}");
     }
-
     println!("Wrote {graph_path}");
+
+    // Full material export, both presets, at a resolution different from
+    // the graph's own live-preview resolution (512) to prove that path.
+    let export_resolution = 1024;
+    for preset in [
+        mc_export::naming::Preset::Blender,
+        mc_export::naming::Preset::Unreal,
+    ] {
+        let export_dir = format!("{out_dir}/export_{}", preset.name().to_lowercase());
+        let written = mc_nodes::export::export_material(
+            &mut gpu,
+            &mut pool,
+            &mut graph,
+            preset,
+            export_resolution,
+            "bricks",
+            std::path::Path::new(&export_dir),
+        )
+        .with_context(|| format!("failed to export {preset:?} preset"))?;
+        for path in &written {
+            println!("Wrote {}", path.display());
+        }
+    }
+
     Ok(())
 }

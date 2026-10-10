@@ -1553,6 +1553,7 @@ dependencies = [
  "anyhow",
  "image",
  "mc_core",
+ "mc_export",
  "mc_gpu",
  "mc_nodes",
 ]
@@ -1569,6 +1570,12 @@ dependencies = [
 [[package]]
 name = "mc_export"
 version = "0.1.0"
+dependencies = [
+ "exr",
+ "image",
+ "mc_core",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "mc_gpu"
@@ -1585,6 +1592,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "mc_core",
+ "mc_export",
  "mc_gpu",
  "thiserror 2.0.21",
  "wgpu",

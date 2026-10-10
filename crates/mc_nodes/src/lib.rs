@@ -8,6 +8,7 @@
 pub mod blend;
 pub mod blur;
 pub mod defs;
+pub mod export;
 pub mod fractal_sum;
 pub mod gradient_linear;
 pub mod gradient_radial;
