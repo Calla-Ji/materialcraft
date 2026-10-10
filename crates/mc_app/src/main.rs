@@ -6,6 +6,7 @@
 //! Color type checking), edit params in a generic panel, and undo/redo —
 //! see `graph_view.rs` for how the UI mirrors the graph.
 
+mod add_node_menu;
 mod export_dialog;
 mod graph_view;
 mod hdri;
@@ -30,6 +31,7 @@ struct MaterialCraftApp {
 
     selected: Option<mc_core::NodeId>,
     add_node_search: String,
+    add_node_menu: Option<add_node_menu::AddNodeMenu>,
     param_drag: params_panel::DragState,
     export_dialog: export_dialog::ExportDialogState,
     viewport3d: viewport3d::Viewport3d,
@@ -97,7 +99,9 @@ impl eframe::App for MaterialCraftApp {
                     columns[0].heading("2D View");
                     match self.preview_texture() {
                         Some(texture_id) => {
-                            let size = columns[0].available_height().min(240.0);
+                            let size = columns[0]
+                                .available_height()
+                                .min(columns[0].available_width());
                             columns[0].image(egui::load::SizedTexture::new(
                                 texture_id,
                                 egui::Vec2::splat(size),
@@ -125,10 +129,8 @@ impl eframe::App for MaterialCraftApp {
                                 .text("Height Scale"),
                         );
                     });
-                    let desired = egui::vec2(
-                        columns[1].available_width(),
-                        columns[1].available_height().min(240.0),
-                    );
+                    let desired =
+                        egui::vec2(columns[1].available_width(), columns[1].available_height());
                     let response =
                         columns[1].allocate_response(desired, egui::Sense::click_and_drag());
                     self.viewport3d.handle_input(&columns[1], &response);
@@ -149,6 +151,7 @@ impl eframe::App for MaterialCraftApp {
                 });
             });
 
+        let mut snarl_response = None;
         egui::CentralPanel::default().show(ui, |ui| {
             let style = egui_snarl::ui::SnarlStyle::new();
             let mut viewer = GraphViewer {
@@ -161,8 +164,50 @@ impl eframe::App for MaterialCraftApp {
                 render_state: &self.render_state,
                 thumbnail_ids: &mut self.thumbnail_ids,
             };
-            self.snarl.show(&mut viewer, &style, "material_graph", ui);
+            // `Snarl::show` itself discards the interaction `Response` we
+            // need for `add_node_menu` below — `SnarlWidget::show` is the
+            // lower-level entry point that returns it.
+            snarl_response = Some(
+                egui_snarl::ui::SnarlWidget::new()
+                    .id_salt("material_graph")
+                    .style(style)
+                    .show(&mut self.snarl, &mut viewer, ui),
+            );
         });
+        let snarl_response = snarl_response.expect("CentralPanel::show always runs add_contents");
+
+        // Right-click-on-empty-canvas now opens our own screen-space popup
+        // (see add_node_menu.rs) instead of egui-snarl's built-in one, which
+        // doesn't account for the canvas's pan/zoom transform.
+        //
+        // `snarl_response` lives inside egui-snarl's own transformed layer,
+        // so egui already reports its `interact_pointer_pos()` in graph-space
+        // (egui-snarl relies on this same behavior itself, e.g. for rect-
+        // selection) — no manual pan/zoom math needed for `graph_pos`. The
+        // popup itself is a plain `egui::Area` outside that layer, so it
+        // needs the real, untransformed screen-space pointer position.
+        if self.add_node_menu.is_none() && snarl_response.secondary_clicked() {
+            if let (Some(graph_pos), Some(screen_pos)) = (
+                snarl_response.interact_pointer_pos(),
+                ui.ctx().input(|i| i.pointer.interact_pos()),
+            ) {
+                self.add_node_menu = Some(add_node_menu::AddNodeMenu::open(screen_pos, graph_pos));
+            }
+        }
+        if let Some((def, graph_pos)) = add_node_menu::show(ui.ctx(), &mut self.add_node_menu) {
+            let node = def.instantiate();
+            let (core_id, transaction) = self.graph.add_node_transaction(node);
+            if self
+                .history
+                .do_transaction(&mut self.graph, transaction)
+                .is_ok()
+            {
+                let _ = self
+                    .graph
+                    .set_node_position(core_id, [graph_pos.x, graph_pos.y]);
+                self.selected = Some(core_id);
+            }
+        }
 
         export_dialog::show(
             ui.ctx(),
@@ -240,6 +285,7 @@ fn main() -> eframe::Result<()> {
                 thumbnail_ids: HashMap::new(),
                 selected: None,
                 add_node_search: String::new(),
+                add_node_menu: None,
                 param_drag: None,
                 export_dialog: export_dialog::ExportDialogState::default(),
                 viewport3d,

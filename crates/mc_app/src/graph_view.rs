@@ -266,33 +266,13 @@ impl egui_snarl::ui::SnarlViewer<NodeUi> for GraphViewer<'_> {
         ));
     }
 
-    fn has_graph_menu(&mut self, _pos: egui::Pos2, _snarl: &mut Snarl<NodeUi>) -> bool {
-        true
-    }
-
-    fn show_graph_menu(&mut self, pos: egui::Pos2, ui: &mut egui::Ui, _snarl: &mut Snarl<NodeUi>) {
-        ui.set_width(220.0);
-        show_search_box(ui, self.add_node_search);
-        ui.separator();
-
-        let query = self.add_node_search.to_lowercase();
-        egui::ScrollArea::vertical()
-            .max_height(320.0)
-            .show(ui, |ui| {
-                for def in matching_node_defs(&query) {
-                    if ui.button(def.display_name).clicked() {
-                        let node = def.instantiate();
-                        let (core_id, transaction) = self.graph.add_node_transaction(node);
-                        if self.history.do_transaction(self.graph, transaction).is_ok() {
-                            let _ = self.graph.set_node_position(core_id, [pos.x, pos.y]);
-                            *self.selected = Some(core_id);
-                        }
-                        self.add_node_search.clear();
-                        ui.close();
-                    }
-                }
-            });
-    }
+    // `has_graph_menu`/`show_graph_menu` are deliberately *not* overridden
+    // (the trait defaults disable them): egui-snarl's own context-menu
+    // positioning doesn't account for the canvas's pan/zoom transform, so
+    // plain right-click-on-empty-canvas now goes through `add_node_menu.rs`
+    // instead, driven by `Snarl::show`'s returned `Response` in `main.rs`.
+    // The drag-wire-drop menu below is unaffected by that and still uses
+    // egui-snarl's own menu — see `add_node_menu.rs`'s doc comment for why.
 
     fn has_dropped_wire_menu(&mut self, _src_pins: AnyPins, _snarl: &mut Snarl<NodeUi>) -> bool {
         true
