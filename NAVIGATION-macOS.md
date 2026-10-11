@@ -13,11 +13,13 @@ these are the controls that aren't obvious from the UI alone.
 | Zoom | Trackpad pinch, or scroll while holding ⌘ |
 | Box-select | Shift + left-drag on empty canvas |
 | Select a node | Left-click it (replaces the current selection) |
+| Preview a node in the 2D View/Parameters panel without changing the canvas selection | Click the light dot in its header |
 | Add/remove a node from selection | Shift + left-click it |
 | Select all | ⌘A |
 | Move selected node(s) | Left-drag any selected node — the whole selection moves together |
 | Delete selected node(s) | Delete or Backspace |
-| Delete a single node | Right-click it → "Delete Node" |
+| Delete a single node | Right-click it → "Delete Node", or click the red dot in its header |
+| Duplicate selected node(s) | Click the blue dot in any selected node's header, or right-click a node → "Duplicate Node" |
 | Connect a wire | Left-drag from one pin to a compatible pin |
 | Disconnect a wire | Left-click directly on the wire |
 | Rewire (grab a connected end) | ⌘ + left-drag starting on an existing wire |

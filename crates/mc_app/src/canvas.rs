@@ -39,9 +39,9 @@ const PREVIEW_DOT_RADIUS: f32 = 4.0;
 const PREVIEW_DOT_MARGIN: f32 = 12.0;
 const DOT_SPACING: f32 = 16.0;
 const HEADER_TEXT_LEFT: f32 = 8.0;
-/// Space reserved on the header's right side for the preview/delete dots, so
-/// the title text never runs underneath them.
-const HEADER_TEXT_RIGHT_RESERVED: f32 = PREVIEW_DOT_MARGIN + DOT_SPACING + 6.0;
+/// Space reserved on the header's right side for the preview/duplicate/
+/// delete dots, so the title text never runs underneath them.
+const HEADER_TEXT_RIGHT_RESERVED: f32 = PREVIEW_DOT_MARGIN + DOT_SPACING * 2.0 + 6.0;
 
 /// Which pin a wire-drag gesture started from, or that a drawn wire ends at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,6 +364,47 @@ fn try_connect(graph: &mut mc_core::Graph, history: &mut mc_core::History, a: Pi
     }
 }
 
+/// Duplicates `id` — or, if it's part of the current multi-selection, every
+/// selected node — with the same kind/params/label but none of its
+/// connections, offset slightly so copies never sit exactly on top of the
+/// originals. The new node(s) become the selection, so they're immediately
+/// ready to drag away, matching duplicate in most other node editors.
+const DUPLICATE_OFFSET: f32 = 30.0;
+
+fn duplicate_nodes(
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    canvas: &mut CanvasState,
+    selected: &mut Option<NodeId>,
+    id: NodeId,
+) {
+    let targets: Vec<NodeId> = if canvas.selected.contains(&id) {
+        canvas.selected.iter().copied().collect()
+    } else {
+        vec![id]
+    };
+    let mut new_ids = Vec::with_capacity(targets.len());
+    for target in targets {
+        let Some(source) = graph.node(target).cloned() else {
+            continue;
+        };
+        let position = [
+            source.position[0] + DUPLICATE_OFFSET,
+            source.position[1] + DUPLICATE_OFFSET,
+        ];
+        let (new_id, transaction) = graph.add_node_transaction(source);
+        if history.do_transaction(graph, transaction).is_ok() {
+            let _ = graph.set_node_position(new_id, position);
+            new_ids.push(new_id);
+        }
+    }
+    if !new_ids.is_empty() {
+        canvas.selected.clear();
+        canvas.selected.extend(new_ids.iter().copied());
+        *selected = new_ids.last().copied();
+    }
+}
+
 #[expect(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
@@ -564,6 +605,10 @@ pub fn show(
             }
         }
         node_response.context_menu(|ui| {
+            if ui.button("Duplicate Node").clicked() {
+                duplicate_nodes(graph, history, canvas, selected, id);
+                ui.close();
+            }
             if ui.button("Delete Node").clicked() {
                 let transaction = graph.remove_node_transaction(id);
                 let _ = history.do_transaction(graph, transaction);
@@ -633,7 +678,7 @@ pub fn show(
         // Delete indicator: same idea as the preview dot below, for the
         // right-click-menu "Delete Node" action — a one-click way to remove
         // a single node without having to select it first. Rightmost of the
-        // two header dots.
+        // three header dots.
         let delete_dot_pos = Pos2::new(
             rect.max.x - PREVIEW_DOT_MARGIN * zoom,
             rect.min.y + HEADER_HEIGHT * zoom / 2.0,
@@ -648,6 +693,7 @@ pub fn show(
             Rect::from_center_size(delete_dot_pos, Vec2::splat(PIN_HIT_RADIUS * zoom * 2.0));
         if ui
             .interact(delete_dot_rect, delete_dot_id, Sense::click())
+            .on_hover_text("Delete node")
             .clicked()
         {
             let transaction = graph.remove_node_transaction(id);
@@ -658,11 +704,35 @@ pub fn show(
             }
         }
 
+        // Duplicate indicator: same idea as the delete dot, for the
+        // right-click-menu "Duplicate Node" action's one-click equivalent —
+        // the counterpart to delete, so it sits right next to it. Middle of
+        // the three header dots. A custom blue, like delete's custom red —
+        // not `theme::PINK_DWARF`, which already means "Color port" on this
+        // same node card and would read ambiguously reused here.
+        let duplicate_dot_pos = delete_dot_pos - Vec2::new(DOT_SPACING * zoom, 0.0);
+        painter.circle_filled(
+            duplicate_dot_pos,
+            PREVIEW_DOT_RADIUS * zoom,
+            Color32::from_rgb(90, 150, 210),
+        );
+        let duplicate_dot_id = ui.id().with(("mc_duplicate_dot", id));
+        let duplicate_dot_rect =
+            Rect::from_center_size(duplicate_dot_pos, Vec2::splat(PIN_HIT_RADIUS * zoom * 2.0));
+        if ui
+            .interact(duplicate_dot_rect, duplicate_dot_id, Sense::click())
+            .on_hover_text("Duplicate node")
+            .clicked()
+        {
+            duplicate_nodes(graph, history, canvas, selected, id);
+        }
+
         // Preview-target indicator: a small dot in the header, rather than a
         // full "Preview" button in the body — frees up the whole body for
         // the thumbnail, and sidesteps real egui widgets (which don't scale
-        // with our zoom) inside the node entirely. Left of the delete dot.
-        let preview_dot_pos = delete_dot_pos - Vec2::new(DOT_SPACING * zoom, 0.0);
+        // with our zoom) inside the node entirely. Leftmost of the three
+        // header dots.
+        let preview_dot_pos = duplicate_dot_pos - Vec2::new(DOT_SPACING * zoom, 0.0);
         painter.circle_filled(
             preview_dot_pos,
             PREVIEW_DOT_RADIUS * zoom,
@@ -677,6 +747,7 @@ pub fn show(
             Rect::from_center_size(preview_dot_pos, Vec2::splat(PIN_HIT_RADIUS * zoom * 2.0));
         if ui
             .interact(preview_dot_rect, preview_dot_id, Sense::click())
+            .on_hover_text("Show in Parameters / 2D View")
             .clicked()
         {
             *selected = Some(id);
@@ -971,5 +1042,82 @@ pub fn connect_dropped_wire(
         {
             let _ = history.do_transaction(graph, tx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{duplicate_nodes, CanvasState, DUPLICATE_OFFSET};
+    use mc_core::{Node, ParamValue};
+
+    #[test]
+    fn duplicate_copies_kind_and_params_with_an_offset_position_and_selects_the_copy() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        let mut canvas = CanvasState::default();
+        let mut selected = None;
+
+        let original =
+            graph.add_node(Node::new("perlin_noise").with_param("seed", ParamValue::Seed(7)));
+        let _ = graph.set_node_position(original, [100.0, 200.0]);
+
+        duplicate_nodes(
+            &mut graph,
+            &mut history,
+            &mut canvas,
+            &mut selected,
+            original,
+        );
+
+        assert_eq!(
+            graph.nodes().count(),
+            2,
+            "duplicate should add exactly one new node"
+        );
+        let copy_id = *canvas
+            .selected
+            .iter()
+            .next()
+            .expect("the copy should be selected");
+        assert_ne!(copy_id, original, "the copy must be a distinct node");
+        assert_eq!(selected, Some(copy_id));
+
+        let copy = graph.node(copy_id).expect("copy exists");
+        assert_eq!(copy.kind, "perlin_noise");
+        assert_eq!(copy.params.get("seed"), Some(&ParamValue::Seed(7)));
+        assert_eq!(
+            copy.position,
+            [100.0 + DUPLICATE_OFFSET, 200.0 + DUPLICATE_OFFSET]
+        );
+    }
+
+    #[test]
+    fn duplicating_part_of_a_multi_selection_duplicates_the_whole_selection() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        let mut canvas = CanvasState::default();
+        let mut selected = None;
+
+        let a = graph.add_node(Node::new("perlin_noise"));
+        let b = graph.add_node(Node::new("voronoi"));
+        canvas.selected.insert(a);
+        canvas.selected.insert(b);
+
+        duplicate_nodes(&mut graph, &mut history, &mut canvas, &mut selected, a);
+
+        assert_eq!(
+            graph.nodes().count(),
+            4,
+            "both selected nodes should be duplicated"
+        );
+        assert_eq!(
+            canvas.selected.len(),
+            2,
+            "the two copies should become the new selection"
+        );
+        assert!(
+            !canvas.selected.contains(&a) && !canvas.selected.contains(&b),
+            "the new selection should be the copies, not the originals"
+        );
     }
 }
