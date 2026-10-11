@@ -338,18 +338,24 @@ pub fn show(
     // trackpad swipe pan instead of zooming — they used to be the same
     // scroll-wheel signal, which is why a swipe looked like "nodes pushing
     // closer together" instead of the view sliding.
-    if bg_response.hovered() {
-        let zoom_delta = ui.input(|i| i.zoom_delta());
-        if zoom_delta != 1.0 {
-            if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) {
+    //
+    // Gated on the pointer being anywhere inside the canvas, not on
+    // `bg_response.hovered()` — a node's own interact region (added later,
+    // so it z-order-wins the hover over the background's) would otherwise
+    // swallow it, making pinch-zoom and pan silently stop working the
+    // moment the cursor crossed over a node.
+    if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) {
+        if canvas_rect.contains(pointer) {
+            let zoom_delta = ui.input(|i| i.zoom_delta());
+            if zoom_delta != 1.0 {
                 let graph_pt = screen_to_graph(origin, canvas.pan, canvas.zoom, pointer);
                 canvas.zoom = (canvas.zoom * zoom_delta).clamp(0.2, 3.0);
                 canvas.pan = graph_pt.to_vec2() - (pointer - origin) / canvas.zoom;
             }
-        }
-        let scroll = ui.input(|i| i.smooth_scroll_delta);
-        if scroll != Vec2::ZERO {
-            canvas.pan -= scroll / canvas.zoom;
+            let scroll = ui.input(|i| i.smooth_scroll_delta);
+            if scroll != Vec2::ZERO {
+                canvas.pan -= scroll / canvas.zoom;
+            }
         }
     }
 
