@@ -57,6 +57,8 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 - **Gradient Radial** — a ramp from the center outward to a given radius.
 - **Checker** — an alternating black/white grid.
 - **Uniform Color** — a flat, solid color fill.
+- **Dither Pattern** — a Bayer, blue noise, or halftone dot mask, for use in Blend, Threshold,
+  and similar nodes.
 
 ### Filters — Adjustments
 - **Levels** — remap an input/output range, with a gamma curve in between.
@@ -71,6 +73,20 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
   Difference), opacity, and an optional mask.
 - **Value Range** — threshold/window an input around a position.
 - **Threshold** — a hard black/white cutoff at a given value.
+
+### Filters — Stylize
+- **Ordered Dither** — reduce an image to a few tones with a Bayer or blue noise dither
+  pattern; Per Channel or hue-preserving Luminance mode.
+- **Palette Dither** — dither a Color image down to a 2–8 color palette, with RGB or
+  perceptual (luminance-weighted) nearest-color matching.
+
+### Filters — Glitch
+- **Block Shift** — seeded random blocks shift sideways.
+- **Channel Split** — sample each RGB channel at its own offset, for a chromatic-aberration
+  look.
+- **Scanline Jitter** — seeded random horizontal or vertical bands shift sideways.
+- **Data Corrupt** — posterize, channel-swap, or invert random blocks for a "corrupted file"
+  look.
 
 ### Filters — Spatial
 - **Blur** and **Directional Blur** — separable Gaussian blur, omnidirectional or along one

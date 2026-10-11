@@ -32,6 +32,38 @@ published technique each node builds on, as the paper trail for that.
 - **Warp / Directional Warp** — displacing a texture by the gradient of a second ("intensity")
   input, a standard procedural-texturing technique with no single canonical source.
 
+## Stylize & glitch
+
+- **Dither Pattern**'s Bayer 2×2/4×4/8×8 modes — the recursively-defined ordered-dither (Bayer)
+  threshold matrix, a public-domain technique (see e.g. Wikipedia's "Ordered dithering"
+  article for the general recursive definition); implemented from scratch in
+  `shaders/common.wgsl`'s `bayer_threshold`, verified against the standard 2×2 and 4×4
+  matrices by this project's own tests.
+- **Dither Pattern**'s Blue Noise mode — samples the bundled CC0 blue noise texture
+  (Christoph Peters, see ASSETS.md) rather than computing noise procedurally.
+- **Dither Pattern**'s Rotation option — a classic halftone "screen angle," implemented via
+  an integer-lattice rotation matrix (small (a, b) pairs, e.g. (2,1) for ~26.6°) rather than a
+  continuous angle, since that's what keeps it exactly tileable; a standard, independently
+  worked-out technique (see e.g. "rational tangent screening" in print-halftone literature),
+  not adapted from any specific source.
+- **Ordered Dither** and **Palette Dither** — standard ordered-dithering math (quantize, then
+  nudge by a threshold mask before rounding), the same public-domain technique Dither Pattern's
+  masks are built on, applied here to an actual image instead of just outputting the mask
+  itself. Palette Dither's "nearest palette color" step and its Perceptual (luminance-weighted)
+  distance option are a standard color-quantization technique, original implementation.
+- **Block Shift**, **Channel Split**, **Scanline Jitter**, **Data Corrupt** — original glitch
+  nodes built from general, independently-implemented ideas (seeded per-block/per-band hashing,
+  wrap-addressed resampling, per-channel UV offsets), with
+  [KinoGlitch](https://github.com/keijiro/KinoGlitch) (Keijiro Takahashi, MIT) as inspiration
+  for which effects are worth having, not as ported code — this project's versions are WGSL
+  compute shaders built against `common.wgsl`'s own hash helper, not a line-by-line port of
+  KinoGlitch's Unity HLSL.
+- Background reading for the family as a whole (concepts only; no code taken): Surma's
+  [*Ditherpunk*](https://surma.dev/things/ditherpunk/) and its
+  [sequel](https://www.makeworld.space/2021/02/dithering.html), and
+  [KinoGlitch](https://github.com/keijiro/KinoGlitch) (Keijiro Takahashi, MIT) for
+  general glitch-node ideas, reimplemented in WGSL rather than ported.
+
 ## 3D preview
 
 - **Tangent-space basis computation** (`compute_tangents` in `mc_app::viewport3d`) — Eric
