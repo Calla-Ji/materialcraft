@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use canvas::CanvasState;
 
 /// Root application state for the eframe event loop.
-struct MaterialCraftApp {
+struct MaterialCreatorApp {
     gpu: mc_gpu::Context,
     pool: mc_gpu::TexturePool,
     render_state: egui_wgpu::RenderState,
@@ -67,7 +67,7 @@ struct MaterialCraftApp {
     pending_recovery: bool,
 }
 
-impl eframe::App for MaterialCraftApp {
+impl eframe::App for MaterialCreatorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::Panel::top("menu_bar")
             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 8)))
@@ -75,7 +75,7 @@ impl eframe::App for MaterialCraftApp {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("MaterialCraft")
+                        egui::RichText::new("MaterialCreator")
                             .strong()
                             .color(theme::SUPERNOVA_LIGHT),
                     );
@@ -126,7 +126,7 @@ impl eframe::App for MaterialCraftApp {
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .show(ui.ctx(), |ui| {
                     ui.label(
-                        "MaterialCraft didn't close cleanly last time — an autosave from \
+                        "MaterialCreator didn't close cleanly last time — an autosave from \
                          that session is available.",
                     );
                     ui.add_space(8.0);
@@ -196,7 +196,7 @@ impl eframe::App for MaterialCraftApp {
         // Disjoint borrows of the fields each dock cell's content needs, so
         // the closure below doesn't have to borrow `self` as a whole while
         // `self.dock` is already borrowed by the `show` call it's passed to.
-        let MaterialCraftApp {
+        let MaterialCreatorApp {
             dock,
             graph,
             history,
@@ -581,7 +581,7 @@ impl eframe::App for MaterialCraftApp {
     }
 }
 
-impl MaterialCraftApp {
+impl MaterialCreatorApp {
     /// Swaps in a different graph wholesale (New/Open) — resets every piece
     /// of state that's keyed off the *previous* graph's nodes (history,
     /// selection, cached thumbnails/preview texture, the GPU texture pool),
@@ -611,7 +611,7 @@ impl MaterialCraftApp {
 
     fn do_open(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("MaterialCraft Graph", &["mcgraph"])
+            .add_filter("MaterialCreator Graph", &["mcgraph"])
             .pick_file()
         else {
             return;
@@ -635,7 +635,7 @@ impl MaterialCraftApp {
 
     fn do_save_as(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("MaterialCraft Graph", &["mcgraph"])
+            .add_filter("MaterialCreator Graph", &["mcgraph"])
             .set_file_name("untitled.mcgraph")
             .save_file()
         else {
@@ -872,13 +872,13 @@ fn main() -> eframe::Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("MaterialCraft")
+            .with_title("MaterialCreator")
             .with_icon(app_icon()),
         ..Default::default()
     };
 
     eframe::run_native(
-        "MaterialCraft",
+        "MaterialCreator",
         native_options,
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);
@@ -891,7 +891,7 @@ fn main() -> eframe::Result<()> {
             let gpu = mc_gpu::Context::new(render_state.device.clone(), render_state.queue.clone());
             let viewport3d = viewport3d::Viewport3d::new(&gpu);
 
-            Ok(Box::new(MaterialCraftApp {
+            Ok(Box::new(MaterialCreatorApp {
                 gpu,
                 pool: mc_gpu::TexturePool::default(),
                 render_state,

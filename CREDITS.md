@@ -1,6 +1,6 @@
 # CREDITS.md — Algorithm sources
 
-Every node in MaterialCraft is implemented from scratch in Rust/WGSL against the general,
+Every node in MaterialCreator is implemented from scratch in Rust/WGSL against the general,
 published technique it's named after — never against another tool's code, documentation, or
 internal file formats (see [INDEPENDENCE.md](INDEPENDENCE.md)). This file records which
 published technique each node builds on, as the paper trail for that.

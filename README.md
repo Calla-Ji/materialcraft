@@ -1,4 +1,4 @@
-# MaterialCraft
+# MaterialCreator
 
 A free, open-source, native node-based procedural material authoring tool, built in Rust.
 
@@ -37,7 +37,7 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
   along the canvas's left edge for browsing and adding nodes by icon. New nodes always land
   wherever you last clicked on the canvas.
 - **Crash-safe autosave and error toasts.** The current graph is snapshotted to a recovery file
-  every 30 seconds; if MaterialCraft doesn't shut down cleanly, the next launch offers to
+  every 30 seconds; if MaterialCreator doesn't shut down cleanly, the next launch offers to
   restore it. Failed opens/saves and graph evaluation errors surface as a dismissable
   notification instead of only reaching the terminal log.
 - **Export** to PNG (8-bit and 16-bit) and 32-bit float EXR, at resolutions from 256px up to
@@ -160,7 +160,7 @@ at your option.
 
 ## Inspiration
 
-MaterialCraft is an independent implementation, built from scratch for this project. It does
+MaterialCreator is an independent implementation, built from scratch for this project. It does
 not use, reference, or reproduce any other procedural texturing tool's code, file formats,
 trademarked names, or UI design — generic, industry-standard terms for node types (Levels,
 Blend, Blur, Height to Normal, and so on) are the only overlap you should ever find with any
@@ -175,6 +175,6 @@ independent as it grows.
 
 ---
 
-MaterialCraft is an independent open-source project and is not affiliated with, endorsed by,
+MaterialCreator is an independent open-source project and is not affiliated with, endorsed by,
 or sponsored by Adobe. Adobe and Adobe Substance 3D are either registered trademarks or
 trademarks of Adobe in the United States and/or other countries.

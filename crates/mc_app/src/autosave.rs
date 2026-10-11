@@ -15,7 +15,7 @@ const INTERVAL: Duration = Duration::from_secs(30);
 /// save, so it doesn't belong in whatever folder they're organizing actual
 /// graphs in.
 pub fn recovery_path() -> PathBuf {
-    std::env::temp_dir().join("materialcraft_autosave.mcgraph")
+    std::env::temp_dir().join("materialcreator_autosave.mcgraph")
 }
 
 pub struct Autosave {

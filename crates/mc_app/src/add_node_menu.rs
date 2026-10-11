@@ -83,7 +83,7 @@ pub fn show(
     });
 
     let mut picked = None;
-    let area_response = egui::Area::new(egui::Id::new("materialcraft_add_node_menu"))
+    let area_response = egui::Area::new(egui::Id::new("materialcreator_add_node_menu"))
         .fixed_pos(menu.screen_pos)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
@@ -165,7 +165,7 @@ pub fn show(
                         //
                         // The height axis also has to stay non-shrinking: this
                         // `egui::Area` is a fixed, reused `Id`
-                        // ("materialcraft_add_node_menu"), and `egui::Area`
+                        // ("materialcreator_add_node_menu"), and `egui::Area`
                         // remembers its last-measured content size across
                         // separate opens under that same `Id`. If the height
                         // were allowed to shrink to a short filtered result

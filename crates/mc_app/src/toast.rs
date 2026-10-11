@@ -67,7 +67,7 @@ impl Toasts {
         // lifetime until some unrelated event happened to trigger a repaint.
         ctx.request_repaint_after(Duration::from_millis(200));
 
-        egui::Area::new(egui::Id::new("materialcraft_toasts"))
+        egui::Area::new(egui::Id::new("materialcreator_toasts"))
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {

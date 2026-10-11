@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in MaterialCraft. A few ground rules before you open a PR.
+Thanks for your interest in MaterialCreator. A few ground rules before you open a PR.
 
 ## Independence from Adobe Substance
 
