@@ -350,6 +350,48 @@ mod tests {
         }
     }
 
+    /// Regression test for the Pattern Generator/Value Range/Flow Blur/Push
+    /// Warp rename (`display_name` only, `kind` strings unchanged) — proves
+    /// the registry's `"slope_blur"` dispatch arm (now showing as "Flow
+    /// Blur" in the UI) still resolves and runs correctly end to end, not
+    /// just the node's own isolated dispatch test. Both its inputs ("input"
+    /// and "control") are required — the Output node is deliberately *not*
+    /// fed through a single-input shortcut here, since the real-world
+    /// report this guards against ("Flow Blur isn't visualizing") was most
+    /// likely a missing second ("control") connection, not a dispatch bug.
+    #[test]
+    fn flow_blur_evaluates_through_the_registry_after_its_rename() {
+        let mut graph = mc_core::Graph::new();
+        let input_noise = graph.add_node(
+            mc_core::Node::new("perlin_noise").with_param("seed", mc_core::ParamValue::Seed(1)),
+        );
+        let control_noise = graph.add_node(
+            mc_core::Node::new("perlin_noise").with_param("seed", mc_core::ParamValue::Seed(2)),
+        );
+        let flow_blur = graph.add_node(mc_core::Node::new("slope_blur"));
+        let output = graph.add_node(mc_core::Node::new("output_base_color"));
+
+        graph
+            .connect(input_noise, "output", flow_blur, "input")
+            .unwrap();
+        graph
+            .connect(control_noise, "output", flow_blur, "control")
+            .unwrap();
+        graph.connect(flow_blur, "output", output, "input").unwrap();
+        graph.settings.resolution = 64;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates with both inputs wired");
+
+        let key = resolve_texture_key(&graph, output).expect("output resolves to a texture");
+        let pixels = gpu.read_rgba8(pool.texture(&key).expect("texture exists"), 64);
+        assert!(
+            pixels.iter().any(|&b| b != pixels[0]),
+            "Flow Blur's output is perfectly flat — looks like it isn't actually running"
+        );
+    }
+
     /// CLAUDE.md's M3 acceptance demo: a 4-node graph (Noise → Levels →
     /// Blend → Output) evaluates headlessly. Blend's second input comes from
     /// a second Perlin node so Blend has two genuinely different layers to

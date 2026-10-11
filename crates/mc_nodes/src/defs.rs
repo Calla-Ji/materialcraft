@@ -122,6 +122,57 @@ pub fn ports_compatible(from: PortType, to: PortType) -> bool {
     !matches!((from, to), (PortType::Color, PortType::Gray))
 }
 
+/// Node kinds whose single "input"/"output" pair behaves identically
+/// per-channel, regardless of whether that channel is a lone Gray value or
+/// one of Color's three — so their declared-Color output port is really
+/// just a default, not a fact about what they produce. Left hardcoded to
+/// Color, a Gray source (e.g. a height map) couldn't pass through Levels
+/// and still reach a Gray-only input (e.g. Height to Normal) without an
+/// unnecessary Grayscale Conversion node in between.
+const TYPE_PRESERVING_KINDS: &[&str] = &["levels", "invert", "clamp", "threshold", "curve"];
+
+/// The port type a node's output *actually* carries right now, given what
+/// (if anything) is wired into its "input" — for the nodes in
+/// `TYPE_PRESERVING_KINDS` this follows the upstream chain back through any
+/// number of other type-preserving nodes to the first real source; for
+/// every other node it's just the statically declared type. Used by the UI
+/// for pin coloring and connection-compatibility checks, never by
+/// evaluation (the GPU side treats Gray and Color identically as a
+/// broadcast RGBA texture either way).
+pub fn effective_output_type(
+    graph: &mc_core::Graph,
+    node_id: mc_core::NodeId,
+    node_kind: &str,
+    declared: PortType,
+) -> PortType {
+    if !TYPE_PRESERVING_KINDS.contains(&node_kind) {
+        return declared;
+    }
+    let mut current = node_id;
+    // A graph can't contain cycles (rejected at connect time), so this
+    // bound only guards against a future bug reintroducing one.
+    for _ in 0..64 {
+        let Some(upstream_id) = graph.upstream(current, "input") else {
+            return declared;
+        };
+        let Some(upstream_node) = graph.node(upstream_id) else {
+            return declared;
+        };
+        let Some(upstream_def) = node_def(&upstream_node.kind) else {
+            return declared;
+        };
+        let Some(upstream_output) = upstream_def.outputs.first() else {
+            return declared;
+        };
+        if TYPE_PRESERVING_KINDS.contains(&upstream_node.kind.as_str()) {
+            current = upstream_id;
+            continue;
+        }
+        return upstream_output.port_type;
+    }
+    declared
+}
+
 /// Whether `param_name` currently means anything for a node of `node_kind`
 /// given its other params right now — e.g. Shape's "Sides"/"Point Depth"/
 /// "Curvature" only apply to some of its "Kind" values (a Disc has no sides,
