@@ -6,10 +6,10 @@
 //! lives in the [`mc_gpu::TexturePool`] under the key from [`texture_key`].
 
 use crate::{
-    blend, blur, checker, clamp, clouds, curve, fractal_sum, gradient_linear, gradient_map,
-    gradient_radial, grayscale_conversion, height_to_normal, histogram_scan, hsl_adjust, invert,
-    levels, perlin, shape, simplex_noise, threshold, tile_generator, transform2d, uniform_color,
-    voronoi, warp, white_noise,
+    blend, blur, checker, clamp, clouds, curve, directional_blur, directional_warp, edge_detect,
+    fractal_sum, gradient_linear, gradient_map, gradient_radial, grayscale_conversion,
+    height_to_normal, histogram_scan, hsl_adjust, invert, levels, perlin, shape, simplex_noise,
+    slope_blur, threshold, tile_generator, transform2d, uniform_color, voronoi, warp, white_noise,
 };
 
 /// The texture pool key a node's own output is stored under.
@@ -237,6 +237,62 @@ pub fn evaluate(
             "clouds" => {
                 let params = clouds::CloudsParams::from_graph(&node.params);
                 clouds::dispatch(gpu, pool, &key, resolution, &params);
+            }
+            "directional_blur" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = directional_blur::DirectionalBlurParams::from_graph(&node.params);
+                directional_blur::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "directional_warp" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let intensity_id = graph
+                    .upstream(id, "intensity")
+                    .ok_or_else(|| EvalError::MissingInput(id, "intensity".to_string()))?;
+                let input_key = texture_key(input_id);
+                let intensity_key = texture_key(intensity_id);
+                let params = directional_warp::DirectionalWarpParams::from_graph(&node.params);
+                directional_warp::dispatch(
+                    gpu,
+                    pool,
+                    &input_key,
+                    &intensity_key,
+                    &key,
+                    resolution,
+                    &params,
+                );
+            }
+            "edge_detect" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = edge_detect::EdgeDetectParams::from_graph(&node.params);
+                edge_detect::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "slope_blur" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let control_id = graph
+                    .upstream(id, "control")
+                    .ok_or_else(|| EvalError::MissingInput(id, "control".to_string()))?;
+                let input_key = texture_key(input_id);
+                let control_key = texture_key(control_id);
+                let params = slope_blur::SlopeBlurParams::from_graph(&node.params);
+                slope_blur::dispatch(
+                    gpu,
+                    pool,
+                    &input_key,
+                    &control_key,
+                    &key,
+                    resolution,
+                    &params,
+                );
             }
             other => return Err(EvalError::UnknownKind(id, other.to_string())),
         }

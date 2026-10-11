@@ -12,6 +12,9 @@ pub mod clamp;
 pub mod clouds;
 pub mod curve;
 pub mod defs;
+pub mod directional_blur;
+pub mod directional_warp;
+pub mod edge_detect;
 pub mod export;
 pub mod fractal_sum;
 pub mod gradient_linear;
@@ -28,6 +31,7 @@ pub mod registry;
 mod shaders;
 pub mod shape;
 pub mod simplex_noise;
+pub mod slope_blur;
 #[cfg(test)]
 mod test_support;
 pub mod threshold;

@@ -1234,6 +1234,148 @@ static NODE_DEFS: &[NodeDef] = &[
             },
         ],
     },
+    NodeDef {
+        kind: "directional_blur",
+        display_name: "Directional Blur",
+        category: "Filters/Spatial",
+        tooltip: "A motion-blur-like smear along one fixed direction.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "radius",
+                display_name: "Radius",
+                tooltip: "Blur radius, in UV space.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.1,
+                    default: 0.02,
+                },
+            },
+            ParamSpec {
+                name: "angle",
+                display_name: "Angle",
+                tooltip: "Blur direction, as a fraction of a full turn.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "directional_warp",
+        display_name: "Directional Warp",
+        category: "Filters/Spatial",
+        tooltip: "Shift pixels along one fixed direction by an intensity map's value.",
+        inputs: &[
+            PortSpec {
+                name: "input",
+                display_name: "Input",
+                port_type: PortType::Color,
+            },
+            PortSpec {
+                name: "intensity",
+                display_name: "Intensity",
+                port_type: PortType::Gray,
+            },
+        ],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "angle",
+                display_name: "Angle",
+                tooltip: "Warp direction, as a fraction of a full turn.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "amount",
+                display_name: "Amount",
+                tooltip: "Warp strength.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.2,
+                    default: 0.1,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "edge_detect",
+        display_name: "Edge Detect",
+        category: "Filters/Spatial",
+        tooltip: "Highlights where the input changes sharply.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[ParamSpec {
+            name: "intensity",
+            display_name: "Intensity",
+            tooltip: "Multiplier on the detected edge strength.",
+            kind: ParamSpecKind::Float {
+                min: 0.1,
+                max: 16.0,
+                default: 4.0,
+            },
+        }],
+    },
+    NodeDef {
+        kind: "slope_blur",
+        display_name: "Slope Blur",
+        category: "Filters/Spatial",
+        tooltip: "Blur along a control map's gradient, strength scaled by its steepness.",
+        inputs: &[
+            PortSpec {
+                name: "input",
+                display_name: "Input",
+                port_type: PortType::Color,
+            },
+            PortSpec {
+                name: "control",
+                display_name: "Control",
+                port_type: PortType::Gray,
+            },
+        ],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[ParamSpec {
+            name: "radius",
+            display_name: "Radius",
+            tooltip: "Maximum blur radius, reached at the control map's steepest point.",
+            kind: ParamSpecKind::Float {
+                min: 0.0,
+                max: 0.1,
+                default: 0.03,
+            },
+        }],
+    },
     output_node_def("output_base_color", "Output: Base Color"),
     output_node_def("output_normal", "Output: Normal"),
     output_node_def("output_roughness", "Output: Roughness"),
