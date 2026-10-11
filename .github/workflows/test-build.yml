@@ -1,10 +1,13 @@
-name: Manual Test Build
+name: Test Build
 
-# Manually triggered only — no tag push, no public GitHub Release. This
-# exists so Windows/Linux testers (neither OS the maintainer runs herself)
-# can download a real prebuilt binary from this run's Actions page and try
-# it, before an actual versioned release is cut. See PROGRESS.md.
+# Runs on every push to main, plus on demand — no tag push, no public
+# GitHub Release. This exists so Windows/Linux testers (neither OS the
+# maintainer runs herself) can download a real prebuilt binary from this
+# run's Actions page and try it, before an actual versioned release is
+# cut. See PROGRESS.md.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
