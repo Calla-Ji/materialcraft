@@ -1,0 +1,75 @@
+name: Manual Test Build
+
+# Manually triggered only — no tag push, no public GitHub Release. This
+# exists so Windows/Linux testers (neither OS the maintainer runs herself)
+# can download a real prebuilt binary from this run's Actions page and try
+# it, before an actual versioned release is cut. See PROGRESS.md.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: MaterialCreator-windows
+            binary_path: target/release/mc_app.exe
+          - os: ubuntu-latest
+            artifact_name: MaterialCreator-linux
+            binary_path: target/release/mc_app
+          - os: macos-latest
+            artifact_name: MaterialCreator-macos
+            binary_path: target/release/mc_app
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # README.md's own Linux build prerequisites (windowing dev headers —
+      # wgpu loads the Vulkan driver itself at runtime, so no Vulkan SDK
+      # needed here, just what's needed to compile against X11/Wayland).
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libx11-dev libwayland-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p mc_app
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path staging | Out-Null
+          Copy-Item ${{ matrix.binary_path }} staging/MaterialCreator.exe
+          Compress-Archive -Path staging/* -DestinationPath ${{ matrix.artifact_name }}.zip
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir staging
+          cp ${{ matrix.binary_path }} staging/MaterialCreator
+          tar -czf ${{ matrix.artifact_name }}.tar.gz -C staging MaterialCreator
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+          retention-days: 14
+
+      - name: Upload artifact (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.tar.gz
+          retention-days: 14
