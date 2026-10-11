@@ -7,6 +7,27 @@
 // render pipeline, not a compute shader, and it's the only thing in mc_app
 // that reads the graph's own Output textures directly (sampled, not
 // textureLoad, since the mesh's UVs don't line up 1:1 with texels).
+//
+// Real alpha transparency: the Output: Alpha channel drives the fragment's
+// own alpha, and the pipeline blends with it (`viewport3d.rs`'s
+// `BlendState::ALPHA_BLENDING`) rather than just overwriting the color
+// target — so a low-alpha area genuinely shows the viewport's background
+// through it. `viewport3d.rs` picks between two otherwise-identical
+// pipelines depending on whether the graph actually has an Alpha node
+// wired: with no back-face culling (`cull_mode: None`), several faces of a
+// closed mesh can land on the same pixel, and depth *write* is what makes
+// that resolve correctly for ordinary opaque rendering — but once alpha
+// blending is doing real work, keeping depth write on means whichever
+// partially-transparent face is drawn first still blocks anything behind
+// it at the depth test, regardless of how transparent it actually was, so
+// the background shows through inconsistently depending on draw order
+// rather than the real alpha value. Turning depth write off once an Alpha
+// node is present fixes that. Known remaining simplification: without
+// depth write, two *different* transparent layers of the same mesh aren't
+// sorted against each other (only against the opaque background behind
+// both), so a concave shape's near and far transparent surfaces may not
+// composite in the "correct" back-to-front order — acceptable for a
+// material preview, not a full compositor.
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
@@ -57,6 +78,7 @@ struct VertexOutput {
 @group(1) @binding(5) var height_tex: texture_2d<f32>;
 @group(1) @binding(6) var tex_sampler: sampler;
 @group(1) @binding(7) var environment_tex: texture_2d<f32>;
+@group(1) @binding(8) var alpha_tex: texture_2d<f32>;
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
@@ -145,9 +167,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let v_dot_h = max(dot(v, h), 0.0);
 
     let base_color = textureSample(base_color_tex, tex_sampler, in.uv).rgb;
+    // Named `surface_alpha`, not `alpha`, to avoid colliding with the GGX
+    // roughness-squared `alpha` below — an unrelated quantity that happens
+    // to share the conventional name in PBR shader code.
+    let surface_alpha = textureSample(alpha_tex, tex_sampler, in.uv).r;
 
     if uniforms.shading_mode > 0.5 {
-        return vec4<f32>(linear_to_srgb(base_color), 1.0);
+        return vec4<f32>(linear_to_srgb(base_color), surface_alpha);
     }
 
     let roughness = clamp(textureSample(roughness_tex, tex_sampler, in.uv).r, 0.04, 1.0);
@@ -211,5 +237,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tonemapped = color * luminance_scale;
     let gamma_corrected = linear_to_srgb(tonemapped);
 
-    return vec4<f32>(gamma_corrected, 1.0);
+    return vec4<f32>(gamma_corrected, surface_alpha);
 }

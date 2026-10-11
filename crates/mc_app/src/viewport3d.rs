@@ -55,7 +55,7 @@ impl MeshKind {
     }
 }
 
-/// The 6 PBR maps the shader reads, each falling back to a flat default
+/// The 7 PBR maps the shader reads, each falling back to a flat default
 /// texture when the graph has no node for that Output kind.
 struct FallbackTextures {
     base_color: wgpu::TextureView,
@@ -64,10 +64,12 @@ struct FallbackTextures {
     metallic: wgpu::TextureView,
     ao: wgpu::TextureView,
     height: wgpu::TextureView,
+    alpha: wgpu::TextureView,
 }
 
 pub struct Viewport3d {
     pipeline: wgpu::RenderPipeline,
+    pipeline_transparent: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -162,6 +164,7 @@ impl Viewport3d {
                         count: None,
                     },
                     texture_entry(7, wgpu::ShaderStages::FRAGMENT),
+                    texture_entry(8, wgpu::ShaderStages::FRAGMENT),
                 ],
             });
 
@@ -174,52 +177,85 @@ impl Viewport3d {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("viewport3d pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &VERTEX_ATTRS,
-                })],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                // Preview-only: not worth getting every mesh's winding
-                // order exactly right when there's no performance need to
-                // cull.
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        // Two pipeline variants, identical except for depth write — see
+        // `render()`'s doc comment on why a graph with an Alpha node needs
+        // the other one. Built from a closure rather than two near-copies
+        // of the same ~30-line descriptor.
+        let build_pipeline = |label: &'static str, depth_write_enabled: bool| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &VERTEX_ATTRS,
+                    })],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        // Real alpha blending, not a flat overwrite, so the
+                        // Output: Alpha channel (see viewport3d.wgsl's
+                        // module doc comment) actually shows the background
+                        // through a low-alpha area instead of being
+                        // silently discarded. A graph with no Alpha node
+                        // falls back to a fully opaque 1.0 (see
+                        // `FallbackTextures::alpha`), which blends
+                        // identically to the old `REPLACE` behavior, so
+                        // this is a no-op for every existing graph.
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    // Preview-only: not worth getting every mesh's winding
+                    // order exactly right when there's no performance need
+                    // to cull.
+                    cull_mode: None,
+                    unclipped_depth: false,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(depth_write_enabled),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = build_pipeline("viewport3d pipeline (opaque)", true);
+        // With `cull_mode: None`, several faces of a closed mesh (e.g. a
+        // cube's far side) can land on the same screen pixel — depth write
+        // is what makes that resolve correctly for fully-opaque geometry.
+        // But once alpha blending is actually doing something (a real Alpha
+        // node wired in), keeping depth write on breaks it: whichever
+        // partially-transparent face happens to be drawn first still writes
+        // full depth, so a face behind it that should show through gets
+        // rejected by the depth test regardless of how transparent the
+        // first one was — seen live as background "partially" showing
+        // through in a way that depends on draw order, not on the actual
+        // alpha value. Turning depth write off for this pipeline variant
+        // fixes that; the known tradeoff (noted in viewport3d.wgsl's module
+        // doc comment) is that it can't correctly sort two *different*
+        // transparent layers of the same mesh against each other, only
+        // against the opaque background — an acceptable simplification for
+        // a material preview, not a compositor.
+        let pipeline_transparent = build_pipeline("viewport3d pipeline (transparent)", false);
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport3d uniforms"),
@@ -294,6 +330,9 @@ impl Viewport3d {
             metallic: solid_view(device, &gpu.queue, "fallback metallic", [0, 0, 0, 255]),
             ao: solid_view(device, &gpu.queue, "fallback ao", [255, 255, 255, 255]),
             height: solid_view(device, &gpu.queue, "fallback height", [128, 128, 128, 255]),
+            // Fully opaque by default — a graph with no Alpha node should
+            // render exactly as it did before Alpha existed.
+            alpha: solid_view(device, &gpu.queue, "fallback alpha", [255, 255, 255, 255]),
         };
 
         let (environment_view, environment_ambient_color) =
@@ -302,6 +341,7 @@ impl Viewport3d {
 
         Self {
             pipeline,
+            pipeline_transparent,
             uniform_buffer,
             uniform_bind_group,
             texture_bind_group_layout,
@@ -410,6 +450,7 @@ impl Viewport3d {
         let metallic = channel_view("output_metallic", false, &self.fallback.metallic);
         let ao = channel_view("output_ambient_occlusion", false, &self.fallback.ao);
         let height = channel_view("output_height", false, &self.fallback.height);
+        let alpha = channel_view("output_alpha", false, &self.fallback.alpha);
 
         let device = &gpu.device;
         device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -450,6 +491,10 @@ impl Viewport3d {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: wgpu::BindingResource::TextureView(&self.environment_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&alpha),
                 },
             ],
         })
@@ -535,7 +580,17 @@ impl Viewport3d {
                 multiview_mask: None,
             });
 
-            pass.set_pipeline(&self.pipeline);
+            // See `pipeline_transparent`'s doc comment in `new()`: depth
+            // write has to turn off once a real Alpha node is actually
+            // driving transparency, or partially-transparent faces fight
+            // the depth buffer in a way that depends on draw order rather
+            // than the alpha value itself.
+            let pipeline = if resolve_channel_key(graph, "output_alpha").is_some() {
+                &self.pipeline_transparent
+            } else {
+                &self.pipeline
+            };
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             pass.set_bind_group(1, &texture_bind_group, &[]);
             pass.set_vertex_buffer(0, vertex_buffer.slice(..));
