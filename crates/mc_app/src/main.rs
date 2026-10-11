@@ -352,6 +352,21 @@ impl eframe::App for MaterialCraftApp {
             &mut self.pool,
             &mut self.graph,
         );
+
+        // egui/eframe only repaints in response to new OS input (mouse
+        // move, click, key) — it does not automatically notice that a graph
+        // edit this frame (connect, param change, add/remove node,
+        // undo/redo) left a node dirty. Without this, the node this frame's
+        // edit affects sits stale/blank until some unrelated input event
+        // happens to trigger another frame; this guarantees the follow-up
+        // frame that actually runs `evaluate()` on it.
+        if self
+            .graph
+            .nodes()
+            .any(|(id, _)| self.graph.needs_evaluation(id))
+        {
+            ui.ctx().request_repaint();
+        }
     }
 }
 
