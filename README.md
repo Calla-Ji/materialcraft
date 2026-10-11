@@ -28,10 +28,15 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 - **Deterministic.** Same graph, same seed, same pixels — every time, on the same GPU.
 - **A custom node-graph canvas** — pan, zoom (including trackpad pinch-to-zoom, working
   anywhere on the canvas), box-select, duplicate, undo/redo, and a category-colored,
-  alphabetically-sorted searchable add-node menu — built directly on top of the UI toolkit's own
-  primitives rather than a third-party graph widget. Every node card is color-coded by category,
-  matching a dedicated Node Library panel along the canvas's left edge for browsing and adding
-  nodes by icon. New nodes always land wherever you last clicked on the canvas.
+  alphabetically-sorted, keyboard-navigable (arrow keys + Enter) searchable add-node menu —
+  built directly on top of the UI toolkit's own primitives rather than a third-party graph
+  widget. Every node card is color-coded by category, matching a dedicated Node Library panel
+  along the canvas's left edge for browsing and adding nodes by icon. New nodes always land
+  wherever you last clicked on the canvas.
+- **Crash-safe autosave and error toasts.** The current graph is snapshotted to a recovery file
+  every 30 seconds; if MaterialCraft doesn't shut down cleanly, the next launch offers to
+  restore it. Failed opens/saves and graph evaluation errors surface as a dismissable
+  notification instead of only reaching the terminal log.
 - **Export** to PNG (8-bit and 16-bit) and 32-bit float EXR, at resolutions from 256px up to
   4096px (8192px where VRAM allows), with ready-made naming presets for Blender and for
   Unreal Engine (including an ORM-packed texture: AO/Roughness/Metallic in one file).
@@ -115,7 +120,17 @@ Height, Ambient Occlusion, Emissive. (Bevel and an Alpha channel are planned nex
 
 ## Building from source
 
-Requires a stable Rust toolchain ([rustup.rs](https://rustup.rs)).
+Requires a stable Rust toolchain ([rustup.rs](https://rustup.rs)) and a GPU with a
+Vulkan/Metal/DX12 driver (`wgpu`'s supported backends — no OpenGL fallback).
+
+- **macOS**: install the Xcode Command Line Tools if you haven't already
+  (`xcode-select --install`). No other setup needed; `wgpu` uses Metal.
+- **Windows**: rustup's default `stable-x86_64-pc-windows-msvc` toolchain is enough; it
+  prompts to install the Visual Studio Build Tools (the "Desktop development with C++"
+  workload) the first time you build if they're missing. `wgpu` uses DX12.
+- **Linux**: `wgpu` uses Vulkan, so you need a Vulkan-capable driver (Mesa's RADV/ANV on
+  AMD/Intel, or the proprietary driver on Nvidia) plus your distro's windowing dev packages —
+  on Debian/Ubuntu: `apt install libxkbcommon-dev libx11-dev libwayland-dev mesa-vulkan-drivers`.
 
 ```sh
 cargo run -p mc_app   # launch the desktop app
