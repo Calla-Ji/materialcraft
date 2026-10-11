@@ -228,7 +228,7 @@ impl eframe::App for MaterialCraftApp {
                             egui::vec2(drawer_width, viewport_rect.height()),
                         );
                         ui.painter()
-                            .rect_filled(drawer_rect, 0.0, ui.visuals().panel_fill);
+                            .rect_filled(drawer_rect, 0.0, theme::NEUTRON_STAR);
                         ui.painter().rect_stroke(
                             drawer_rect,
                             0.0,
