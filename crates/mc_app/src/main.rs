@@ -9,6 +9,7 @@
 //! undo/redo.
 
 mod add_node_menu;
+mod autosave;
 mod canvas;
 mod display_encode;
 mod dock;
@@ -18,6 +19,7 @@ mod mipgen;
 mod node_icons;
 mod params_panel;
 mod theme;
+mod toast;
 mod viewport3d;
 mod viewport3d_panels;
 
@@ -50,6 +52,19 @@ struct MaterialCraftApp {
     /// Where the current graph was last loaded from or saved to — `None`
     /// for a never-saved graph, in which case Save behaves like Save As.
     current_path: Option<std::path::PathBuf>,
+
+    toasts: toast::Toasts,
+    /// The last graph-evaluation error's message, if the graph is currently
+    /// failing to evaluate — `evaluate()` runs every frame, so without this
+    /// a persistent error would spam a fresh toast on every single frame
+    /// instead of once when it first appears.
+    last_eval_error: Option<String>,
+
+    autosave: autosave::Autosave,
+    /// Set at startup if a recovery file from a previous, uncleanly-ended
+    /// session was found — shows the restore/discard prompt until the
+    /// artist answers it.
+    pending_recovery: bool,
 }
 
 impl eframe::App for MaterialCraftApp {
@@ -101,13 +116,60 @@ impl eframe::App for MaterialCraftApp {
                 });
             });
 
+        self.toasts.show(ui.ctx());
+        self.autosave.maybe_save(&self.graph);
+
+        if self.pending_recovery {
+            egui::Window::new("Recover unsaved work?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ui.ctx(), |ui| {
+                    ui.label(
+                        "MaterialCraft didn't close cleanly last time — an autosave from \
+                         that session is available.",
+                    );
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Restore").clicked() {
+                            match mc_core::Graph::load_from_file(autosave::recovery_path()) {
+                                Ok(graph) => {
+                                    // Clears the just-read recovery file too
+                                    // (see `replace_graph`'s doc comment).
+                                    self.replace_graph(graph, None);
+                                    self.toasts.info("Restored autosave from previous session");
+                                }
+                                Err(err) => {
+                                    log::warn!("failed to restore autosave: {err}");
+                                    self.toasts
+                                        .error(format!("Couldn't restore autosave: {err}"));
+                                    autosave::Autosave::clear();
+                                }
+                            }
+                            self.pending_recovery = false;
+                        }
+                        if ui.button("Discard").clicked() {
+                            autosave::Autosave::clear();
+                            self.pending_recovery = false;
+                        }
+                    });
+                });
+        }
+
         // Re-evaluate whatever the previous frame's edits (including
         // anything undo/redo just changed) left dirty, before any panel
         // reads from `self.pool`.
-        if let Err(err) =
-            mc_nodes::registry::evaluate(&mut self.gpu, &mut self.pool, &mut self.graph)
-        {
-            log::warn!("graph evaluation error: {err}");
+        match mc_nodes::registry::evaluate(&mut self.gpu, &mut self.pool, &mut self.graph) {
+            Ok(()) => self.last_eval_error = None,
+            Err(err) => {
+                log::warn!("graph evaluation error: {err}");
+                let message = err.to_string();
+                if self.last_eval_error.as_deref() != Some(message.as_str()) {
+                    self.toasts
+                        .error(format!("Graph evaluation failed: {message}"));
+                }
+                self.last_eval_error = Some(message);
+            }
         }
 
         // 2D View, 3D View, Node Graph, and Parameters are dock cells (see
@@ -462,6 +524,13 @@ impl eframe::App for MaterialCraftApp {
             ui.ctx().request_repaint();
         }
     }
+
+    /// A graceful shutdown means there's nothing left for the recovery
+    /// snapshot to protect against — leaving it behind is what signals an
+    /// *unclean* exit (crash, force-quit) to the next launch.
+    fn on_exit(&mut self) {
+        autosave::Autosave::clear();
+    }
 }
 
 impl MaterialCraftApp {
@@ -482,6 +551,10 @@ impl MaterialCraftApp {
         self.pending_wire_connect = None;
         self.preview_texture_id = None;
         self.pool = mc_gpu::TexturePool::default();
+        // A fresh or just-opened graph has no unsaved history of its own
+        // yet, so any leftover crash-recovery snapshot from a previous
+        // session is now stale.
+        autosave::Autosave::clear();
     }
 
     fn do_new(&mut self) {
@@ -497,11 +570,11 @@ impl MaterialCraftApp {
         };
         match mc_core::Graph::load_from_file(&path) {
             Ok(graph) => self.replace_graph(graph, Some(path)),
-            // No error-toast system yet (CLAUDE.md M6 polish) — logging is
-            // at least visible in the terminal the app was launched from,
-            // same as every other fallible path in this app today (e.g.
-            // `registry::evaluate`'s error handling just above).
-            Err(err) => log::warn!("failed to open {}: {err}", path.display()),
+            Err(err) => {
+                log::warn!("failed to open {}: {err}", path.display());
+                self.toasts
+                    .error(format!("Couldn't open {}: {err}", path.display()));
+            }
         }
     }
 
@@ -525,8 +598,19 @@ impl MaterialCraftApp {
 
     fn save_to(&mut self, path: std::path::PathBuf) {
         match self.graph.save_to_file(&path) {
-            Ok(()) => self.current_path = Some(path),
-            Err(err) => log::warn!("failed to save {}: {err}", path.display()),
+            Ok(()) => {
+                self.toasts.info(format!("Saved {}", path.display()));
+                self.current_path = Some(path);
+                // The file just written is now the authoritative copy, so
+                // any crash-recovery snapshot from before this save is
+                // stale.
+                autosave::Autosave::clear();
+            }
+            Err(err) => {
+                log::warn!("failed to save {}: {err}", path.display());
+                self.toasts
+                    .error(format!("Couldn't save {}: {err}", path.display()));
+            }
         }
     }
 
@@ -777,6 +861,10 @@ fn main() -> eframe::Result<()> {
                 dock: dock::DockLayout::default(),
                 preview_texture_id: None,
                 current_path: None,
+                toasts: toast::Toasts::default(),
+                last_eval_error: None,
+                autosave: autosave::Autosave::default(),
+                pending_recovery: autosave::recovery_path().exists(),
             }))
         }),
     )
