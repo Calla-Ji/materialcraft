@@ -1,14 +1,96 @@
 # MaterialCraft
 
-A free, open-source, native node-based procedural material authoring tool, built in Rust —
-in the spirit of Substance Designer, but its own thing.
+A free, open-source, native node-based procedural material authoring tool, built in Rust.
 
-Connect nodes (noises, patterns, filters, blends) into a graph that outputs a seamless,
+Connect nodes — noises, patterns, filters, blends — into a graph that outputs a seamless,
 tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready for
 **Blender** and **Unreal Engine**.
 
 > Status: early development (v0.1, pre-release). See [PROGRESS.md](PROGRESS.md) for the
 > current state and [CLAUDE.md](CLAUDE.md) for the full project scope and roadmap.
+
+## Features
+
+- **Real-time GPU node graph.** Every node is a WGSL compute shader; editing a param or
+  rewiring a connection re-evaluates only what's downstream and dirty, live.
+- **Live 2D and 3D preview.** The 2D view shows any selected node's output at full
+  resolution, with tiling and single-channel views. The 3D view renders the graph's output
+  maps on a sphere, cube, plane, rounded cube, or rounded cylinder under a GGX
+  metallic-roughness PBR shader, with real per-vertex tangents and height-driven
+  displacement on every mesh — not just a flat plane.
+- **Seamless tiling, guaranteed.** Every generator is periodic and every filter samples with
+  wrap-around addressing; each node ships with its own automated tiling test.
+  Resolution-independent by design — a graph looks the same at 512px and 4096px, detail
+  aside.
+- **Deterministic.** Same graph, same seed, same pixels — every time, on the same GPU.
+- **A custom node-graph canvas** — pan, zoom (including trackpad pinch-to-zoom, working
+  anywhere on the canvas), box-select, duplicate, undo/redo, and a searchable add-node menu —
+  built directly on top of the UI toolkit's own primitives rather than a third-party graph
+  widget.
+- **Export** to PNG (8-bit and 16-bit) and 32-bit float EXR, at resolutions from 256px up to
+  4096px (8192px where VRAM allows), with ready-made naming presets for Blender and for
+  Unreal Engine (including an ORM-packed texture: AO/Roughness/Metallic in one file).
+- **Save/load** as a human-readable, versioned `.mcgraph` JSON file.
+
+## Nodes
+
+39 nodes, each with its own tiling and determinism tests.
+
+### Generators — Noise
+- **Perlin Noise** — classic gradient noise, smooth and organic.
+- **Simplex Noise** — gradient noise on a triangular lattice, fewer directional artifacts
+  than Perlin.
+- **Voronoi** — cellular noise: distances to a scattered set of points (F1, F2, F2−F1, edges).
+- **White Noise** — fully uncorrelated random cells, no interpolation.
+- **Fractal Sum** — several octaves of a chosen base noise, summed (fBm).
+- **Clouds** — an fBm preset tuned for a cloud-like look.
+
+### Generators — Patterns
+- **Tile Generator** — a brick or grid pattern, with gap, bevel, and per-tile size/rotation/
+  luminance jitter.
+- **Shape** — a disc, square, polygon, star, or leaf, centered in the tile. The star and leaf
+  are original constructions, not smoothed approximations: the star's points are exact
+  straight edges that can "unfold" a plain polygon into a star via one setting, and the leaf
+  is a single continuous curve with independently shapeable top, middle, and bottom
+  curvature, plus control over where its widest point sits.
+- **Gradient Linear** — a ramp from black to white, rotatable in quarter turns.
+- **Gradient Radial** — a ramp from the center outward to a given radius.
+- **Checker** — an alternating black/white grid.
+- **Uniform Color** — a flat, solid color fill.
+
+### Filters — Adjustments
+- **Levels** — remap an input/output range, with a gamma curve in between.
+- **Curve** — a 5-point adjustable response curve.
+- **Invert** and **Clamp** — the usual tone-mapping building blocks.
+- **HSL Adjust** — shift hue, scale saturation, shift lightness.
+- **Gradient Map** — map a grayscale input through a color gradient.
+- **Grayscale Conversion** — Color to Gray by luminance.
+
+### Filters — Blending & Masking
+- **Blend** — 9 blend modes (Copy, Add, Subtract, Multiply, Screen, Overlay, Max, Min,
+  Difference), opacity, and an optional mask.
+- **Histogram Scan** — threshold/window an input around a position.
+- **Threshold** — a hard black/white cutoff at a given value.
+
+### Filters — Spatial
+- **Blur** and **Directional Blur** — separable Gaussian blur, omnidirectional or along one
+  fixed angle.
+- **Warp** and **Directional Warp** — distort an input by the gradient of an intensity map,
+  omnidirectional or along a fixed angle.
+- **Slope Blur** — blur along a control map's own gradient, strength scaled by its steepness.
+- **Transform 2D** — offset, rotate, and scale, with wrap-around tiling.
+- **Edge Detect** — highlight where an input changes sharply.
+
+### Converters
+- **Height to Normal** — a tangent-space normal map from a height map, Sobel-based, with an
+  OpenGL/DirectX toggle.
+- **Height to AO** — a screen-space-style ambient occlusion pass from height.
+- **Curvature from Normal** — convex edges read bright, concave crevices read dark.
+
+### Outputs
+One pass-through marker node per PBR channel: Base Color, Normal, Roughness, Metallic,
+Height, Ambient Occlusion, Emissive. (Bevel and an Alpha channel are planned next — see
+[PROGRESS.md](PROGRESS.md).)
 
 ## Building from source
 
@@ -19,6 +101,12 @@ cargo run -p mc_app   # launch the desktop app
 cargo run -p mc_cli   # headless renderer (see CLAUDE.md §8 for usage)
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — short version: sign off your commits (`git commit
+-s`), keep `cargo fmt`/`cargo clippy`/`cargo test` clean, and don't submit anything derived
+from Adobe Substance.
+
 ## License
 
 Dual-licensed under either of:
@@ -28,6 +116,23 @@ Dual-licensed under either of:
 
 at your option.
 
-This is an independent implementation inspired by the general category of node-based
-procedural texturing tools. It does not use, reference, or reproduce any Adobe Substance
-code, file formats, trademarked names, or UI designs.
+## Inspiration
+
+MaterialCraft is an independent implementation, built from scratch for this project. It does
+not use, reference, or reproduce any other procedural texturing tool's code, file formats,
+trademarked names, or UI design — generic, industry-standard terms for node types (Levels,
+Blend, Blur, Height to Normal, and so on) are the only overlap you should ever find with any
+other tool in this space.
+
+Its broader motivation — that ambitious, professional-grade creative software is worth
+building in the open, for artists — takes a cue from [ArtCraft](https://github.com/storytold/artcraft),
+an open-source creative tool for artists and filmmakers.
+
+See [INDEPENDENCE.md](INDEPENDENCE.md) for the project's working checklist on staying clearly
+independent as it grows.
+
+---
+
+MaterialCraft is an independent open-source project and is not affiliated with, endorsed by,
+or sponsored by Adobe. Adobe and Adobe Substance 3D are either registered trademarks or
+trademarks of Adobe in the United States and/or other countries.
