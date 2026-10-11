@@ -34,15 +34,15 @@ struct BoxBlurParams {
     resolution: u32,
     direction: u32,
     radius_px: f32,
-    _pad0: f32,
+    wrap: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: BoxBlurParams;
 @group(0) @binding(1) var input_tex: texture_2d<f32>;
 @group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
 
-fn load_along(line: i32, pos: i32, size: i32, horizontal: bool) -> vec4<f32> {
-    let wrapped = wrap_coord(pos, size);
+fn load_along(line: i32, pos: i32, size: i32, horizontal: bool, wrap: bool) -> vec4<f32> {
+    let wrapped = tile_coord(pos, size, wrap);
     if horizontal {
         return textureLoad(input_tex, vec2<i32>(wrapped, line), 0);
     }
@@ -65,11 +65,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let line = i32(id.x);
     let horizontal = params.direction == 0u;
+    let wrap = params.wrap != 0u;
 
     let radius = i32(round(max(params.radius_px, 0.0)));
     if radius < 1 {
         for (var pos = 0; pos < size; pos = pos + 1) {
-            store_along(line, pos, horizontal, load_along(line, pos, size, horizontal));
+            store_along(line, pos, horizontal, load_along(line, pos, size, horizontal, wrap));
         }
         return;
     }
@@ -77,13 +78,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let window = 2.0 * f32(radius) + 1.0;
     var sum = vec4<f32>(0.0);
     for (var dx = -radius; dx <= radius; dx = dx + 1) {
-        sum = sum + load_along(line, dx, size, horizontal);
+        sum = sum + load_along(line, dx, size, horizontal, wrap);
     }
     store_along(line, 0, horizontal, sum / window);
 
     for (var pos = 1; pos < size; pos = pos + 1) {
-        sum = sum + load_along(line, pos + radius, size, horizontal);
-        sum = sum - load_along(line, pos - radius - 1, size, horizontal);
+        sum = sum + load_along(line, pos + radius, size, horizontal, wrap);
+        sum = sum - load_along(line, pos - radius - 1, size, horizontal, wrap);
         store_along(line, pos, horizontal, sum / window);
     }
 }

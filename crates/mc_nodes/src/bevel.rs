@@ -21,6 +21,8 @@
 //! live by the owner, see PROGRESS.md) read as "just a blur" and distorted
 //! an already-shaded input even at `distance = 0`.
 
+use crate::tiling::TilingMode;
+
 const BOX_BLUR_NODE_KIND: &str = "bevel_box_blur";
 const REMAP_NODE_KIND: &str = "bevel_remap";
 
@@ -31,6 +33,7 @@ pub struct BevelParams {
     /// convex (a dome, rising quickly then flattening); negative makes it
     /// concave (a scoop, staying low then rising sharply).
     pub convexity: f32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for BevelParams {
@@ -38,6 +41,7 @@ impl Default for BevelParams {
         Self {
             distance: 0.05,
             convexity: 0.3,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -54,6 +58,13 @@ impl BevelParams {
         Self {
             distance: float("distance", defaults.distance),
             convexity: float("convexity", defaults.convexity),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -68,10 +79,29 @@ fn box_blur(
     output_key: &str,
     resolution: u32,
     radius_px: f32,
+    tiling_mode: TilingMode,
 ) {
     let temp_key = format!("{output_key}__box_blur_temp");
-    box_blur_pass(gpu, pool, input_key, &temp_key, resolution, 0, radius_px);
-    box_blur_pass(gpu, pool, &temp_key, output_key, resolution, 1, radius_px);
+    box_blur_pass(
+        gpu,
+        pool,
+        input_key,
+        &temp_key,
+        resolution,
+        0,
+        radius_px,
+        tiling_mode.wrap_x(),
+    );
+    box_blur_pass(
+        gpu,
+        pool,
+        &temp_key,
+        output_key,
+        resolution,
+        1,
+        radius_px,
+        tiling_mode.wrap_y(),
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -83,6 +113,7 @@ fn box_blur_pass(
     resolution: u32,
     direction: u32,
     radius_px: f32,
+    wrap: bool,
 ) {
     let input_view = pool
         .view(input_key)
@@ -96,6 +127,7 @@ fn box_blur_pass(
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     param_bytes[4..8].copy_from_slice(&direction.to_le_bytes());
     param_bytes[8..12].copy_from_slice(&radius_px.to_le_bytes());
+    param_bytes[12..16].copy_from_slice(&(wrap as u32).to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("bevel_box_blur_params"),
         size: param_bytes.len() as u64,
@@ -161,7 +193,15 @@ pub fn dispatch(
 ) {
     let blurred_key = format!("{output_key}__bevel_blur");
     let radius_px = (params.distance * resolution as f32).max(0.0);
-    box_blur(gpu, pool, input_key, &blurred_key, resolution, radius_px);
+    box_blur(
+        gpu,
+        pool,
+        input_key,
+        &blurred_key,
+        resolution,
+        radius_px,
+        params.tiling_mode,
+    );
 
     let original_view = pool
         .view(input_key)
@@ -254,6 +294,7 @@ mod tests {
     use crate::shape::{dispatch as shape_dispatch, ShapeParams};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
     use crate::tile_generator::{dispatch as tile_generator_dispatch, TileGeneratorParams};
+    use crate::tiling::TilingMode;
 
     fn render(params: &BevelParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -280,6 +321,7 @@ mod tests {
         let params = BevelParams {
             distance: 0.03,
             convexity: -0.5,
+            tiling_mode: TilingMode::Both,
         };
         assert_eq!(render(&params), render(&params));
     }
@@ -308,6 +350,7 @@ mod tests {
                 &BevelParams {
                     distance: 0.02,
                     convexity,
+                    tiling_mode: TilingMode::Both,
                 },
             );
             let pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
@@ -352,6 +395,7 @@ mod tests {
             &BevelParams {
                 distance,
                 convexity: 1.0,
+                tiling_mode: TilingMode::Both,
             },
         );
         dispatch(
@@ -363,6 +407,7 @@ mod tests {
             &BevelParams {
                 distance,
                 convexity: -1.0,
+                tiling_mode: TilingMode::Both,
             },
         );
         let convex = gpu.read_rgba8(pool.texture("output_convex").unwrap(), RESOLUTION);
@@ -406,6 +451,7 @@ mod tests {
                 &BevelParams {
                     distance: 0.0,
                     convexity,
+                    tiling_mode: TilingMode::Both,
                 },
             );
             let output_pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
@@ -451,6 +497,7 @@ mod tests {
                 &BevelParams {
                     distance: 0.01,
                     convexity,
+                    tiling_mode: TilingMode::Both,
                 },
             );
             let output_pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
@@ -462,5 +509,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn tiling_off_is_no_longer_seamless() {
+        // Shape's default disc sits fully inside the tile with flat
+        // background right up to the wrap edge (no contrast there for a
+        // clamp-vs-wrap blur to reveal), so this needs a pattern with real
+        // content discontinuity at the seam — Checker's cells straddle it
+        // by construction (see the other tests above using it for exactly
+        // this reason).
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        checker_dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            RESOLUTION,
+            &CheckerParams { scale: 2 },
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            "output",
+            RESOLUTION,
+            &BevelParams {
+                distance: 0.15,
+                convexity: 0.3,
+                tiling_mode: TilingMode::Off,
+            },
+        );
+        let pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
+        assert!(
+            crate::test_support::tiles_seamlessly(&pixels, RESOLUTION).is_err(),
+            "disabling tiling should introduce a real seam"
+        );
     }
 }
