@@ -4,17 +4,19 @@
 //! into a beveled height map — chain into Height to Normal for the usual
 //! beveled-edge look."
 //!
-//! Implementation: blur the input at `distance` (reusing the existing Blur
-//! node), then reshape that blurred transition with a power curve driven by
-//! `convexity` (`bevel_remap.wgsl`). Blurring first — rather than computing
-//! a true distance-to-edge field — is a standard, cheap approximation: a
-//! thin feature naturally blurs down further than a thick one, which is the
+//! Implementation: a *box* blur (not the existing Blur node's Gaussian —
+//! see `bevel_box_blur.wgsl`'s doc comment for why) at `distance`, then
+//! reshape that ramp with a power curve driven by `convexity`
+//! (`bevel_remap.wgsl`). Blurring first — rather than computing a true
+//! distance-to-edge field — is a standard, cheap approximation: a thin
+//! feature naturally blurs down further than a thick one, which is the
 //! physically right behavior for a bevel anyway (a narrow ridge has less
 //! "flat top" to begin with), and far from any edge the blur hasn't
 //! reached, so the plateau on either side stays exactly put regardless of
 //! the remap curve.
 
-const NODE_KIND: &str = "bevel_remap";
+const BOX_BLUR_NODE_KIND: &str = "bevel_box_blur";
+const REMAP_NODE_KIND: &str = "bevel_remap";
 
 pub struct BevelParams {
     /// In UV space (0..1) — how far the bevel reaches from an edge.
@@ -50,6 +52,97 @@ impl BevelParams {
     }
 }
 
+/// Runs the separable box-blur pass twice (horizontal into a temp texture,
+/// then vertical from the temp texture into `output_key`) to get a full 2D
+/// box blur — mirrors `blur::dispatch`'s own two-pass structure.
+fn box_blur(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    input_key: &str,
+    output_key: &str,
+    resolution: u32,
+    radius_px: f32,
+) {
+    let temp_key = format!("{output_key}__box_blur_temp");
+    box_blur_pass(gpu, pool, input_key, &temp_key, resolution, 0, radius_px);
+    box_blur_pass(gpu, pool, &temp_key, output_key, resolution, 1, radius_px);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn box_blur_pass(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    input_key: &str,
+    output_key: &str,
+    resolution: u32,
+    direction: u32,
+    radius_px: f32,
+) {
+    let input_view = pool
+        .view(input_key)
+        .unwrap_or_else(|| panic!("bevel_box_blur: no texture at input key {input_key:?}"))
+        .clone();
+
+    let shader_source = crate::shaders::full_source("bevel_box_blur.wgsl");
+    let pipeline = gpu.compute_pipeline(BOX_BLUR_NODE_KIND, &shader_source, "main");
+
+    let mut param_bytes = [0u8; 16];
+    param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
+    param_bytes[4..8].copy_from_slice(&direction.to_le_bytes());
+    param_bytes[8..12].copy_from_slice(&radius_px.to_le_bytes());
+    let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("bevel_box_blur_params"),
+        size: param_bytes.len() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue.write_buffer(&param_buffer, 0, &param_bytes);
+
+    let output_view = pool.get_or_create(
+        &gpu.device,
+        output_key,
+        resolution,
+        wgpu::TextureFormat::Rgba8Unorm,
+    );
+
+    let bind_group_layout = pipeline.get_bind_group_layout(0);
+    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("bevel_box_blur_bind_group"),
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: param_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&input_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(output_view),
+            },
+        ],
+    });
+
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("bevel_box_blur_encoder"),
+        });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("bevel_box_blur_pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        let workgroups = resolution.div_ceil(8);
+        pass.dispatch_workgroups(workgroups, workgroups, 1);
+    }
+    gpu.queue.submit(Some(encoder.finish()));
+}
+
 pub fn dispatch(
     gpu: &mut mc_gpu::Context,
     pool: &mut mc_gpu::TexturePool,
@@ -59,16 +152,8 @@ pub fn dispatch(
     params: &BevelParams,
 ) {
     let blurred_key = format!("{output_key}__bevel_blur");
-    crate::blur::dispatch(
-        gpu,
-        pool,
-        input_key,
-        &blurred_key,
-        resolution,
-        &crate::blur::BlurParams {
-            radius: params.distance,
-        },
-    );
+    let radius_px = (params.distance * resolution as f32).max(0.0);
+    box_blur(gpu, pool, input_key, &blurred_key, resolution, radius_px);
 
     let input_view = pool
         .view(&blurred_key)
@@ -76,7 +161,7 @@ pub fn dispatch(
         .clone();
 
     let shader_source = crate::shaders::full_source("bevel_remap.wgsl");
-    let pipeline = gpu.compute_pipeline(NODE_KIND, &shader_source, "main");
+    let pipeline = gpu.compute_pipeline(REMAP_NODE_KIND, &shader_source, "main");
 
     // Convexity 0 -> exponent 1 (no change). Positive convexity -> exponent
     // < 1 (rises quickly, flattens near 1 — convex/dome). Negative
