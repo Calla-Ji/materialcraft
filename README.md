@@ -17,11 +17,13 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
   resolution, with tiling and single-channel views. The 3D view renders the graph's output
   maps on a sphere, cube, plane, rounded cube, or rounded cylinder under a GGX
   metallic-roughness PBR shader, with real per-vertex tangents and height-driven
-  displacement on every mesh — not just a flat plane. Channel textures get a real generated
-  mip chain and 16x anisotropic filtering, with an Unlit Base Color debug mode, an Exposure
-  slider, and a Pixel/Nearest filtering toggle for inspecting dither/pixel-art materials
-  crisply. The Alpha output channel drives real transparency in the preview, not just an
-  exported mask.
+  displacement on every mesh — not just a flat plane. The Environment panel lets you pick
+  between 4 bundled CC0 HDRIs (Poly Haven) for the sky and reflections, or load your own
+  `.hdr`/`.exr` file, to see how a material reads under a different lighting mood. Channel
+  textures get a real generated mip chain and 16x anisotropic filtering, with an Unlit Base
+  Color debug mode, an Exposure slider, and a Pixel/Nearest filtering toggle for inspecting
+  dither/pixel-art materials crisply. The Alpha output channel drives real transparency in the
+  preview, not just an exported mask.
 - **Seamless tiling, guaranteed.** Every generator is periodic and every filter samples with
   wrap-around addressing; each node ships with its own automated tiling test.
   Resolution-independent by design — a graph looks the same at 512px and 4096px, detail

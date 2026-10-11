@@ -31,7 +31,7 @@ impl PanelKind {
             PanelKind::Mesh => "Mesh",
             PanelKind::Material => "Material",
             PanelKind::Camera => "Camera (coming soon)",
-            PanelKind::Environment => "Environment (coming soon)",
+            PanelKind::Environment => "Environment",
         }
     }
 
@@ -53,7 +53,7 @@ impl PanelKind {
             PanelKind::Mesh => "Choose the preview shape, or plug in your own mesh.",
             PanelKind::Material => "Fine-tune surface height and tessellation detail.",
             PanelKind::Camera => "Coming soon: render resolution and engine options.",
-            PanelKind::Environment => "Coming soon: pick or upload an HDRI.",
+            PanelKind::Environment => "Pick a bundled HDRI, or load your own.",
         }
     }
 }
@@ -64,7 +64,7 @@ const ANIM_SPEED: f32 = PANEL_WIDTH * 6.0; // px/second
 /// Which panels have real content yet — the rest still get a toolbar icon
 /// (so the final four-icon layout is visible now) but are disabled rather
 /// than opening onto an empty drawer.
-const ENABLED: [PanelKind; 2] = [PanelKind::Mesh, PanelKind::Material];
+const ENABLED: [PanelKind; 3] = [PanelKind::Mesh, PanelKind::Material, PanelKind::Environment];
 
 pub struct ViewportPanels {
     open: Option<PanelKind>,

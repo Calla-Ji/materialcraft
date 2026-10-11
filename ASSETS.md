@@ -5,10 +5,22 @@ its source and license.
 
 ## HDRIs
 
-- `assets/hdri/studio_small_03_1k.exr` — "Studio Small 03" by Greg Zaal, via
-  [Poly Haven](https://polyhaven.com/a/studio_small_03). License: CC0 (public domain). Used by
-  `mc_app`'s 3D viewport (`crates/mc_app/src/hdri.rs`) as the sky and reflection environment.
-  Downloaded at 1k resolution to keep the repository small.
+4 presets the Environment panel lets the artist pick between (plus loading their own
+`.hdr`/`.exr` file) — all via [Poly Haven](https://polyhaven.com), all CC0 (public domain),
+all downloaded at 1k resolution to keep the repository small. Used by `mc_app`'s 3D viewport
+(`crates/mc_app/src/hdri.rs`) as the sky and reflection environment.
+
+- `assets/hdri/studio_small_03_1k.exr` — ["Studio Small 03"](https://polyhaven.com/a/studio_small_03)
+  by Greg Zaal. Soft, neutral indoor studio lighting — the default.
+- `assets/hdri/venice_sunset_1k.exr` — ["Venice Sunset"](https://polyhaven.com/a/venice_sunset)
+  by Greg Zaal. Warm, directional outdoor dusk light.
+- `assets/hdri/syferfontein_18d_clear_1k.exr` —
+  ["Syferfontein 18d Clear"](https://polyhaven.com/a/syferfontein_18d_clear) by Greg Zaal. Bright,
+  high-contrast clear midday sun.
+- `assets/hdri/rogland_clear_night_1k.hdr` —
+  ["Rogland Clear Night"](https://polyhaven.com/a/rogland_clear_night) by Greg Zaal. Dark,
+  low-contrast night sky — downloaded as Radiance `.hdr` rather than `.exr` like the others,
+  since Poly Haven's EXR encode of this particular asset is ~4x larger than its `.hdr` one.
 
 ## Fonts
 

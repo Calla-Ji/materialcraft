@@ -85,6 +85,7 @@ pub struct Viewport3d {
     fallback: FallbackTextures,
     environment_view: wgpu::TextureView,
     environment_ambient_color: Vec3,
+    pub environment_source: EnvironmentSource,
 
     color_view: Option<wgpu::TextureView>,
     depth_view: Option<wgpu::TextureView>,
@@ -110,6 +111,18 @@ pub enum TextureFilter {
     #[default]
     Smooth,
     Pixel,
+}
+
+/// Which HDRI is currently lighting the scene — a bundled preset, or a file
+/// the user loaded themselves. Kept on `Viewport3d` (rather than recomputed
+/// each frame) purely so the Environment panel can show which one is active;
+/// the texture/ambient color it produced are what actually drive rendering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvironmentSource {
+    Preset(crate::hdri::HdriPreset),
+    /// The file name only (not the full path) — just for display, since
+    /// nothing needs to re-read the file after it's loaded.
+    Custom(String),
 }
 
 /// A debug ground-truth view (CLAUDE.md §8's linear/sRGB discipline):
@@ -338,8 +351,9 @@ impl Viewport3d {
             alpha: solid_view(device, &gpu.queue, "fallback alpha", [255, 255, 255, 255]),
         };
 
+        let initial_preset = crate::hdri::HdriPreset::StudioSmall03;
         let (environment_view, environment_ambient_color) =
-            crate::hdri::load_environment_view(device, &gpu.queue);
+            crate::hdri::load_preset(device, &gpu.queue, initial_preset);
         let environment_ambient_color = Vec3::from(environment_ambient_color);
 
         Self {
@@ -355,6 +369,7 @@ impl Viewport3d {
             fallback,
             environment_view,
             environment_ambient_color,
+            environment_source: EnvironmentSource::Preset(initial_preset),
             color_view: None,
             depth_view: None,
             texture_id: None,
@@ -369,6 +384,41 @@ impl Viewport3d {
             pitch: 0.35,
             distance: 3.0,
         }
+    }
+
+    /// Switches the sky/reflection environment to a bundled preset. Infallible
+    /// — presets are checked into the repo and covered by a decode test, so
+    /// any failure here would mean a corrupted build, not bad user input.
+    pub fn set_environment_preset(
+        &mut self,
+        gpu: &mc_gpu::Context,
+        preset: crate::hdri::HdriPreset,
+    ) {
+        let (view, ambient) = crate::hdri::load_preset(&gpu.device, &gpu.queue, preset);
+        self.environment_view = view;
+        self.environment_ambient_color = Vec3::from(ambient);
+        self.environment_source = EnvironmentSource::Preset(preset);
+    }
+
+    /// Switches the sky/reflection environment to a user-supplied `.hdr`/
+    /// `.exr` file. Unlike [`Self::set_environment_preset`], every failure
+    /// mode here is reachable from an arbitrary file the user picked, so the
+    /// current environment is left untouched on `Err` — the caller is
+    /// expected to surface it as a toast rather than crash the app.
+    pub fn set_environment_custom(
+        &mut self,
+        gpu: &mc_gpu::Context,
+        path: &std::path::Path,
+    ) -> Result<(), String> {
+        let (view, ambient) = crate::hdri::load_custom(&gpu.device, &gpu.queue, path)?;
+        self.environment_view = view;
+        self.environment_ambient_color = Vec3::from(ambient);
+        self.environment_source = EnvironmentSource::Custom(
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string()),
+        );
+        Ok(())
     }
 
     /// Orbit (drag) and zoom (scroll, while hovered) camera controls.

@@ -209,6 +209,7 @@ impl eframe::App for MaterialCraftApp {
             gpu,
             pool,
             render_state,
+            toasts,
             ..
         } = self;
 
@@ -390,8 +391,47 @@ impl eframe::App for MaterialCraftApp {
                                     };
                                 }
                             }
-                            viewport3d_panels::PanelKind::Camera
-                            | viewport3d_panels::PanelKind::Environment => {}
+                            viewport3d_panels::PanelKind::Environment => {
+                                let selected_label = match &viewport3d.environment_source {
+                                    viewport3d::EnvironmentSource::Preset(preset) => preset.label(),
+                                    viewport3d::EnvironmentSource::Custom(name) => name.as_str(),
+                                };
+                                egui::ComboBox::from_label("HDRI")
+                                    .selected_text(selected_label)
+                                    .show_ui(ui, |ui| {
+                                        for preset in hdri::HdriPreset::ALL {
+                                            let is_selected = viewport3d.environment_source
+                                                == viewport3d::EnvironmentSource::Preset(preset);
+                                            if ui
+                                                .selectable_label(is_selected, preset.label())
+                                                .clicked()
+                                                && !is_selected
+                                            {
+                                                viewport3d.set_environment_preset(gpu, preset);
+                                            }
+                                        }
+                                    });
+                                if ui.button("Load custom HDRI\u{2026}").clicked() {
+                                    if let Some(path) = rfd::FileDialog::new()
+                                        .add_filter("HDRI", &["hdr", "exr"])
+                                        .pick_file()
+                                    {
+                                        if let Err(err) =
+                                            viewport3d.set_environment_custom(gpu, &path)
+                                        {
+                                            log::warn!(
+                                                "failed to load HDRI {}: {err}",
+                                                path.display()
+                                            );
+                                            toasts.error(format!(
+                                                "Couldn't load {}: {err}",
+                                                path.display()
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            viewport3d_panels::PanelKind::Camera => {}
                         }
                     }
                 }
