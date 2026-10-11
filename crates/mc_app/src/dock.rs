@@ -23,6 +23,7 @@ pub enum CrateId {
     ThreeDView,
     Parameters,
     NodeGraph,
+    NodeLibrary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,9 +54,12 @@ pub struct DockLayout {
 }
 
 impl Default for DockLayout {
-    /// 2D View and 3D View side by side on top, Node Graph spanning that
-    /// same width underneath, Parameters as a full-height column on the
-    /// right — matching the layout the owner asked for.
+    /// A Node Library column on the far left, mirroring Parameters' full-
+    /// height column on the far right; between them, the original layout
+    /// unchanged — 2D View and 3D View side by side on top, Node Graph
+    /// spanning that same width underneath. Built as one new outer split
+    /// wrapping the previous tree whole, so none of the inner splits'
+    /// ratios (or the behavior they already had) needed to change.
     fn default() -> Self {
         use DockNode::{Leaf, Split};
 
@@ -73,12 +77,19 @@ impl Default for DockLayout {
             first: Box::new(top_row),
             second: Box::new(Leaf(CrateId::NodeGraph)),
         };
-        let root = Split {
+        let main_and_params = Split {
             id: egui::Id::new("dock_split_main_params"),
             axis: SplitAxis::Horizontal,
             ratio: 0.72,
             first: Box::new(left_column),
             second: Box::new(Leaf(CrateId::Parameters)),
+        };
+        let root = Split {
+            id: egui::Id::new("dock_split_library_main"),
+            axis: SplitAxis::Horizontal,
+            ratio: 0.1,
+            first: Box::new(Leaf(CrateId::NodeLibrary)),
+            second: Box::new(main_and_params),
         };
         Self { root }
     }

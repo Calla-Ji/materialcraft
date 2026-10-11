@@ -28,6 +28,26 @@ pub const TWINKLING_GREY: Color32 = Color32::from_rgb(0xE0, 0xD1, 0xD4);
 /// orange those conventionally use elsewhere with a brand color instead.
 pub const PINK_DWARF: Color32 = Color32::from_rgb(0xFF, 0x99, 0xD8);
 
+/// One accent color per node category (`mc_nodes::defs`'s 9 category
+/// strings), for the Node Library panel's grouping and each node card's
+/// header-bar accent in the Node Graph canvas. An evenly hue-spaced
+/// placeholder palette (not sourced from the owner's brand guide, which
+/// doesn't define per-category colors) — easy to swap for real ones later.
+pub fn category_color(category: &str) -> Color32 {
+    match category {
+        "Generators/Noise" => Color32::from_rgb(0xD3, 0x68, 0x68),
+        "Generators/Patterns" => Color32::from_rgb(0xD3, 0xAF, 0x68),
+        "Filters/Adjustments" => Color32::from_rgb(0xAF, 0xD3, 0x68),
+        "Filters/Blending & Masking" => Color32::from_rgb(0x68, 0xD3, 0x68),
+        "Filters/Spatial" => Color32::from_rgb(0x68, 0xD3, 0xAF),
+        "Filters/Stylize" => Color32::from_rgb(0x68, 0xAF, 0xD3),
+        "Filters/Glitch" => Color32::from_rgb(0x68, 0x68, 0xD3),
+        "Converters" => Color32::from_rgb(0xAF, 0x68, 0xD3),
+        "Output" => Color32::from_rgb(0xD3, 0x68, 0xAF),
+        _ => TWINKLING_GREY,
+    }
+}
+
 /// `NEUTRON_STAR` as a linear `wgpu::Color`, for the 3D viewport's render
 /// target clear value (a different color type than egui's `Color32`, same
 /// source hex).

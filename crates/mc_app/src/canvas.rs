@@ -66,6 +66,11 @@ pub struct CanvasState {
     /// Screen-space drag-start position, while a Shift+drag box-select is in
     /// progress.
     box_select_start: Option<Pos2>,
+    /// Graph-space position of the last left- or right-click directly on the
+    /// canvas (background or a node, not a UI widget elsewhere) — where the
+    /// Node Library panel drops a newly-added node, so it lands wherever the
+    /// artist was last pointing rather than a fixed, easy-to-lose corner.
+    last_click_pos: Pos2,
 }
 
 impl Default for CanvasState {
@@ -76,7 +81,16 @@ impl Default for CanvasState {
             selected: HashSet::new(),
             wire_drag: None,
             box_select_start: None,
+            last_click_pos: Pos2::ZERO,
         }
+    }
+}
+
+impl CanvasState {
+    /// Where the Node Library panel should drop a newly-added node — see
+    /// `last_click_pos`'s own doc comment.
+    pub fn last_click_pos(&self) -> Pos2 {
+        self.last_click_pos
     }
 }
 
@@ -534,6 +548,10 @@ pub fn show(
             }
         }
         if node_response.clicked_by(egui::PointerButton::Primary) {
+            if let Some(screen_pos) = node_response.interact_pointer_pos() {
+                canvas.last_click_pos =
+                    screen_to_graph(origin, canvas.pan, canvas.zoom, screen_pos);
+            }
             if modifiers.shift {
                 if !canvas.selected.remove(&id) {
                     canvas.selected.insert(id);
@@ -564,7 +582,27 @@ pub fn show(
         } else {
             Stroke::new(1.0, crate::theme::TWINKLING_GREY)
         };
-        painter.rect(rect, 4.0 * zoom, fill, stroke, StrokeKind::Inside);
+        let card_radius = 4.0 * zoom;
+        painter.rect_filled(rect, card_radius, fill);
+        // Header accent colored by the node's category (`theme::
+        // category_color`, same palette the Node Library panel uses) — top
+        // corners rounded to match the card, bottom corners square so it
+        // sits flush with the body fill below rather than floating as a
+        // separately-rounded shape.
+        let header_rect =
+            Rect::from_min_size(rect.min, Vec2::new(rect.width(), HEADER_HEIGHT * zoom));
+        let header_radius = card_radius.round() as u8;
+        painter.rect_filled(
+            header_rect,
+            egui::CornerRadius {
+                nw: header_radius,
+                ne: header_radius,
+                sw: 0,
+                se: 0,
+            },
+            crate::theme::category_color(def.category),
+        );
+        painter.rect_stroke(rect, card_radius, stroke, StrokeKind::Inside);
         painter.line_segment(
             [
                 Pos2::new(rect.min.x, rect.min.y + HEADER_HEIGHT * zoom),
@@ -829,6 +867,9 @@ pub fn show(
     // purely for the add-node menu so it can never compete with the
     // Cmd+drag-to-rewire gesture below.
     if bg_response.clicked_by(egui::PointerButton::Primary) && !modifiers.shift {
+        if let Some(screen_pos) = bg_response.interact_pointer_pos() {
+            canvas.last_click_pos = screen_to_graph(origin, canvas.pan, canvas.zoom, screen_pos);
+        }
         let hit_wire = bg_response.interact_pointer_pos().and_then(|screen_pos| {
             wires
                 .iter()
@@ -847,6 +888,7 @@ pub fn show(
     if bg_response.secondary_clicked() {
         if let Some(screen_pos) = bg_response.interact_pointer_pos() {
             let graph_pos = screen_to_graph(origin, canvas.pan, canvas.zoom, screen_pos);
+            canvas.last_click_pos = graph_pos;
             output.open_add_menu_at = Some((screen_pos, graph_pos));
         }
     }

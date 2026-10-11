@@ -15,6 +15,7 @@ mod dock;
 mod export_dialog;
 mod hdri;
 mod mipgen;
+mod node_icons;
 mod params_panel;
 mod theme;
 mod viewport3d;
@@ -149,6 +150,7 @@ impl eframe::App for MaterialCraftApp {
                 dock::CrateId::ThreeDView => "3D View",
                 dock::CrateId::NodeGraph => "Node Graph",
                 dock::CrateId::Parameters => "Parameters",
+                dock::CrateId::NodeLibrary => "Nodes",
             },
             &mut |ui, id| match id {
                 dock::CrateId::Parameters => {
@@ -335,6 +337,9 @@ impl eframe::App for MaterialCraftApp {
                         render_state,
                         thumbnail_ids,
                     ));
+                }
+                dock::CrateId::NodeLibrary => {
+                    show_node_library(ui, graph, history, canvas, selected);
                 }
             },
         );
@@ -559,6 +564,126 @@ impl MaterialCraftApp {
                 texture_id
             }
         })
+    }
+}
+
+/// Display order for the Node Library panel's category groups — the
+/// `mc_nodes::defs` category strings, just in a deliberate reading order
+/// rather than their incidental declaration order in that file.
+const NODE_CATEGORY_ORDER: [&str; 9] = [
+    "Generators/Noise",
+    "Generators/Patterns",
+    "Filters/Adjustments",
+    "Filters/Blending & Masking",
+    "Filters/Spatial",
+    "Filters/Stylize",
+    "Filters/Glitch",
+    "Converters",
+    "Output",
+];
+
+/// A short label for a category group header — the panel is narrow, so the
+/// full "Filters/Blending & Masking"-style string wouldn't fit on one line.
+fn category_short_name(category: &'static str) -> &'static str {
+    match category {
+        "Generators/Noise" => "Noise",
+        "Generators/Patterns" => "Patterns",
+        "Filters/Adjustments" => "Adjust",
+        "Filters/Blending & Masking" => "Blend/Mask",
+        "Filters/Spatial" => "Spatial",
+        "Filters/Stylize" => "Stylize",
+        "Filters/Glitch" => "Glitch",
+        "Converters" => "Convert",
+        "Output" => "Output",
+        _ => category,
+    }
+}
+
+/// The Node Library panel's content: every node, grouped by category and
+/// color-coded to match (`theme::category_color`), shown as a Material
+/// Icons Round glyph (`node_icons::icon_for_kind`) — clicking one adds that
+/// node to the graph, the same transaction/selection flow the add-node menu
+/// uses, just without a specific click position to place it at.
+fn show_node_library(
+    ui: &mut egui::Ui,
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    canvas: &mut canvas::CanvasState,
+    selected: &mut Option<mc_core::NodeId>,
+) {
+    const ICON_SIZE: f32 = 32.0;
+    const ICON_FONT_SIZE: f32 = 18.0;
+
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for &category in &NODE_CATEGORY_ORDER {
+                        ui.add_space(6.0);
+                        ui.colored_label(
+                            theme::category_color(category),
+                            category_short_name(category),
+                        );
+                        ui.add_space(2.0);
+                        ui.horizontal_wrapped(|ui| {
+                            for def in mc_nodes::defs::all_node_defs()
+                                .iter()
+                                .filter(|def| def.category == category)
+                            {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(ICON_SIZE),
+                                    egui::Sense::click(),
+                                );
+                                if ui.is_rect_visible(rect) {
+                                    let bg_alpha = if response.hovered() { 0.55 } else { 0.3 };
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        4.0,
+                                        theme::category_color(category).gamma_multiply(bg_alpha),
+                                    );
+                                    ui.painter().text(
+                                        rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        node_icons::icon_for_kind(def.kind).to_string(),
+                                        egui::FontId::new(
+                                            ICON_FONT_SIZE,
+                                            egui::FontFamily::Name("material_icons_round".into()),
+                                        ),
+                                        theme::SUPERNOVA_LIGHT,
+                                    );
+                                }
+                                let response = response.on_hover_text(def.display_name);
+                                if response.clicked() {
+                                    add_node_from_library(graph, history, canvas, selected, def);
+                                }
+                            }
+                        });
+                    }
+                    // Trailing breathing room so the last category's icons
+                    // don't sit flush against the scroll area's own bottom
+                    // edge.
+                    ui.add_space(10.0);
+                });
+        });
+}
+
+fn add_node_from_library(
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    canvas: &mut canvas::CanvasState,
+    selected: &mut Option<mc_core::NodeId>,
+    def: &'static mc_nodes::defs::NodeDef,
+) {
+    let node = def.instantiate();
+    let (core_id, transaction) = graph.add_node_transaction(node);
+    if history.do_transaction(graph, transaction).is_ok() {
+        let drop_pos = canvas.last_click_pos();
+        let _ = graph.set_node_position(core_id, [drop_pos.x, drop_pos.y]);
+        *selected = Some(core_id);
+        canvas.selected.clear();
+        canvas.selected.insert(core_id);
     }
 }
 
