@@ -163,12 +163,12 @@ fn type_preserving_input_port(kind: &str) -> &'static str {
 }
 
 /// The port type a node's output *actually* carries right now, given what
-/// (if anything) is wired into its primary input — for the nodes in
+/// (if anything) is wired into its input(s) — for the nodes in
 /// `TYPE_PRESERVING_KINDS` this follows the upstream chain back through any
-/// number of other type-preserving nodes to the first real source; for
-/// every other node it's just the statically declared type. Used by the UI
-/// for pin coloring and connection-compatibility checks, never by
-/// evaluation (the GPU side treats Gray and Color identically as a
+/// number of other type-preserving nodes (Blend included) to the first real
+/// source; for every other node it's just the statically declared type.
+/// Used by the UI for pin coloring and connection-compatibility checks,
+/// never by evaluation (the GPU side treats Gray and Color identically as a
 /// broadcast RGBA texture either way).
 pub fn effective_output_type(
     graph: &mc_core::Graph,
@@ -176,35 +176,72 @@ pub fn effective_output_type(
     node_kind: &str,
     declared: PortType,
 ) -> PortType {
+    // A graph can't contain cycles (rejected at connect time), so this bound
+    // only guards against a future bug reintroducing one — 64 hops is far
+    // more than any real graph would chain through type-preserving nodes.
+    effective_output_type_bounded(graph, node_id, node_kind, declared, 64)
+}
+
+fn effective_output_type_bounded(
+    graph: &mc_core::Graph,
+    node_id: mc_core::NodeId,
+    node_kind: &str,
+    declared: PortType,
+    depth: u32,
+) -> PortType {
+    let Some(depth) = depth.checked_sub(1) else {
+        return declared;
+    };
+    if node_kind == "blend" {
+        // Color wins over Gray: blending in *any* real color content can
+        // produce non-gray output, so Color is the only type-safe result
+        // once either input is Color — the reverse of how a lone
+        // type-preserving input works, where there's only one source to
+        // defer to. Gray only if *both* inputs resolve to Gray.
+        let base = resolve_upstream_type(graph, node_id, "base", depth);
+        let blend = resolve_upstream_type(graph, node_id, "blend", depth);
+        return match (base, blend) {
+            (None, None) => declared,
+            (Some(only), None) | (None, Some(only)) => only,
+            (Some(a), Some(b)) => {
+                if a == PortType::Color || b == PortType::Color {
+                    PortType::Color
+                } else {
+                    PortType::Gray
+                }
+            }
+        };
+    }
     if !TYPE_PRESERVING_KINDS.contains(&node_kind) {
         return declared;
     }
-    let mut current = node_id;
-    let mut current_kind = node_kind.to_string();
-    // A graph can't contain cycles (rejected at connect time), so this
-    // bound only guards against a future bug reintroducing one.
-    for _ in 0..64 {
-        let port = type_preserving_input_port(&current_kind);
-        let Some(upstream_id) = graph.upstream(current, port) else {
-            return declared;
-        };
-        let Some(upstream_node) = graph.node(upstream_id) else {
-            return declared;
-        };
-        let Some(upstream_def) = node_def(&upstream_node.kind) else {
-            return declared;
-        };
-        let Some(upstream_output) = upstream_def.outputs.first() else {
-            return declared;
-        };
-        if TYPE_PRESERVING_KINDS.contains(&upstream_node.kind.as_str()) {
-            current = upstream_id;
-            current_kind = upstream_node.kind.clone();
-            continue;
-        }
-        return upstream_output.port_type;
-    }
-    declared
+    resolve_upstream_type(graph, node_id, type_preserving_input_port(node_kind), depth)
+        .unwrap_or(declared)
+}
+
+/// What's wired into `node_id`'s `port_name` input *actually* outputs, given
+/// its own effective type might in turn depend on what's wired into it —
+/// recurses one node upstream via `effective_output_type_bounded` rather
+/// than reading the upstream node's merely-declared type, so a chain through
+/// any mix of type-preserving nodes (including Blend) resolves correctly
+/// however deep it goes. `None` if `port_name` isn't connected to anything.
+fn resolve_upstream_type(
+    graph: &mc_core::Graph,
+    node_id: mc_core::NodeId,
+    port_name: &str,
+    depth: u32,
+) -> Option<PortType> {
+    let upstream_id = graph.upstream(node_id, port_name)?;
+    let upstream_node = graph.node(upstream_id)?;
+    let upstream_def = node_def(&upstream_node.kind)?;
+    let upstream_output = upstream_def.outputs.first()?;
+    Some(effective_output_type_bounded(
+        graph,
+        upstream_id,
+        &upstream_node.kind,
+        upstream_output.port_type,
+        depth,
+    ))
 }
 
 /// Whether `param_name` currently means anything for a node of `node_kind`
@@ -2205,3 +2242,124 @@ static NODE_DEFS: &[NodeDef] = &[
     output_node_def("output_ambient_occlusion", "Output: Ambient Occlusion"),
     output_node_def("output_emissive", "Output: Emissive"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::effective_output_type;
+    use mc_core::{Graph, Node, PortType};
+
+    /// Regression test for the Levels/Invert/Clamp/Threshold/Curve fix: a
+    /// type-preserving node fed a Gray source reports Gray, not its
+    /// statically-declared Color.
+    #[test]
+    fn type_preserving_node_follows_a_gray_source() {
+        let mut graph = Graph::new();
+        let noise = graph.add_node(Node::new("perlin_noise")); // declared Gray
+        let levels = graph.add_node(Node::new("levels"));
+        graph.connect(noise, "output", levels, "input").unwrap();
+
+        assert_eq!(
+            effective_output_type(&graph, levels, "levels", PortType::Color),
+            PortType::Gray
+        );
+    }
+
+    /// An unconnected type-preserving node has nothing to follow, so it falls
+    /// back to its declared type.
+    #[test]
+    fn type_preserving_node_with_no_input_falls_back_to_declared_type() {
+        let mut graph = Graph::new();
+        let levels = graph.add_node(Node::new("levels"));
+
+        assert_eq!(
+            effective_output_type(&graph, levels, "levels", PortType::Color),
+            PortType::Color
+        );
+    }
+
+    /// Blend fed two Gray-sourced inputs ("While testing I realized that the
+    /// Blend node always considers inputs to be color and therefore only
+    /// outputs color") should now report Gray.
+    #[test]
+    fn blend_with_two_gray_inputs_reports_gray_output() {
+        let mut graph = Graph::new();
+        let noise_a = graph.add_node(Node::new("perlin_noise"));
+        let noise_b = graph.add_node(Node::new("perlin_noise"));
+        let blend = graph.add_node(Node::new("blend"));
+        graph.connect(noise_a, "output", blend, "base").unwrap();
+        graph.connect(noise_b, "output", blend, "blend").unwrap();
+
+        assert_eq!(
+            effective_output_type(&graph, blend, "blend", PortType::Color),
+            PortType::Gray
+        );
+    }
+
+    /// Color wins: a Blend with one Gray and one Color input must report
+    /// Color, since the Color input can carry real chroma.
+    #[test]
+    fn blend_with_one_color_input_reports_color_output() {
+        let mut graph = Graph::new();
+        let noise = graph.add_node(Node::new("perlin_noise")); // Gray
+        let uniform_color = graph.add_node(Node::new("uniform_color")); // Color
+        let blend = graph.add_node(Node::new("blend"));
+        graph.connect(noise, "output", blend, "base").unwrap();
+        graph
+            .connect(uniform_color, "output", blend, "blend")
+            .unwrap();
+
+        assert_eq!(
+            effective_output_type(&graph, blend, "blend", PortType::Color),
+            PortType::Color
+        );
+    }
+
+    /// A Blend with only one input wired defers entirely to that input's
+    /// effective type, rather than falling back to the declared Color.
+    #[test]
+    fn blend_with_only_one_input_wired_follows_that_input() {
+        let mut graph = Graph::new();
+        let noise = graph.add_node(Node::new("perlin_noise")); // Gray
+        let blend = graph.add_node(Node::new("blend"));
+        graph.connect(noise, "output", blend, "base").unwrap();
+
+        assert_eq!(
+            effective_output_type(&graph, blend, "blend", PortType::Color),
+            PortType::Gray
+        );
+    }
+
+    /// A Blend with neither input wired falls back to its declared Color.
+    #[test]
+    fn blend_with_no_inputs_falls_back_to_declared_type() {
+        let mut graph = Graph::new();
+        let blend = graph.add_node(Node::new("blend"));
+
+        assert_eq!(
+            effective_output_type(&graph, blend, "blend", PortType::Color),
+            PortType::Color
+        );
+    }
+
+    /// The fix this test guards: resolving an upstream Blend's type must
+    /// recurse into its *effective* type, not its merely-declared Color — a
+    /// chain of Gray source -> Blend -> Levels must still report Gray all the
+    /// way through, since Levels is type-preserving and Blend's two Gray
+    /// inputs make it effectively Gray too.
+    #[test]
+    fn chained_gray_blend_through_a_type_preserving_node_stays_gray() {
+        let mut graph = Graph::new();
+        let noise_a = graph.add_node(Node::new("perlin_noise"));
+        let noise_b = graph.add_node(Node::new("perlin_noise"));
+        let blend = graph.add_node(Node::new("blend"));
+        let levels = graph.add_node(Node::new("levels"));
+        graph.connect(noise_a, "output", blend, "base").unwrap();
+        graph.connect(noise_b, "output", blend, "blend").unwrap();
+        graph.connect(blend, "output", levels, "input").unwrap();
+
+        assert_eq!(
+            effective_output_type(&graph, levels, "levels", PortType::Color),
+            PortType::Gray
+        );
+    }
+}
