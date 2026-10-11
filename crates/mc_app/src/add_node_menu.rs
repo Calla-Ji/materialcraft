@@ -159,10 +159,27 @@ pub fn show(
                         // instead of the popup's actual right edge: a dead gap
                         // on both sides of the bar (wide empty space, bar, more
                         // empty space to the real edge), not a misplaced-but-
-                        // adjacent-to-content bar. `auto_shrink([false, ...])`
+                        // adjacent-to-content bar. `auto_shrink([false, false])`
                         // makes it fill the full 260px width the frame actually
                         // has, so the bar sits flush against the real edge.
-                        .auto_shrink([false, true])
+                        //
+                        // The height axis also has to stay non-shrinking: this
+                        // `egui::Area` is a fixed, reused `Id`
+                        // ("materialcraft_add_node_menu"), and `egui::Area`
+                        // remembers its last-measured content size across
+                        // separate opens under that same `Id`. If the height
+                        // were allowed to shrink to a short filtered result
+                        // list (e.g. after typing a specific search term),
+                        // that smaller size would be memoized and become next
+                        // frame's *layout constraint* — which in turn measures
+                        // just as small again, permanently locking the popup
+                        // at that shrunken height on every later open, even
+                        // after the search box is cleared back to the full
+                        // list. Reserving the full `max_height` unconditionally
+                        // keeps the measured content size constant regardless
+                        // of how many results match, so there's nothing for
+                        // that feedback loop to latch onto.
+                        .auto_shrink([false, false])
                         // Always reserved, not just when a scrollbar happens to
                         // be showing — otherwise a button's width is measured
                         // against the *full* unreserved width right up until
