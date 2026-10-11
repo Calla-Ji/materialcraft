@@ -22,8 +22,8 @@ pub struct ParamSpec {
     pub kind: ParamSpecKind,
 }
 
-/// A param's type and allowed range/options. New variants (Bool, Vec2) get
-/// added here once a node that needs them exists.
+/// A param's type and allowed range/options. New variants (Bool) get added
+/// here once a node that needs them exists.
 pub enum ParamSpecKind {
     Float {
         min: f32,
@@ -50,6 +50,15 @@ pub enum ParamSpecKind {
     Gradient {
         default: &'static [GradientStop],
     },
+    /// A 2-component value in the same units on both axes (e.g. a UV-space
+    /// offset) — `min`/`max` apply to both components identically, since
+    /// every current use (Channel Split's per-channel offsets) is
+    /// symmetric. First used by the Glitch family.
+    Vec2 {
+        min: f32,
+        max: f32,
+        default: [f32; 2],
+    },
 }
 
 impl ParamSpec {
@@ -61,6 +70,7 @@ impl ParamSpec {
             ParamSpecKind::Enum { default, .. } => ParamValue::Enum(default.to_string()),
             ParamSpecKind::Color { default } => ParamValue::Color(default),
             ParamSpecKind::Gradient { default } => ParamValue::Gradient(default.to_vec()),
+            ParamSpecKind::Vec2 { default, .. } => ParamValue::Vec2(default),
         }
     }
 }
@@ -129,10 +139,31 @@ pub fn ports_compatible(from: PortType, to: PortType) -> bool {
 /// Color, a Gray source (e.g. a height map) couldn't pass through Levels
 /// and still reach a Gray-only input (e.g. Height to Normal) without an
 /// unnecessary Grayscale Conversion node in between.
-const TYPE_PRESERVING_KINDS: &[&str] = &["levels", "invert", "clamp", "threshold", "curve"];
+const TYPE_PRESERVING_KINDS: &[&str] = &[
+    "levels",
+    "invert",
+    "clamp",
+    "threshold",
+    "curve",
+    "block_shift",
+    "scanline_jitter",
+    "ordered_dither",
+    "data_corrupt",
+];
+
+/// The name of the port `effective_output_type` should follow upstream for a
+/// given type-preserving node kind — most call it "input", but the Glitch
+/// family's image input is named "image" to read naturally alongside their
+/// optional "mask" input.
+fn type_preserving_input_port(kind: &str) -> &'static str {
+    match kind {
+        "block_shift" | "scanline_jitter" | "ordered_dither" | "data_corrupt" => "image",
+        _ => "input",
+    }
+}
 
 /// The port type a node's output *actually* carries right now, given what
-/// (if anything) is wired into its "input" — for the nodes in
+/// (if anything) is wired into its primary input — for the nodes in
 /// `TYPE_PRESERVING_KINDS` this follows the upstream chain back through any
 /// number of other type-preserving nodes to the first real source; for
 /// every other node it's just the statically declared type. Used by the UI
@@ -149,10 +180,12 @@ pub fn effective_output_type(
         return declared;
     }
     let mut current = node_id;
+    let mut current_kind = node_kind.to_string();
     // A graph can't contain cycles (rejected at connect time), so this
     // bound only guards against a future bug reintroducing one.
     for _ in 0..64 {
-        let Some(upstream_id) = graph.upstream(current, "input") else {
+        let port = type_preserving_input_port(&current_kind);
+        let Some(upstream_id) = graph.upstream(current, port) else {
             return declared;
         };
         let Some(upstream_node) = graph.node(upstream_id) else {
@@ -166,6 +199,7 @@ pub fn effective_output_type(
         };
         if TYPE_PRESERVING_KINDS.contains(&upstream_node.kind.as_str()) {
             current = upstream_id;
+            current_kind = upstream_node.kind.clone();
             continue;
         }
         return upstream_output.port_type;
@@ -186,6 +220,28 @@ pub fn param_is_relevant(
     param_name: &str,
     current_params: &std::collections::BTreeMap<String, ParamValue>,
 ) -> bool {
+    if node_kind == "dither_pattern" {
+        let pattern = current_params.get("pattern").and_then(|v| match v {
+            ParamValue::Enum(name) => Some(name.as_str()),
+            _ => None,
+        });
+        return match param_name {
+            "seed" => pattern == Some("Blue Noise"),
+            "rotation" => pattern != Some("Blue Noise"),
+            "dot_size" => pattern == Some("Dot"),
+            _ => true,
+        };
+    }
+    if node_kind == "ordered_dither" || node_kind == "palette_dither" {
+        let pattern = current_params.get("pattern").and_then(|v| match v {
+            ParamValue::Enum(name) => Some(name.as_str()),
+            _ => None,
+        });
+        return match param_name {
+            "seed" => pattern == Some("Blue Noise"),
+            _ => true,
+        };
+    }
     if node_kind != "shape" {
         return true;
     }
@@ -1121,6 +1177,84 @@ static NODE_DEFS: &[NodeDef] = &[
         }],
     },
     NodeDef {
+        kind: "dither_pattern",
+        display_name: "Dither Pattern",
+        category: "Generators/Patterns",
+        tooltip: "The raw ordered-dither threshold mask (Bayer, blue noise, or a halftone dot \
+                  grid), for use in Blend, Threshold, and similar nodes.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "pattern",
+                display_name: "Pattern",
+                tooltip: "Which ordered-dither matrix to use.",
+                kind: ParamSpecKind::Enum {
+                    options: &["Bayer 2x2", "Bayer 4x4", "Bayer 8x8", "Blue Noise", "Dot"],
+                    default: "Bayer 4x4",
+                },
+            },
+            ParamSpec {
+                name: "cells_x",
+                display_name: "Cells X",
+                tooltip: "How many dither cells span the texture horizontally. Rounded up to \
+                          the nearest multiple of the pattern's own tile size (2/4/8/64) for \
+                          seamless tiling.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 512,
+                    default: 64,
+                },
+            },
+            ParamSpec {
+                name: "cells_y",
+                display_name: "Cells Y",
+                tooltip: "How many dither cells span the texture vertically. Rounded the same \
+                          way as Cells X.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 512,
+                    default: 64,
+                },
+            },
+            ParamSpec {
+                name: "rotation",
+                display_name: "Rotation",
+                tooltip: "Tilts the pattern to a classic halftone screen angle (print screens \
+                          are rotated per channel to hide the grid and avoid moire). Limited \
+                          to angles that still tile exactly, the same way real halftone \
+                          screens are restricted to a handful of rational angles — the cell \
+                          size shifts slightly with the angle as a result. No effect on Blue \
+                          Noise.",
+                kind: ParamSpecKind::Enum {
+                    options: &["0°", "18.4°", "26.6°", "45°"],
+                    default: "0°",
+                },
+            },
+            ParamSpec {
+                name: "dot_size",
+                display_name: "Dot Size",
+                tooltip: "How much of each cell the circle fills. Only used by the Dot \
+                          pattern.",
+                kind: ParamSpecKind::Float {
+                    min: 0.05,
+                    max: 1.0,
+                    default: 0.6,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Offsets the Blue Noise mask. Has no effect on other patterns.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
+    },
+    NodeDef {
         kind: "hsl_adjust",
         display_name: "HSL Adjust",
         category: "Filters/Adjustments",
@@ -1595,6 +1729,473 @@ static NODE_DEFS: &[NodeDef] = &[
                 default: 4.0,
             },
         }],
+    },
+    NodeDef {
+        kind: "channel_split",
+        display_name: "Channel Split",
+        category: "Filters/Glitch",
+        tooltip: "Samples each RGB channel at its own offset, for chromatic-aberration/glitch \
+                  looks.",
+        inputs: &[
+            PortSpec {
+                name: "image",
+                display_name: "Image",
+                port_type: PortType::Color,
+            },
+            PortSpec {
+                name: "mask",
+                display_name: "Mask",
+                port_type: PortType::Gray,
+            },
+        ],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "offset_r",
+                display_name: "Offset R",
+                tooltip: "Red channel's sample offset, in UV units.",
+                kind: ParamSpecKind::Vec2 {
+                    min: -0.5,
+                    max: 0.5,
+                    default: [0.01, 0.0],
+                },
+            },
+            ParamSpec {
+                name: "offset_g",
+                display_name: "Offset G",
+                tooltip: "Green channel's sample offset, in UV units.",
+                kind: ParamSpecKind::Vec2 {
+                    min: -0.5,
+                    max: 0.5,
+                    default: [0.0, 0.0],
+                },
+            },
+            ParamSpec {
+                name: "offset_b",
+                display_name: "Offset B",
+                tooltip: "Blue channel's sample offset, in UV units.",
+                kind: ParamSpecKind::Vec2 {
+                    min: -0.5,
+                    max: 0.5,
+                    default: [-0.01, 0.0],
+                },
+            },
+            ParamSpec {
+                name: "strength",
+                display_name: "Strength",
+                tooltip: "Blends between the original image (0) and the fully split channels \
+                          (1).",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 1.0,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "block_shift",
+        display_name: "Block Shift",
+        category: "Filters/Glitch",
+        tooltip: "Shifts random blocks of the image sideways — a seeded hash per block \
+                  decides whether and how far.",
+        inputs: &[
+            PortSpec {
+                name: "image",
+                display_name: "Image",
+                port_type: PortType::Color,
+            },
+            PortSpec {
+                name: "mask",
+                display_name: "Mask",
+                port_type: PortType::Gray,
+            },
+        ],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "columns",
+                display_name: "Columns",
+                tooltip: "How many blocks span the texture horizontally.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 8,
+                },
+            },
+            ParamSpec {
+                name: "rows",
+                display_name: "Rows",
+                tooltip: "How many blocks span the texture vertically.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 8,
+                },
+            },
+            ParamSpec {
+                name: "amount",
+                display_name: "Amount",
+                tooltip: "Fraction of blocks that shift at all.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.3,
+                },
+            },
+            ParamSpec {
+                name: "max_offset",
+                display_name: "Max Offset",
+                tooltip: "Largest possible shift for an affected block, in UV units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.5,
+                    default: 0.1,
+                },
+            },
+            ParamSpec {
+                name: "direction",
+                display_name: "Direction",
+                tooltip: "Which axis a shifting block moves along.",
+                kind: ParamSpecKind::Enum {
+                    options: &["Horizontal", "Vertical", "Both"],
+                    default: "Both",
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes which blocks shift and by how much.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "scanline_jitter",
+        display_name: "Scanline Jitter",
+        category: "Filters/Glitch",
+        tooltip: "Shifts random horizontal or vertical bands sideways — the classic 'bad \
+                  video signal' glitch.",
+        inputs: &[
+            PortSpec {
+                name: "image",
+                display_name: "Image",
+                port_type: PortType::Color,
+            },
+            PortSpec {
+                name: "mask",
+                display_name: "Mask",
+                port_type: PortType::Gray,
+            },
+        ],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "lines",
+                display_name: "Lines",
+                tooltip: "How many bands span the texture.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 256,
+                    default: 32,
+                },
+            },
+            ParamSpec {
+                name: "amount",
+                display_name: "Amount",
+                tooltip: "Fraction of bands that jitter at all.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.3,
+                },
+            },
+            ParamSpec {
+                name: "max_offset",
+                display_name: "Max Offset",
+                tooltip: "Largest possible jitter for an affected band, in UV units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.5,
+                    default: 0.05,
+                },
+            },
+            ParamSpec {
+                name: "orientation",
+                display_name: "Orientation",
+                tooltip: "Whether bands run horizontally or vertically.",
+                kind: ParamSpecKind::Enum {
+                    options: &["Horizontal", "Vertical"],
+                    default: "Horizontal",
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes which bands jitter and by how much.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "ordered_dither",
+        display_name: "Ordered Dither",
+        category: "Filters/Stylize",
+        tooltip: "Reduces an image to a few tones with an ordered (Bayer or blue noise) \
+                  dither pattern.",
+        inputs: &[PortSpec {
+            name: "image",
+            display_name: "Image",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "pattern",
+                display_name: "Pattern",
+                tooltip: "Which ordered-dither matrix to use.",
+                kind: ParamSpecKind::Enum {
+                    options: &["Bayer 2x2", "Bayer 4x4", "Bayer 8x8", "Blue Noise"],
+                    default: "Bayer 4x4",
+                },
+            },
+            ParamSpec {
+                name: "cells",
+                display_name: "Cells",
+                tooltip: "How many dither cells span the texture. Rounded up to the nearest \
+                          multiple of the pattern's own tile size (2/4/8/64) for seamless \
+                          tiling.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 512,
+                    default: 64,
+                },
+            },
+            ParamSpec {
+                name: "levels",
+                display_name: "Levels",
+                tooltip: "Tone steps per channel. 2 = pure 1-bit (black/white only).",
+                kind: ParamSpecKind::Int {
+                    min: 2,
+                    max: 16,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "spread",
+                display_name: "Spread",
+                tooltip: "Dither strength: 0 is a plain posterize with no dithering, 1 is the \
+                          full dither pattern.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
+                name: "bias",
+                display_name: "Bias",
+                tooltip: "Shifts the threshold lighter or darker.",
+                kind: ParamSpecKind::Float {
+                    min: -0.5,
+                    max: 0.5,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "mode",
+                display_name: "Mode",
+                tooltip: "Per Channel dithers R/G/B independently. Luminance quantizes \
+                          brightness only and rescales all 3 channels together, preserving \
+                          hue. No visible difference on a Gray-sourced image.",
+                kind: ParamSpecKind::Enum {
+                    options: &["Per Channel", "Luminance"],
+                    default: "Luminance",
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Offsets the Blue Noise mask. Has no effect on Bayer patterns.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "palette_dither",
+        display_name: "Palette Dither",
+        category: "Filters/Stylize",
+        tooltip: "Dithers a Color image down to a fixed palette of 2-8 colors.",
+        inputs: &[PortSpec {
+            name: "image",
+            display_name: "Image",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "palette",
+                display_name: "Palette",
+                tooltip: "The colors to dither down to, in order (position only decides \
+                          order here, not blending).",
+                kind: ParamSpecKind::Gradient {
+                    default: &[
+                        GradientStop {
+                            position: 0.0,
+                            color: [0.0, 0.0, 0.0, 1.0],
+                        },
+                        GradientStop {
+                            position: 0.5,
+                            color: [0.5, 0.5, 0.5, 1.0],
+                        },
+                        GradientStop {
+                            position: 1.0,
+                            color: [1.0, 1.0, 1.0, 1.0],
+                        },
+                    ],
+                },
+            },
+            ParamSpec {
+                name: "pattern",
+                display_name: "Pattern",
+                tooltip: "Which ordered-dither matrix to use.",
+                kind: ParamSpecKind::Enum {
+                    options: &["Bayer 2x2", "Bayer 4x4", "Bayer 8x8", "Blue Noise"],
+                    default: "Bayer 4x4",
+                },
+            },
+            ParamSpec {
+                name: "cells",
+                display_name: "Cells",
+                tooltip: "How many dither cells span the texture. Rounded up to the nearest \
+                          multiple of the pattern's own tile size (2/4/8/64) for seamless \
+                          tiling.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 512,
+                    default: 64,
+                },
+            },
+            ParamSpec {
+                name: "spread",
+                display_name: "Spread",
+                tooltip: "Dither strength: 0 picks the nearest palette color directly with no \
+                          dithering, 1 uses the full dither pattern.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
+                name: "distance",
+                display_name: "Distance",
+                tooltip: "How \"nearest\" is measured when picking a palette color. RGB is \
+                          plain Euclidean distance; Perceptual weights channels by luminance.",
+                kind: ParamSpecKind::Enum {
+                    options: &["RGB", "Perceptual"],
+                    default: "Perceptual",
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Offsets the Blue Noise mask. Has no effect on Bayer patterns.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "data_corrupt",
+        display_name: "Data Corrupt",
+        category: "Filters/Glitch",
+        tooltip: "Posterizes, channel-swaps, or inverts random blocks — a glitchy 'corrupted \
+                  file' look.",
+        inputs: &[
+            PortSpec {
+                name: "image",
+                display_name: "Image",
+                port_type: PortType::Color,
+            },
+            PortSpec {
+                name: "mask",
+                display_name: "Mask",
+                port_type: PortType::Gray,
+            },
+        ],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "columns",
+                display_name: "Columns",
+                tooltip: "How many blocks span the texture horizontally.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 8,
+                },
+            },
+            ParamSpec {
+                name: "rows",
+                display_name: "Rows",
+                tooltip: "How many blocks span the texture vertically.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 8,
+                },
+            },
+            ParamSpec {
+                name: "amount",
+                display_name: "Amount",
+                tooltip: "Fraction of blocks that get corrupted.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.2,
+                },
+            },
+            ParamSpec {
+                name: "effect",
+                display_name: "Effect",
+                tooltip: "Posterize crushes a block to 3 tones; Channel Swap permutes its RGB \
+                          channels; Invert flips it; Mix picks one of the three per block.",
+                kind: ParamSpecKind::Enum {
+                    options: &["Posterize", "Channel Swap", "Invert", "Mix"],
+                    default: "Mix",
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes which blocks are affected and how.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
     },
     output_node_def("output_base_color", "Output: Base Color"),
     output_node_def("output_normal", "Output: Normal"),

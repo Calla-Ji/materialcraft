@@ -66,10 +66,17 @@ fn embedded_source(file_name: &str) -> &'static str {
         "clouds.wgsl" => include_str!("../shaders/clouds.wgsl"),
         "directional_blur.wgsl" => include_str!("../shaders/directional_blur.wgsl"),
         "directional_warp.wgsl" => include_str!("../shaders/directional_warp.wgsl"),
+        "dither_pattern.wgsl" => include_str!("../shaders/dither_pattern.wgsl"),
         "edge_detect.wgsl" => include_str!("../shaders/edge_detect.wgsl"),
         "slope_blur.wgsl" => include_str!("../shaders/slope_blur.wgsl"),
         "height_to_ao.wgsl" => include_str!("../shaders/height_to_ao.wgsl"),
         "curvature_from_normal.wgsl" => include_str!("../shaders/curvature_from_normal.wgsl"),
+        "channel_split.wgsl" => include_str!("../shaders/channel_split.wgsl"),
+        "block_shift.wgsl" => include_str!("../shaders/block_shift.wgsl"),
+        "scanline_jitter.wgsl" => include_str!("../shaders/scanline_jitter.wgsl"),
+        "ordered_dither.wgsl" => include_str!("../shaders/ordered_dither.wgsl"),
+        "palette_dither.wgsl" => include_str!("../shaders/palette_dither.wgsl"),
+        "data_corrupt.wgsl" => include_str!("../shaders/data_corrupt.wgsl"),
         other => panic!("mc_nodes: unknown shader file {other:?}"),
     }
 }

@@ -192,3 +192,33 @@ fn voronoi_f1f2(uv: vec2<f32>, period: i32, jitter: f32, seed: u32) -> vec2<f32>
     }
     return vec2<f32>(f1, f2);
 }
+
+// A recursively-defined ordered-dither (Bayer) threshold matrix, for any
+// power-of-two `size` — public-domain technique (see e.g. Wikipedia's
+// "Ordered dithering" article for the general recursive definition):
+// doubling the matrix size tiles 4 copies of the smaller matrix into the 4
+// quadrants, each copy scaled by 4 and offset by a fixed per-quadrant
+// constant {0, 2, 3, 1} (top-left, top-right, bottom-left, bottom-right).
+// That recursion is built here bit-by-bit, least-significant first: each
+// loop iteration consumes one more bit of `cell.x`/`cell.y`, multiplies the
+// running total by 4 (undoing one level of the previous, finer recursion)
+// and adds this level's own quadrant constant — which is exactly the
+// recursive definition read outward from its base case. Verified against
+// the standard 2x2 ({0,2;3,1}) and 4x4 matrices by this file's own tests.
+fn bayer_threshold(cell: vec2<u32>, size: u32) -> f32 {
+    var quadrant_constant: array<u32, 4> = array<u32, 4>(0u, 2u, 3u, 1u);
+    let x0 = cell.x % size;
+    let y0 = cell.y % size;
+    var value: u32 = 0u;
+    var level: u32 = 0u;
+    loop {
+        if (1u << level) >= size {
+            break;
+        }
+        let bx = (x0 >> level) & 1u;
+        let by = (y0 >> level) & 1u;
+        value = value * 4u + quadrant_constant[by * 2u + bx];
+        level = level + 1u;
+    }
+    return (f32(value) + 0.5) / f32(size * size);
+}

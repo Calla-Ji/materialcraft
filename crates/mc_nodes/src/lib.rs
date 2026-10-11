@@ -6,15 +6,20 @@
 //! sharing the helpers in `test_support`.
 
 pub mod blend;
+pub mod block_shift;
 pub mod blur;
+pub mod channel_split;
 pub mod checker;
 pub mod clamp;
 pub mod clouds;
 pub mod curvature_from_normal;
 pub mod curve;
+pub mod data_corrupt;
 pub mod defs;
 pub mod directional_blur;
 pub mod directional_warp;
+mod dither_common;
+pub mod dither_pattern;
 pub mod edge_detect;
 pub mod export;
 pub mod fractal_sum;
@@ -28,8 +33,11 @@ pub mod histogram_scan;
 pub mod hsl_adjust;
 pub mod invert;
 pub mod levels;
+pub mod ordered_dither;
+pub mod palette_dither;
 pub mod perlin;
 pub mod registry;
+pub mod scanline_jitter;
 mod shaders;
 pub mod shape;
 pub mod simplex_noise;

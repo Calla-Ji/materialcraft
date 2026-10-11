@@ -8,11 +8,12 @@
 use std::collections::HashSet;
 
 use crate::{
-    blend, blur, checker, clamp, clouds, curvature_from_normal, curve, directional_blur,
-    directional_warp, edge_detect, fractal_sum, gradient_linear, gradient_map, gradient_radial,
-    grayscale_conversion, height_to_ao, height_to_normal, histogram_scan, hsl_adjust, invert,
-    levels, perlin, shape, simplex_noise, slope_blur, threshold, tile_generator, transform2d,
-    uniform_color, voronoi, warp, white_noise,
+    blend, block_shift, blur, channel_split, checker, clamp, clouds, curvature_from_normal, curve,
+    data_corrupt, directional_blur, directional_warp, dither_pattern, edge_detect, fractal_sum,
+    gradient_linear, gradient_map, gradient_radial, grayscale_conversion, height_to_ao,
+    height_to_normal, histogram_scan, hsl_adjust, invert, levels, ordered_dither, palette_dither,
+    perlin, scanline_jitter, shape, simplex_noise, slope_blur, threshold, tile_generator,
+    transform2d, uniform_color, voronoi, warp, white_noise,
 };
 
 /// The texture pool key a node's own output is stored under.
@@ -204,6 +205,76 @@ pub fn evaluate(
                 "checker" => {
                     let params = checker::CheckerParams::from_graph(&node.params);
                     checker::dispatch(gpu, pool, &key, resolution, &params);
+                }
+                "dither_pattern" => {
+                    let params = dither_pattern::DitherPatternParams::from_graph(&node.params);
+                    dither_pattern::dispatch(gpu, pool, &key, resolution, &params);
+                }
+                "ordered_dither" => {
+                    let image_key = texture_key(resolve_input("image")?);
+                    let params = ordered_dither::OrderedDitherParams::from_graph(&node.params);
+                    ordered_dither::dispatch(gpu, pool, &image_key, &key, resolution, &params);
+                }
+                "palette_dither" => {
+                    let image_key = texture_key(resolve_input("image")?);
+                    let params = palette_dither::PaletteDitherParams::from_graph(&node.params);
+                    palette_dither::dispatch(gpu, pool, &image_key, &key, resolution, &params);
+                }
+                "channel_split" => {
+                    let image_key = texture_key(resolve_input("image")?);
+                    let mask_key = resolve_optional_input("mask").map(texture_key);
+                    let params = channel_split::ChannelSplitParams::from_graph(&node.params);
+                    channel_split::dispatch(
+                        gpu,
+                        pool,
+                        &image_key,
+                        mask_key.as_deref(),
+                        &key,
+                        resolution,
+                        &params,
+                    );
+                }
+                "block_shift" => {
+                    let image_key = texture_key(resolve_input("image")?);
+                    let mask_key = resolve_optional_input("mask").map(texture_key);
+                    let params = block_shift::BlockShiftParams::from_graph(&node.params);
+                    block_shift::dispatch(
+                        gpu,
+                        pool,
+                        &image_key,
+                        mask_key.as_deref(),
+                        &key,
+                        resolution,
+                        &params,
+                    );
+                }
+                "data_corrupt" => {
+                    let image_key = texture_key(resolve_input("image")?);
+                    let mask_key = resolve_optional_input("mask").map(texture_key);
+                    let params = data_corrupt::DataCorruptParams::from_graph(&node.params);
+                    data_corrupt::dispatch(
+                        gpu,
+                        pool,
+                        &image_key,
+                        mask_key.as_deref(),
+                        &key,
+                        resolution,
+                        &params,
+                    );
+                }
+                "scanline_jitter" => {
+                    let image_key = texture_key(resolve_input("image")?);
+                    let mask_key = resolve_optional_input("mask").map(texture_key);
+                    let params = scanline_jitter::ScanlineJitterParams::from_graph(&node.params);
+                    scanline_jitter::dispatch(
+                        gpu,
+                        pool,
+                        &image_key,
+                        mask_key.as_deref(),
+                        &key,
+                        resolution,
+                        &params,
+                    );
                 }
                 "hsl_adjust" => {
                     let input_key = texture_key(resolve_input("input")?);
