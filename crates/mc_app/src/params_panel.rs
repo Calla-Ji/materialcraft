@@ -40,15 +40,19 @@ fn show_inner(
         ui.weak(format!("(unknown node kind {:?})", node.kind));
         return;
     };
-    // Snapshot params as owned data so the loop below is free to mutate
-    // `graph` without fighting the borrow checker over `node`.
+    // Snapshot params (and kind) as owned data so the loop below is free to
+    // mutate `graph` without fighting the borrow checker over `node`.
     let current_params = node.params.clone();
+    let node_kind = node.kind.clone();
 
     ui.heading(def.display_name);
     ui.weak(def.tooltip);
     ui.separator();
 
     for param in def.params {
+        if !mc_nodes::defs::param_is_relevant(&node_kind, param.name, &current_params) {
+            continue;
+        }
         let current = current_params.get(param.name).cloned();
         match &param.kind {
             mc_nodes::defs::ParamSpecKind::Float { min, max, default } => {

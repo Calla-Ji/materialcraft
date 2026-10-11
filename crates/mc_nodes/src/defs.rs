@@ -122,6 +122,43 @@ pub fn ports_compatible(from: PortType, to: PortType) -> bool {
     !matches!((from, to), (PortType::Color, PortType::Gray))
 }
 
+/// Whether `param_name` currently means anything for a node of `node_kind`
+/// given its other params right now — e.g. Shape's "Sides"/"Point Depth"/
+/// "Curvature" only apply to some of its "Kind" values (a Disc has no sides,
+/// Point Depth only unfolds a Star, Curvature only shapes a Leaf's tips).
+/// Lives here rather than in `mc_app`'s generic parameter panel so a node's
+/// own quirks stay in its own metadata, not scattered into per-node-kind UI
+/// code. Defaults to always-relevant for every node/param this doesn't know
+/// about.
+pub fn param_is_relevant(
+    node_kind: &str,
+    param_name: &str,
+    current_params: &std::collections::BTreeMap<String, ParamValue>,
+) -> bool {
+    if node_kind != "shape" {
+        return true;
+    }
+    let shape_kind = current_params
+        .get("kind")
+        .and_then(|v| match v {
+            ParamValue::Enum(name) => crate::shape::ShapeKind::from_name(name),
+            _ => None,
+        })
+        .unwrap_or(crate::shape::ShapeKind::Disc);
+    match param_name {
+        "sides" => matches!(
+            shape_kind,
+            crate::shape::ShapeKind::Polygon | crate::shape::ShapeKind::Star
+        ),
+        "point_depth" => matches!(shape_kind, crate::shape::ShapeKind::Star),
+        "curvature_top" | "curvature_bottom" | "curvature_middle" | "leaf_width"
+        | "middle_position" => {
+            matches!(shape_kind, crate::shape::ShapeKind::Leaf)
+        }
+        _ => true,
+    }
+}
+
 const fn output_node_def(kind: &'static str, display_name: &'static str) -> NodeDef {
     NodeDef {
         kind,
@@ -585,20 +622,88 @@ static NODE_DEFS: &[NodeDef] = &[
                     default: 0.0,
                 },
             },
+            ParamSpec {
+                name: "point_depth",
+                display_name: "Point Depth",
+                tooltip: "Star only: 1.0 is a plain polygon (e.g. a triangle at 3 sides); lowering it unfolds the same outline into sharper star points.",
+                kind: ParamSpecKind::Float {
+                    min: 0.05,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "curvature_top",
+                display_name: "Curvature Top",
+                tooltip: "Leaf only: how pointed (high) or rounded (low) its top tip is.",
+                kind: ParamSpecKind::Float {
+                    min: 0.2,
+                    max: 4.0,
+                    default: 0.6,
+                },
+            },
+            ParamSpec {
+                name: "curvature_bottom",
+                display_name: "Curvature Bottom",
+                tooltip: "Leaf only: how pointed (high) or rounded (low) its bottom tip is.",
+                kind: ParamSpecKind::Float {
+                    min: 0.2,
+                    max: 4.0,
+                    default: 0.6,
+                },
+            },
+            ParamSpec {
+                name: "curvature_middle",
+                display_name: "Curvature Middle",
+                tooltip: "Leaf only: how pointed (high) or rounded (low) its sides are through the middle (the equator), independently from either tip.",
+                kind: ParamSpecKind::Float {
+                    min: 0.2,
+                    max: 4.0,
+                    default: 0.6,
+                },
+            },
+            ParamSpec {
+                name: "leaf_width",
+                display_name: "Leaf Width",
+                tooltip: "Leaf only: how wide it is at its fattest point (the equator), as a fraction of its own height.",
+                kind: ParamSpecKind::Float {
+                    min: 0.25,
+                    max: 0.9,
+                    default: 0.55,
+                },
+            },
+            ParamSpec {
+                name: "middle_position",
+                display_name: "Middle Position",
+                tooltip: "Leaf only: where the equator (widest point) sits between the top tip (low) and bottom tip (high). 0.5 is centered.",
+                kind: ParamSpecKind::Float {
+                    min: 0.15,
+                    max: 0.85,
+                    default: 0.5,
+                },
+            },
         ],
     },
     NodeDef {
         kind: "gradient_linear",
         display_name: "Gradient Linear",
         category: "Generators/Patterns",
-        tooltip: "A left-to-right ramp from black to white.",
+        tooltip: "A ramp from black to white, rotatable around the tile's center.",
         inputs: &[],
         outputs: &[PortSpec {
             name: "output",
             display_name: "Output",
             port_type: PortType::Gray,
         }],
-        params: &[],
+        params: &[ParamSpec {
+            name: "rotation",
+            display_name: "Rotation",
+            tooltip: "Ramp direction. Limited to quarter turns — the only angles that keep the tile's edges lining up with its neighbor's.",
+            kind: ParamSpecKind::Enum {
+                options: &crate::gradient_linear::ROTATION_OPTIONS,
+                default: "0°",
+            },
+        }],
     },
     NodeDef {
         kind: "gradient_radial",
