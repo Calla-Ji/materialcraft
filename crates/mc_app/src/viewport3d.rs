@@ -305,9 +305,12 @@ impl Viewport3d {
         let initial_tessellation = 0.5;
         let current_mesh = upload_mesh(
             device,
-            tessellated_mesh(MeshKind::Sphere, initial_tessellation),
+            tessellated_mesh(MeshKind::RoundedCube, initial_tessellation),
         );
-        let current_mesh_key = (MeshKind::Sphere, tessellation_bucket(initial_tessellation));
+        let current_mesh_key = (
+            MeshKind::RoundedCube,
+            tessellation_bucket(initial_tessellation),
+        );
 
         let fallback = FallbackTextures {
             base_color: solid_view(
@@ -356,7 +359,7 @@ impl Viewport3d {
             depth_view: None,
             texture_id: None,
             size: (0, 0),
-            mesh_kind: MeshKind::Sphere,
+            mesh_kind: MeshKind::RoundedCube,
             height_scale: 0.15,
             tessellation: initial_tessellation,
             shading_mode: ShadingMode::default(),
@@ -808,8 +811,13 @@ fn lerp_segments(low: u32, high: u32, t: f32) -> u32 {
 /// normal mapping's shading.
 fn tessellated_mesh(kind: MeshKind, tessellation: f32) -> (Vec<Vertex>, Vec<u32>) {
     match kind {
+        // Rings (pole-to-pole) raised from 96 to 128 to match the same
+        // floor the Cube/Rounded Cube audit settled on, after the owner
+        // asked whether the other meshes had enough resolution too —
+        // segments (192, around the equator) was already comfortably above
+        // it.
         MeshKind::Sphere => generate_sphere(
-            lerp_segments(8, 96, tessellation),
+            lerp_segments(8, 128, tessellation),
             lerp_segments(16, 192, tessellation),
         ),
         // 64 segments/face wasn't enough resolution to follow a sharp height
@@ -823,10 +831,14 @@ fn tessellated_mesh(kind: MeshKind, tessellation: f32) -> (Vec<Vertex>, Vec<u32>
         MeshKind::Cube => generate_rounded_cube(lerp_segments(4, 128, tessellation), 0.0),
         MeshKind::Plane => generate_plane(lerp_segments(8, 256, tessellation)),
         MeshKind::RoundedCube => generate_rounded_cube(lerp_segments(4, 128, tessellation), 0.25),
+        // Fillet/wall segments (the vertical axis) doubled from 24/48 to
+        // 48/96 for the same reason as Sphere above — their sum (~72) was
+        // noticeably below the new floor. radial_segments (192, around the
+        // circumference) was already well above it.
         MeshKind::RoundedCylinder => generate_rounded_cylinder(
             lerp_segments(16, 192, tessellation),
-            lerp_segments(2, 24, tessellation),
             lerp_segments(2, 48, tessellation),
+            lerp_segments(2, 96, tessellation),
             0.3,
         ),
     }
