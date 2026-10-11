@@ -19,12 +19,15 @@ jobs:
           - os: windows-latest
             artifact_name: MaterialCreator-windows
             binary_path: target/release/mc_app.exe
+            nav_file: NAVIGATION-Windows.md
           - os: ubuntu-latest
             artifact_name: MaterialCreator-linux
             binary_path: target/release/mc_app
+            nav_file: NAVIGATION-Linux.md
           - os: macos-latest
             artifact_name: MaterialCreator-macos
             binary_path: target/release/mc_app
+            nav_file: NAVIGATION-macOS.md
 
     runs-on: ${{ matrix.os }}
 
@@ -52,6 +55,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path staging | Out-Null
           Copy-Item ${{ matrix.binary_path }} staging/MaterialCreator.exe
+          Copy-Item ${{ matrix.nav_file }} staging/NAVIGATION.md
           Compress-Archive -Path staging/* -DestinationPath ${{ matrix.artifact_name }}.zip
 
       - name: Package (Unix)
@@ -59,7 +63,8 @@ jobs:
         run: |
           mkdir staging
           cp ${{ matrix.binary_path }} staging/MaterialCreator
-          tar -czf ${{ matrix.artifact_name }}.tar.gz -C staging MaterialCreator
+          cp ${{ matrix.nav_file }} staging/NAVIGATION.md
+          tar -czf ${{ matrix.artifact_name }}.tar.gz -C staging MaterialCreator NAVIGATION.md
 
       - name: Upload artifact (Windows)
         if: runner.os == 'Windows'

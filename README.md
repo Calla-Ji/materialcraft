@@ -7,7 +7,9 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 **Blender** and **Unreal Engine**.
 
 > Status: early development (v0.1, pre-release). See [PROGRESS.md](PROGRESS.md) for the
-> current state and [CLAUDE.md](CLAUDE.md) for the full project scope and roadmap.
+> current state and [CLAUDE.md](CLAUDE.md) for the full project scope and roadmap. New to the
+> workspace? See the navigation/shortcuts reference for your OS:
+> [macOS](NAVIGATION-macOS.md) · [Windows](NAVIGATION-Windows.md) · [Linux](NAVIGATION-Linux.md).
 
 ## Features
 
