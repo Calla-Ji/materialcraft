@@ -101,6 +101,19 @@ impl DockLayout {
         leaf_content: &mut dyn FnMut(&mut egui::Ui, CrateId),
     ) {
         Self::show_node(&mut self.root, ui, rect, &leaf_title, leaf_content);
+
+        // Drawn once here, around the whole dock area, *after* every leaf
+        // (and every internal divider) so it paints on top instead of
+        // getting erased by a leaf's own background fill flush against
+        // this same outer edge — each *internal* boundary gets its own
+        // single line the same way, drawn once by whichever `Split` owns
+        // it (see `show_node`), rather than each neighboring leaf drawing
+        // its own full-perimeter border. Two independently-drawn,
+        // anti-aliased 1px lines sitting right on top of each other don't
+        // perfectly cancel out to one crisp 1px line — they visibly read as
+        // a thicker, slightly blurred one.
+        ui.painter()
+            .rect_stroke(rect, 0.0, ui.visuals().window_stroke(), StrokeKind::Inside);
     }
 
     fn show_node(
@@ -160,22 +173,52 @@ impl DockLayout {
 
                 Self::show_node(first, ui, r1, leaf_title, leaf_content);
                 Self::show_node(second, ui, r2, leaf_title, leaf_content);
+
+                // The one and only line for this boundary — drawn *after*
+                // both children (and everything inside them, including
+                // their own leaf background fills) rather than before, so
+                // it paints on top instead of immediately getting painted
+                // over by a child leaf's opaque fill starting at this exact
+                // boundary coordinate. See `show`'s doc comment on why this
+                // isn't also drawn by `first`/`second` themselves.
+                let stroke = ui.visuals().window_stroke();
+                match axis {
+                    SplitAxis::Horizontal => ui.painter().line_segment(
+                        [
+                            Pos2::new(r1.right(), rect.top()),
+                            Pos2::new(r1.right(), rect.bottom()),
+                        ],
+                        stroke,
+                    ),
+                    SplitAxis::Vertical => ui.painter().line_segment(
+                        [
+                            Pos2::new(rect.left(), r1.bottom()),
+                            Pos2::new(rect.right(), r1.bottom()),
+                        ],
+                        stroke,
+                    ),
+                };
             }
         }
     }
 }
 
 fn split_rect(rect: Rect, axis: SplitAxis, ratio: f32) -> (Rect, Rect) {
+    // Snapped to a whole pixel: a boundary at a fractional pixel position
+    // draws anti-aliased (smeared across two physical pixels) even when
+    // only one line is ever drawn there now — snapping keeps that one line
+    // crisp, and keeps `r1`/`r2` meeting at the exact same coordinate the
+    // line is drawn at instead of a near-but-not-quite match.
     match axis {
         SplitAxis::Horizontal => {
-            let x = rect.left() + rect.width() * ratio;
+            let x = (rect.left() + rect.width() * ratio).round();
             (
                 Rect::from_min_max(rect.min, Pos2::new(x, rect.bottom())),
                 Rect::from_min_max(Pos2::new(x, rect.top()), rect.max),
             )
         }
         SplitAxis::Vertical => {
-            let y = rect.top() + rect.height() * ratio;
+            let y = (rect.top() + rect.height() * ratio).round();
             (
                 Rect::from_min_max(rect.min, Pos2::new(rect.right(), y)),
                 Rect::from_min_max(Pos2::new(rect.left(), y), rect.max),
@@ -193,8 +236,10 @@ fn draw_leaf(
 ) {
     let visuals = ui.visuals().clone();
     let painter = ui.painter();
-    painter.rect_filled(rect, 0.0, visuals.panel_fill);
-    painter.rect_stroke(rect, 0.0, visuals.window_stroke(), StrokeKind::Inside);
+    // All four dock cells sit on Neutron Star — only the chrome around them
+    // (menu bar, node cards, the 3D viewport's slide-out drawer) keeps the
+    // default panel fill (Wormhole Grey, set globally in `theme::apply`).
+    painter.rect_filled(rect, 0.0, crate::theme::NEUTRON_STAR);
 
     let header_rect = Rect::from_min_size(rect.min, Vec2::new(rect.width(), HEADER_HEIGHT));
     painter.text(
@@ -202,7 +247,7 @@ fn draw_leaf(
         egui::Align2::CENTER_CENTER,
         title,
         egui::FontId::proportional(15.0),
-        visuals.strong_text_color(),
+        crate::theme::SUPERNOVA_LIGHT,
     );
     painter.line_segment(
         [header_rect.left_bottom(), header_rect.right_bottom()],

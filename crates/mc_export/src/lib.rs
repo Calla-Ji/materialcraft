@@ -115,6 +115,16 @@ pub fn pack_orm(
     Ok(packed)
 }
 
+/// Decodes PNG bytes (e.g. from `include_bytes!`) into an 8-bit-per-channel
+/// RGBA pixel buffer plus its width/height — the inverse of `write_png8`,
+/// used for loading a bundled image at startup (e.g. the app's window icon)
+/// rather than exporting a node's output.
+pub fn decode_png_rgba8(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), ExportError> {
+    let image = image::load_from_memory(bytes)?.to_rgba8();
+    let (width, height) = image.dimensions();
+    Ok((image.into_raw(), width, height))
+}
+
 /// Writes an 8-bit PNG, applying `color_space` first.
 pub fn write_png8(
     pixels: &[u8],

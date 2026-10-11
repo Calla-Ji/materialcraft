@@ -454,12 +454,7 @@ impl Viewport3d {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.05,
-                            g: 0.05,
-                            b: 0.07,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(crate::theme::NEUTRON_STAR_WGPU),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
