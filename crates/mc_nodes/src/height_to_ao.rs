@@ -7,29 +7,124 @@
 //! Occlusion` is just a pass-through marker like every other Output node,
 //! with no shader of its own.
 //!
-//! Implementation: compare the height map against three blurred copies of
-//! itself (fine/medium/broad radii, each a multiple of the node's own
-//! Radius param) via the existing Blur node, then darken wherever the real
-//! height sits notably below the *strongest*-occluding of those blurred
-//! averages. This replaced an earlier version that shot a handful of
-//! discrete rays outward from each pixel — cheap, but with gaps between
-//! sample directions that showed up as a hard ring around sharp edges
-//! instead of a soft falloff (see PROGRESS.md). Comparing against a blur
-//! has no such gaps (every neighbor in range contributes), and stacking
-//! three blur radii adds the kind of layered fine/broad detail a single
-//! scale can't — the same idea as combining octaves of noise.
+//! Implementation: compare the height map against three *max-filtered*
+//! (dilated) copies of itself — fine/medium/broad radii, each a multiple of
+//! the node's own Radius param — then darken wherever the real height sits
+//! notably below the strongest-occluding of the three. An earlier version
+//! compared against *blurred* (averaged) copies instead; that fixed an even
+//! earlier version's hard-edged ring artifact (see PROGRESS.md) but turned
+//! out to have its own gap: averaging dilutes a thin, sharp feature (e.g. a
+//! leaf shape's pointed tip) down to almost nothing once it's surrounded
+//! mostly by low background, so the comparison missed occlusion exactly
+//! where a shape narrows to a point, leaving a visible notch in the halo at
+//! each tip. A max filter has no such dilution — if a tall neighbor is
+//! anywhere within reach, it's reflected at full strength regardless of how
+//! little area it covers — while keeping the earlier fix's smooth falloff
+//! and multi-scale layering (see `height_to_ao_dilate.wgsl`'s doc comment).
 
 use crate::shaders::full_source;
 
 const NODE_KIND: &str = "height_to_ao";
+const DILATE_NODE_KIND: &str = "height_to_ao_dilate";
 
 /// Multipliers on the node's own `radius` param for the fine/medium/broad
-/// blur passes `dispatch` compares the height map against. Fixed rather
-/// than exposed as params: three extra sliders for what's meant to be a
-/// one-knob "how far does occlusion reach" control would fight the
+/// max-filter passes `dispatch` compares the height map against. Fixed
+/// rather than exposed as params: three extra sliders for what's meant to
+/// be a one-knob "how far does occlusion reach" control would fight the
 /// artist-friendly, minimal-controls goal (CLAUDE.md §12) for a tuning
 /// knob most graphs won't need to touch.
 const SCALE_MULTIPLIERS: [f32; 3] = [1.0, 2.0, 4.0];
+
+/// Runs the separable max-filter pass twice (horizontal into a temp
+/// texture, then vertical from the temp texture into `output_key`) to get a
+/// full 2D max filter — mirrors `blur::dispatch`'s own two-pass structure.
+fn dilate(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    input_key: &str,
+    output_key: &str,
+    resolution: u32,
+    radius_px: f32,
+) {
+    let temp_key = format!("{output_key}__dilate_temp");
+    dilate_pass(gpu, pool, input_key, &temp_key, resolution, 0, radius_px);
+    dilate_pass(gpu, pool, &temp_key, output_key, resolution, 1, radius_px);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dilate_pass(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    input_key: &str,
+    output_key: &str,
+    resolution: u32,
+    direction: u32,
+    radius_px: f32,
+) {
+    let input_view = pool
+        .view(input_key)
+        .unwrap_or_else(|| panic!("height_to_ao_dilate: no texture at input key {input_key:?}"))
+        .clone();
+
+    let shader_source = full_source("height_to_ao_dilate.wgsl");
+    let pipeline = gpu.compute_pipeline(DILATE_NODE_KIND, &shader_source, "main");
+
+    let mut param_bytes = [0u8; 16];
+    param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
+    param_bytes[4..8].copy_from_slice(&direction.to_le_bytes());
+    param_bytes[8..12].copy_from_slice(&radius_px.to_le_bytes());
+    let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("height_to_ao_dilate_params"),
+        size: param_bytes.len() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue.write_buffer(&param_buffer, 0, &param_bytes);
+
+    let output_view = pool.get_or_create(
+        &gpu.device,
+        output_key,
+        resolution,
+        wgpu::TextureFormat::Rgba8Unorm,
+    );
+
+    let bind_group_layout = pipeline.get_bind_group_layout(0);
+    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("height_to_ao_dilate_bind_group"),
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: param_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&input_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(output_view),
+            },
+        ],
+    });
+
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("height_to_ao_dilate_encoder"),
+        });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("height_to_ao_dilate_pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        let workgroups = resolution.div_ceil(8);
+        pass.dispatch_workgroups(workgroups, workgroups, 1);
+    }
+    gpu.queue.submit(Some(encoder.finish()));
+}
 
 pub struct HeightToAoParams {
     /// In UV space (0..1) — the *fine* scale's blur radius; the medium and
@@ -71,25 +166,17 @@ pub fn dispatch(
     resolution: u32,
     params: &HeightToAoParams,
 ) {
-    // Blur::dispatch's cost is bounded (a fixed 32-tap kernel regardless of
-    // radius — see blur.wgsl), so three passes here stays cheap even at the
-    // largest (broad) scale.
-    let blur_keys: Vec<String> = SCALE_MULTIPLIERS
+    // dilate's cost is bounded (a fixed 32-tap kernel regardless of radius —
+    // see height_to_ao_dilate.wgsl), so three passes here stays cheap even
+    // at the largest (broad) scale.
+    let dilate_keys: Vec<String> = SCALE_MULTIPLIERS
         .iter()
         .enumerate()
         .map(|(i, multiplier)| {
-            let blur_key = format!("{output_key}__ao_blur_{i}");
-            crate::blur::dispatch(
-                gpu,
-                pool,
-                input_key,
-                &blur_key,
-                resolution,
-                &crate::blur::BlurParams {
-                    radius: params.radius * multiplier,
-                },
-            );
-            blur_key
+            let dilate_key = format!("{output_key}__ao_dilate_{i}");
+            let radius_px = (params.radius * multiplier * resolution as f32).max(1.0);
+            dilate(gpu, pool, input_key, &dilate_key, resolution, radius_px);
+            dilate_key
         })
         .collect();
 
@@ -97,11 +184,11 @@ pub fn dispatch(
         .view(input_key)
         .unwrap_or_else(|| panic!("height_to_ao: no texture at input key {input_key:?}"))
         .clone();
-    let blur_views: Vec<wgpu::TextureView> = blur_keys
+    let dilated_views: Vec<wgpu::TextureView> = dilate_keys
         .iter()
         .map(|key| {
             pool.view(key)
-                .unwrap_or_else(|| panic!("height_to_ao: no blurred texture at key {key:?}"))
+                .unwrap_or_else(|| panic!("height_to_ao: no dilated texture at key {key:?}"))
                 .clone()
         })
         .collect();
@@ -142,15 +229,15 @@ pub fn dispatch(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::TextureView(&blur_views[0]),
+                resource: wgpu::BindingResource::TextureView(&dilated_views[0]),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: wgpu::BindingResource::TextureView(&blur_views[1]),
+                resource: wgpu::BindingResource::TextureView(&dilated_views[1]),
             },
             wgpu::BindGroupEntry {
                 binding: 4,
-                resource: wgpu::BindingResource::TextureView(&blur_views[2]),
+                resource: wgpu::BindingResource::TextureView(&dilated_views[2]),
             },
             wgpu::BindGroupEntry {
                 binding: 5,
@@ -182,6 +269,7 @@ mod tests {
     use super::{dispatch, HeightToAoParams};
     use crate::checker::{dispatch as checker_dispatch, CheckerParams};
     use crate::perlin::{dispatch as perlin_dispatch, PerlinParams};
+    use crate::shape::{dispatch as shape_dispatch, ShapeKind, ShapeParams};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
     use crate::uniform_color::{dispatch as uniform_color_dispatch, UniformColorParams};
 
@@ -314,20 +402,80 @@ mod tests {
         let y = 16; // within the first row of cells, so only the x=32 edge matters here.
         let ao_at = |x: u32| pixels[((y * RESOLUTION + x) * 4) as usize];
 
+        // At the default Intensity, a pixel-exact hard step legitimately
+        // saturates to fully occluded for the first few pixels (a strong
+        // intensity blowing out a genuinely sharp crease to black isn't a
+        // bug) — the real thing being guarded here is what happens next:
+        // a *climb* back out through intermediate values, not an instant
+        // jump straight from "fully occluded" to "fully clear."
         let at_edge = ao_at(32); // right at the edge, on the low side
-        let near = ao_at(34); // 2px into the low side
-        let mid = ao_at(38); // 6px into the low side
-        let far = ao_at(48); // 16px in — the black cell's center, farthest from both
-                             // this edge and the wrap-around edge at x=0/64.
+        let still_saturated = ao_at(36); // 4px in, within the saturated band
+        let climbing = ao_at(38); // 6px in, where the climb starts
+        let climbing_more = ao_at(40); // 8px in, partway up the climb
+        let far = ao_at(48); // 16px in — the black cell's center, farthest from
+                             // both this edge and the wrap-around edge at x=0/64.
 
         assert!(
-            at_edge < near && near < mid && mid <= far,
-            "occlusion should fade smoothly moving away from the edge, not stay flat or jump \
-             (at_edge={at_edge}, near={near}, mid={mid}, far={far})"
+            at_edge <= still_saturated,
+            "shouldn't get *more* occluded moving away from the edge \
+             (at_edge={at_edge}, still_saturated={still_saturated})"
+        );
+        assert!(
+            still_saturated < climbing && climbing < climbing_more && climbing_more < far,
+            "occlusion should climb smoothly back to unoccluded, not jump straight from fully \
+             occluded to fully clear (still_saturated={still_saturated}, climbing={climbing}, \
+             climbing_more={climbing_more}, far={far})"
         );
         assert!(
             far >= 254,
             "a pixel well outside every scale's reach should be fully unoccluded (got {far})"
+        );
+    }
+
+    /// Regression test for a reported bug: a sharply-pointed shape (the
+    /// owner's example was Shape's Leaf kind, curvature cranked up for a
+    /// sharp tip) showed a visible gap in the occlusion halo right at each
+    /// point — a blur-based comparison dilutes a thin feature's influence
+    /// on nearby background down to almost nothing, so the halo vanished
+    /// exactly where the shape narrowed to a tip, even though it wrapped
+    /// the rest of the (broader) silhouette correctly. The pixel
+    /// immediately outside a sharp tip must now be clearly occluded, not
+    /// fully white.
+    #[test]
+    fn a_sharp_point_is_occluded_with_no_gap_in_the_halo() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        shape_dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            RESOLUTION,
+            &ShapeParams {
+                kind: ShapeKind::Leaf,
+                curvature_top: 4.0,
+                curvature_bottom: 4.0,
+                ..ShapeParams::default()
+            },
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            "output",
+            RESOLUTION,
+            &HeightToAoParams::default(),
+        );
+        let pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
+        // The shape is centered and symmetric about the vertical midline,
+        // with its top tip a handful of pixels below y=0 at this size/
+        // resolution — y=16 sits just outside the tip, in the gap the old
+        // blur-based version left fully white.
+        let cx = RESOLUTION / 2;
+        let just_outside_tip = pixels[((16 * RESOLUTION + cx) * 4) as usize];
+        assert!(
+            just_outside_tip < 200,
+            "the point immediately outside a sharp tip should be clearly occluded, not left in \
+             a gap (got {just_outside_tip})"
         );
     }
 }

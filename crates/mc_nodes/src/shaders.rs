@@ -70,6 +70,7 @@ fn embedded_source(file_name: &str) -> &'static str {
         "edge_detect.wgsl" => include_str!("../shaders/edge_detect.wgsl"),
         "slope_blur.wgsl" => include_str!("../shaders/slope_blur.wgsl"),
         "height_to_ao.wgsl" => include_str!("../shaders/height_to_ao.wgsl"),
+        "height_to_ao_dilate.wgsl" => include_str!("../shaders/height_to_ao_dilate.wgsl"),
         "curvature_from_normal.wgsl" => include_str!("../shaders/curvature_from_normal.wgsl"),
         "channel_split.wgsl" => include_str!("../shaders/channel_split.wgsl"),
         "block_shift.wgsl" => include_str!("../shaders/block_shift.wgsl"),
