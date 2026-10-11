@@ -149,6 +149,20 @@ const TYPE_PRESERVING_KINDS: &[&str] = &[
     "scanline_jitter",
     "ordered_dither",
     "data_corrupt",
+    // Added in the same audit that caught Blend (see `effective_output_type`'s
+    // "blend" special case): every one of these reads its *whole* input
+    // texel (full vec4 — base/blur/offset/resample math, no luminance
+    // reduction) and writes it straight back out, so a Gray-broadcast input
+    // (R=G=B) comes out exactly as Gray-broadcast, same as the originally
+    // fixed Levels/Invert/Clamp/Threshold/Curve group — verified by reading
+    // each one's own .wgsl file, not assumed from its category.
+    "histogram_scan",
+    "blur",
+    "warp",
+    "transform2d",
+    "directional_blur",
+    "directional_warp",
+    "slope_blur",
 ];
 
 /// The name of the port `effective_output_type` should follow upstream for a
@@ -1654,10 +1668,17 @@ static NODE_DEFS: &[NodeDef] = &[
             display_name: "Input",
             port_type: PortType::Color,
         }],
+        // Not type-preserving like its neighbors above — its own .wgsl file
+        // reduces the input to luminance and broadcasts the Sobel gradient
+        // magnitude of *that* back out to every channel, so the output is
+        // always Gray-equivalent (R=G=B) regardless of whether the input
+        // was genuine Color or a Gray broadcast. A real converter, same
+        // category as Grayscale Conversion/Curvature from Normal, not a
+        // passthrough that happens to need its real type resolved.
         outputs: &[PortSpec {
             name: "output",
             display_name: "Output",
-            port_type: PortType::Color,
+            port_type: PortType::Gray,
         }],
         params: &[ParamSpec {
             name: "intensity",
@@ -2359,6 +2380,75 @@ mod tests {
 
         assert_eq!(
             effective_output_type(&graph, levels, "levels", PortType::Color),
+            PortType::Gray
+        );
+    }
+
+    /// Regression test for the wider audit this prompted ("a bunch of other
+    /// nodes... pretend to be color value"): Transform 2D (and its
+    /// newly-added neighbors) fed a Gray source must report Gray, the exact
+    /// same bug class as the original Levels/Blend fixes, just not caught
+    /// the first time around.
+    #[test]
+    fn newly_audited_type_preserving_nodes_follow_a_gray_source() {
+        for kind in ["histogram_scan", "blur", "transform2d", "directional_blur"] {
+            let mut graph = Graph::new();
+            let noise = graph.add_node(Node::new("perlin_noise"));
+            let node = graph.add_node(Node::new(kind));
+            graph.connect(noise, "output", node, "input").unwrap();
+
+            assert_eq!(
+                effective_output_type(&graph, node, kind, PortType::Color),
+                PortType::Gray,
+                "{kind} should report Gray when fed a Gray source"
+            );
+        }
+    }
+
+    /// Warp, Push Warp, and Flow Blur each take a *second*, Gray-only
+    /// "intensity"/"control" input that drives the distortion but isn't
+    /// itself part of the output's content — the effective type must follow
+    /// the main "input" port only, not get confused by that second port.
+    #[test]
+    fn dual_input_type_preserving_nodes_follow_their_main_input_only() {
+        for (kind, second_port) in [
+            ("warp", "intensity"),
+            ("directional_warp", "intensity"),
+            ("slope_blur", "control"),
+        ] {
+            let mut graph = Graph::new();
+            let main_source = graph.add_node(Node::new("perlin_noise")); // Gray
+            let control_source = graph.add_node(Node::new("perlin_noise")); // Gray too
+            let node = graph.add_node(Node::new(kind));
+            graph.connect(main_source, "output", node, "input").unwrap();
+            graph
+                .connect(control_source, "output", node, second_port)
+                .unwrap();
+
+            assert_eq!(
+                effective_output_type(&graph, node, kind, PortType::Color),
+                PortType::Gray,
+                "{kind} should follow its main input's type"
+            );
+        }
+    }
+
+    /// Edge Detect is a real converter, not a passthrough: its own .wgsl
+    /// reduces the input to luminance and broadcasts that back out, so the
+    /// output is always Gray-equivalent regardless of whether the input was
+    /// genuine Color or a Gray broadcast — declared statically Gray, not
+    /// resolved via the type-preserving mechanism at all.
+    #[test]
+    fn edge_detect_output_is_always_gray_even_with_a_color_input() {
+        let mut graph = Graph::new();
+        let color_source = graph.add_node(Node::new("uniform_color"));
+        let edge = graph.add_node(Node::new("edge_detect"));
+        graph
+            .connect(color_source, "output", edge, "input")
+            .unwrap();
+
+        assert_eq!(
+            effective_output_type(&graph, edge, "edge_detect", PortType::Gray),
             PortType::Gray
         );
     }
