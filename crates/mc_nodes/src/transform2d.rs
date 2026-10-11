@@ -5,6 +5,7 @@
 //! wrap-around tiling."
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "transform2d";
 
@@ -16,6 +17,7 @@ pub struct Transform2DParams {
     pub scale_y: f32,
     pub flip_x: bool,
     pub flip_y: bool,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for Transform2DParams {
@@ -28,6 +30,7 @@ impl Default for Transform2DParams {
             scale_y: 1.0,
             flip_x: false,
             flip_y: false,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -47,6 +50,13 @@ impl Transform2DParams {
                 .and_then(mc_core::ParamValue::as_bool)
                 .unwrap_or(default)
         };
+        let tiling_mode = params
+            .get("tiling_mode")
+            .and_then(|v| match v {
+                mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                _ => None,
+            })
+            .unwrap_or(defaults.tiling_mode);
         Self {
             offset_x: float("offset_x", defaults.offset_x),
             offset_y: float("offset_y", defaults.offset_y),
@@ -55,6 +65,7 @@ impl Transform2DParams {
             scale_y: float("scale_y", defaults.scale_y),
             flip_x: boolean("flip_x", defaults.flip_x),
             flip_y: boolean("flip_y", defaults.flip_y),
+            tiling_mode,
         }
     }
 }
@@ -129,8 +140,8 @@ pub fn dispatch(
     gpu.queue.submit(Some(encoder.finish()));
 }
 
-fn pack_params(resolution: u32, params: &Transform2DParams) -> [u8; 32] {
-    let mut bytes = [0u8; 32];
+fn pack_params(resolution: u32, params: &Transform2DParams) -> [u8; 48] {
+    let mut bytes = [0u8; 48];
     bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     bytes[4..8].copy_from_slice(&params.offset_x.to_le_bytes());
     bytes[8..12].copy_from_slice(&params.offset_y.to_le_bytes());
@@ -139,6 +150,7 @@ fn pack_params(resolution: u32, params: &Transform2DParams) -> [u8; 32] {
     bytes[20..24].copy_from_slice(&params.scale_y.to_le_bytes());
     bytes[24..28].copy_from_slice(&(params.flip_x as u32).to_le_bytes());
     bytes[28..32].copy_from_slice(&(params.flip_y as u32).to_le_bytes());
+    bytes[32..36].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     bytes
 }
 
@@ -147,6 +159,17 @@ mod tests {
     use super::{dispatch, Transform2DParams};
     use crate::perlin::{dispatch as perlin_dispatch, PerlinParams};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::tiling::TilingMode;
+
+    fn pixel_at(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let idx = ((y * RESOLUTION + x) * 4) as usize;
+        [
+            pixels[idx],
+            pixels[idx + 1],
+            pixels[idx + 2],
+            pixels[idx + 3],
+        ]
+    }
 
     fn render(params: &Transform2DParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -194,6 +217,96 @@ mod tests {
         let after = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
 
         assert_eq!(before, after, "identity transform must not change pixels");
+    }
+
+    /// Disabling horizontal tiling should clamp to the edge texel instead of
+    /// wrapping: with `offset_x = 0.5`, every output pixel left of center
+    /// backward-maps to a negative (out-of-range) sample x, which clamps to
+    /// the same column-0 texel for all of them — a flat run that wouldn't
+    /// exist if X still wrapped, since the Perlin input varies continuously.
+    #[test]
+    fn horizontal_tiling_off_clamps_instead_of_wrapping() {
+        let params = Transform2DParams {
+            offset_x: 0.5,
+            // Vertical stays wrapping — this isolates the X-axis toggle
+            // rather than disabling tiling wholesale.
+            tiling_mode: TilingMode::VerticalOnly,
+            ..Transform2DParams::default()
+        };
+        let pixels = render(&params);
+        let y = RESOLUTION / 2;
+        let a = pixel_at(&pixels, 0, y);
+        let b = pixel_at(&pixels, RESOLUTION / 4, y);
+        assert_eq!(
+            a, b,
+            "with horizontal tiling off, the clamped left half should repeat the same edge \
+             texel instead of varying"
+        );
+
+        // The same offset with the default (Both) mode must *not* produce
+        // that flat run, confirming the toggle is actually doing something.
+        let wrapped = render(&Transform2DParams {
+            offset_x: 0.5,
+            ..Transform2DParams::default()
+        });
+        assert_ne!(
+            pixel_at(&wrapped, 0, y),
+            pixel_at(&wrapped, RESOLUTION / 4, y),
+            "with tiling on (the default), the same offset should keep varying, not clamp flat"
+        );
+    }
+
+    /// Same idea as the horizontal case, mirrored onto Y.
+    #[test]
+    fn vertical_tiling_off_clamps_instead_of_wrapping() {
+        let params = Transform2DParams {
+            offset_y: 0.5,
+            tiling_mode: TilingMode::HorizontalOnly,
+            ..Transform2DParams::default()
+        };
+        let pixels = render(&params);
+        let x = RESOLUTION / 2;
+        let a = pixel_at(&pixels, x, 0);
+        let b = pixel_at(&pixels, x, RESOLUTION / 4);
+        assert_eq!(
+            a, b,
+            "with vertical tiling off, the clamped top half should repeat the same edge texel \
+             instead of varying"
+        );
+
+        let wrapped = render(&Transform2DParams {
+            offset_y: 0.5,
+            ..Transform2DParams::default()
+        });
+        assert_ne!(
+            pixel_at(&wrapped, x, 0),
+            pixel_at(&wrapped, x, RESOLUTION / 4),
+            "with tiling on (the default), the same offset should keep varying, not clamp flat"
+        );
+    }
+
+    /// `Off` disables both axes at once — spot-check it isn't secretly just
+    /// one axis by confirming both the horizontal and vertical flat-run
+    /// signatures from the two tests above show up together.
+    #[test]
+    fn tiling_off_clamps_both_axes() {
+        let params = Transform2DParams {
+            offset_x: 0.5,
+            offset_y: 0.5,
+            tiling_mode: TilingMode::Off,
+            ..Transform2DParams::default()
+        };
+        let pixels = render(&params);
+        assert_eq!(
+            pixel_at(&pixels, 0, RESOLUTION / 2),
+            pixel_at(&pixels, RESOLUTION / 4, RESOLUTION / 2),
+            "Off should clamp horizontally"
+        );
+        assert_eq!(
+            pixel_at(&pixels, RESOLUTION / 2, 0),
+            pixel_at(&pixels, RESOLUTION / 2, RESOLUTION / 4),
+            "Off should clamp vertically"
+        );
     }
 
     #[test]

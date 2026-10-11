@@ -162,6 +162,43 @@ fn wrap_coord(coord: i32, size: i32) -> i32 {
     return ((coord % size) + size) % size;
 }
 
+// Shared by any node with a "Tiling Mode" param (`mc_nodes::tiling::
+// TilingMode` on the Rust side — Transform 2D, Warp, Blur, ...): `flags`
+// packs wrap-X in bit 0, wrap-Y in bit 1, matching `TilingMode::as_u32`.
+// `Both` (every node's default, matching the always-on behavior before this
+// param existed) sets both bits.
+fn wraps_x(flags: u32) -> bool {
+    return (flags & 1u) != 0u;
+}
+
+fn wraps_y(flags: u32) -> bool {
+    return (flags & 2u) != 0u;
+}
+
+// Wraps or clamps a single axis of an integer texel coordinate that's gone
+// out of [0, size) from reading a neighboring pixel (a blur/warp/sharpen
+// tap) — `wrap_coord` when that axis should tile, clamp-to-edge (repeat the
+// border texel, the standard "don't tile" addressing mode) when it
+// shouldn't.
+fn tile_coord(coord: i32, size: i32, wrap: bool) -> i32 {
+    if wrap {
+        return wrap_coord(coord, size);
+    }
+    return clamp(coord, 0, size - 1);
+}
+
+// Same idea as `tile_coord`, for a single axis of a continuous UV backward-
+// mapped outside [0, 1) (e.g. Transform 2D's offset/rotated sample
+// position): `fract` when that axis should tile, clamp to the last valid
+// value otherwise so an offset that pushes content off one edge reveals a
+// stretched copy of the border pixel instead of the opposite edge's content.
+fn tile_uv(p: f32, wrap: bool) -> f32 {
+    if wrap {
+        return fract(p);
+    }
+    return clamp(p, 0.0, 0.999999);
+}
+
 // Tileable 2D Voronoi/Worley "cells": returns (F1, F2), the distances to the
 // nearest and second-nearest jittered points. Each cell gets one point,
 // placed randomly inside it and wrapped to `period` the same way `gradient`

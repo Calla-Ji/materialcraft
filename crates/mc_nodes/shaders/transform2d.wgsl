@@ -10,7 +10,11 @@
 //          params (identity transform) are always tileable.
 // Params:  offset_x, offset_y (-1..1), rotation (0..1, fraction of a turn),
 //          scale_x, scale_y (how many times smaller/larger), flip_x, flip_y
-//          (0/1 — mirror the input before offset/rotate/scale are applied).
+//          (0/1 — mirror the input before offset/rotate/scale are applied),
+//          tiling_mode (see `wraps_x`/`wraps_y` in common.wgsl — bit 0 wraps
+//          X, bit 1 wraps Y; an axis that doesn't wrap clamps to its edge
+//          instead, so content pushed past that edge clips rather than
+//          reappearing on the opposite side).
 
 struct Transform2DParams {
     resolution: u32,
@@ -21,6 +25,10 @@ struct Transform2DParams {
     scale_y: f32,
     flip_x: u32,
     flip_y: u32,
+    tiling_mode: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Transform2DParams;
@@ -52,7 +60,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     p = p + vec2<f32>(0.5, 0.5);
 
     let size = i32(params.resolution);
-    let sample_uv = fract(p);
+    let sample_uv = vec2<f32>(
+        tile_uv(p.x, wraps_x(params.tiling_mode)),
+        tile_uv(p.y, wraps_y(params.tiling_mode)),
+    );
     let coord = vec2<i32>(
         clamp(i32(sample_uv.x * f32(params.resolution)), 0, size - 1),
         clamp(i32(sample_uv.y * f32(params.resolution)), 0, size - 1),

@@ -48,6 +48,7 @@ pub mod slope_blur;
 mod test_support;
 pub mod threshold;
 pub mod tile_generator;
+pub mod tiling;
 pub mod transform2d;
 pub mod uniform_color;
 pub mod voronoi;

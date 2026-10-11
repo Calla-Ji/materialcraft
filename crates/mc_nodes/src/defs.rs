@@ -1153,6 +1153,18 @@ static NODE_DEFS: &[NodeDef] = &[
                 tooltip: "Mirrors the input top-to-bottom.",
                 kind: ParamSpecKind::Bool { default: false },
             },
+            ParamSpec {
+                name: "tiling_mode",
+                display_name: "Tiling",
+                tooltip: "An offset/rotation/scale that pushes content past a tile edge \
+                          normally wraps it around to the opposite edge, to stay seamless. \
+                          Turn an axis off here if you'd rather that content just clip at the \
+                          edge instead of reappearing on the other side.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::tiling::TilingMode::NAMES,
+                    default: "Both (Seamless)",
+                },
+            },
         ],
     },
     NodeDef {
