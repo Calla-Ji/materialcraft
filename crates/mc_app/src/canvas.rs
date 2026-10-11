@@ -108,10 +108,50 @@ fn screen_to_graph(origin: Pos2, pan: Vec2, zoom: f32, s: Pos2) -> Pos2 {
     (pan + (s - origin) / zoom).to_pos2()
 }
 
+/// A faint grid of dots over the canvas background ("a light dot grid in
+/// twinkling grey") — drawn in graph space so it pans/zooms with the camera
+/// like every other node editor's background grid, rather than staying
+/// fixed to the screen.
+const GRID_BASE_SPACING: f32 = 24.0;
+
+fn draw_dot_grid(painter: &egui::Painter, canvas_rect: Rect, origin: Pos2, pan: Vec2, zoom: f32) {
+    // Keeps on-screen dot spacing within a sane range regardless of zoom: at
+    // a fixed graph-space spacing, zooming out would either draw an
+    // impractical number of dots or (if simply capped) show visibly uneven
+    // density. Doubling the spacing in graph space instead keeps the
+    // on-screen density roughly constant.
+    let mut spacing = GRID_BASE_SPACING;
+    while spacing * zoom < 16.0 {
+        spacing *= 2.0;
+    }
+
+    let top_left = screen_to_graph(origin, pan, zoom, canvas_rect.min);
+    let bottom_right = screen_to_graph(origin, pan, zoom, canvas_rect.max);
+    let start_x = (top_left.x / spacing).floor() as i64;
+    let end_x = (bottom_right.x / spacing).ceil() as i64;
+    let start_y = (top_left.y / spacing).floor() as i64;
+    let end_y = (bottom_right.y / spacing).ceil() as i64;
+
+    let color = crate::theme::TWINKLING_GREY.gamma_multiply(0.15);
+    for gy in start_y..=end_y {
+        for gx in start_x..=end_x {
+            let p = graph_to_screen(
+                origin,
+                pan,
+                zoom,
+                Pos2::new(gx as f32 * spacing, gy as f32 * spacing),
+            );
+            if canvas_rect.contains(p) {
+                painter.circle_filled(p, 1.0, color);
+            }
+        }
+    }
+}
+
 fn port_color(port_type: PortType) -> Color32 {
     match port_type {
         PortType::Gray => Color32::from_gray(200),
-        PortType::Color => Color32::from_rgb(230, 150, 60),
+        PortType::Color => crate::theme::PINK_DWARF,
     }
 }
 
@@ -295,7 +335,13 @@ fn try_connect(graph: &mut mc_core::Graph, history: &mut mc_core::History, a: Pi
     let Some(to_port) = node_def_of(graph, to_node).and_then(|d| d.inputs.get(to_index)) else {
         return;
     };
-    if !mc_nodes::defs::ports_compatible(from_port.port_type, to_port.port_type) {
+    let from_kind = graph
+        .node(from_node)
+        .map(|n| n.kind.clone())
+        .unwrap_or_default();
+    let from_type =
+        mc_nodes::defs::effective_output_type(graph, from_node, &from_kind, from_port.port_type);
+    if !mc_nodes::defs::ports_compatible(from_type, to_port.port_type) {
         return;
     }
     if let Ok(tx) = graph.connect_transaction(from_node, from_port.name, to_node, to_port.name) {
@@ -339,13 +385,19 @@ pub fn show(
     // scroll-wheel signal, which is why a swipe looked like "nodes pushing
     // closer together" instead of the view sliding.
     //
-    // Gated on the pointer being anywhere inside the canvas, not on
-    // `bg_response.hovered()` — a node's own interact region (added later,
-    // so it z-order-wins the hover over the background's) would otherwise
-    // swallow it, making pinch-zoom and pan silently stop working the
-    // moment the cursor crossed over a node.
+    // Gated on the pointer being anywhere inside the canvas *and* this
+    // canvas's own layer being the topmost one there — not on
+    // `bg_response.hovered()` (a node's own interact region, added later,
+    // z-order-wins the hover over the background's, which used to make
+    // pinch-zoom and pan silently stop working the moment the cursor
+    // crossed over a node), but also not on `canvas_rect.contains(pointer)`
+    // alone (that doesn't know about a foreground popup like the add-node
+    // menu sitting on top — its own scroll area would otherwise fight the
+    // canvas for the same scroll gesture, with the canvas panning *behind*
+    // the popup at the same time the popup scrolled its list).
+    let canvas_layer = ui.layer_id();
     if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) {
-        if canvas_rect.contains(pointer) {
+        if canvas_rect.contains(pointer) && ui.ctx().layer_id_at(pointer) == Some(canvas_layer) {
             let zoom_delta = ui.input(|i| i.zoom_delta());
             if zoom_delta != 1.0 {
                 let graph_pt = screen_to_graph(origin, canvas.pan, canvas.zoom, pointer);
@@ -360,6 +412,7 @@ pub fn show(
     }
 
     let painter = ui.painter_at(canvas_rect);
+    draw_dot_grid(&painter, canvas_rect, origin, canvas.pan, canvas.zoom);
 
     // Pass 1: node screen rects (read-only — needed before any drawing so
     // wires can be drawn *behind* nodes).
@@ -388,10 +441,12 @@ pub fn show(
             continue;
         };
         for (i, port) in def.outputs.iter().enumerate() {
+            let port_type =
+                mc_nodes::defs::effective_output_type(graph, id, &node.kind, port.port_type);
             pins.push(PinInfo {
                 r: PinRef::Output { node: id, index: i },
                 pos: pin_pos(rect, true, i, canvas.zoom),
-                port_type: port.port_type,
+                port_type,
             });
         }
         for (i, port) in def.inputs.iter().enumerate() {
@@ -503,11 +558,11 @@ pub fn show(
 
         let zoom = canvas.zoom;
         let is_selected = canvas.selected.contains(&id);
-        let fill = Color32::from_gray(35);
+        let fill = crate::theme::WORMHOLE_GREY;
         let stroke = if is_selected {
-            Stroke::new(2.0, Color32::from_rgb(90, 160, 255))
+            Stroke::new(1.0, crate::theme::SUPERNOVA_LIGHT)
         } else {
-            Stroke::new(1.0, Color32::from_gray(70))
+            Stroke::new(1.0, crate::theme::TWINKLING_GREY)
         };
         painter.rect(rect, 4.0 * zoom, fill, stroke, StrokeKind::Inside);
         painter.line_segment(
@@ -515,7 +570,7 @@ pub fn show(
                 Pos2::new(rect.min.x, rect.min.y + HEADER_HEIGHT * zoom),
                 Pos2::new(rect.max.x, rect.min.y + HEADER_HEIGHT * zoom),
             ],
-            Stroke::new(1.0, Color32::from_gray(60)),
+            Stroke::new(1.0, crate::theme::TWINKLING_GREY.gamma_multiply(0.5)),
         );
         let title_font = egui::FontId::proportional(14.0 * zoom);
         let title_max_width = (NODE_WIDTH - HEADER_TEXT_LEFT - HEADER_TEXT_RIGHT_RESERVED) * zoom;
@@ -533,7 +588,7 @@ pub fn show(
             egui::Align2::LEFT_CENTER,
             title_text,
             title_font,
-            Color32::WHITE,
+            crate::theme::SUPERNOVA_LIGHT,
         );
 
         // Delete indicator: same idea as the preview dot below, for the
@@ -573,9 +628,9 @@ pub fn show(
             preview_dot_pos,
             PREVIEW_DOT_RADIUS * zoom,
             if *selected == Some(id) {
-                Color32::from_rgb(90, 160, 255)
+                crate::theme::SUPERNOVA_LIGHT
             } else {
-                Color32::from_gray(120)
+                crate::theme::TWINKLING_GREY.gamma_multiply(0.6)
             },
         );
         let preview_dot_id = ui.id().with(("mc_preview_dot", id));
@@ -612,17 +667,12 @@ pub fn show(
                     .or(Some(PinRef::Input { node: id, index: i }));
             }
         }
+        let node_kind = graph.node(id).map(|n| n.kind.clone()).unwrap_or_default();
         for (i, port) in def.outputs.iter().enumerate() {
             let p = pin_pos(rect, true, i, zoom);
-            draw_pin(
-                ui,
-                &painter,
-                p,
-                port.port_type,
-                port.display_name,
-                true,
-                zoom,
-            );
+            let port_type =
+                mc_nodes::defs::effective_output_type(graph, id, &node_kind, port.port_type);
+            draw_pin(ui, &painter, p, port_type, port.display_name, true, zoom);
             let pin_id = ui.id().with(("mc_pin_out", id, i));
             let pin_rect = Rect::from_center_size(p, Vec2::splat(PIN_HIT_RADIUS * zoom * 2.0));
             let pin_resp = ui.interact(pin_rect, pin_id, Sense::click_and_drag());
@@ -746,11 +796,12 @@ pub fn show(
     if let Some(start) = canvas.box_select_start {
         if let Some(cur) = bg_response.interact_pointer_pos() {
             let select_rect = Rect::from_two_pos(start, cur);
+            let accent = crate::theme::SUPERNOVA_LIGHT;
             painter.rect(
                 select_rect,
                 0.0,
-                Color32::from_rgba_unmultiplied(90, 160, 255, 40),
-                Stroke::new(1.0, Color32::from_rgb(90, 160, 255)),
+                Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 40),
+                Stroke::new(1.0, accent),
                 StrokeKind::Inside,
             );
         }
