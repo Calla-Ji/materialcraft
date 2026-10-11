@@ -19,8 +19,13 @@ struct Uniforms {
     // surface (see `fs_main`'s `ambient_diffuse`).
     ambient_color: vec4<f32>,
     height_scale: f32,
-    _pad0: f32,
-    _pad1: f32,
+    // > 0.5 bypasses PBR shading entirely and outputs Base Color directly
+    // (still sRGB-encoded) — a ground-truth view for comparing against the
+    // 2D View and an exported PNG, since none of exposure/tonemapping/
+    // lighting can introduce a mismatch when none of it runs.
+    shading_mode: f32,
+    // Multiplies linear color before tonemapping (lit mode only).
+    exposure: f32,
     _pad2: f32,
 }
 
@@ -90,6 +95,17 @@ fn sky_color(direction: vec3<f32>) -> vec3<f32> {
     return textureSample(environment_tex, tex_sampler, equirect_uv(direction)).rgb;
 }
 
+// The exact piecewise sRGB OETF (same curve `mc_export::linear_to_srgb_u8`
+// and `display_encode.wgsl` use) rather than an approximate `pow(x, 1/2.2)`
+// — this view is compared pixel-for-pixel against the 2D View and exported
+// PNGs (Unlit Base Color mode), so it needs the same curve they use, not a
+// close-enough one.
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let low = c * 12.92;
+    let high = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(high, low, c <= vec3<f32>(0.0031308));
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let geometric_normal = normalize(in.world_normal);
@@ -114,6 +130,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let v_dot_h = max(dot(v, h), 0.0);
 
     let base_color = textureSample(base_color_tex, tex_sampler, in.uv).rgb;
+
+    if uniforms.shading_mode > 0.5 {
+        return vec4<f32>(linear_to_srgb(base_color), 1.0);
+    }
+
     let roughness = clamp(textureSample(roughness_tex, tex_sampler, in.uv).r, 0.04, 1.0);
     let metallic = textureSample(metallic_tex, tex_sampler, in.uv).r;
     let ao = textureSample(ao_tex, tex_sampler, in.uv).r;
@@ -158,12 +179,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let specular_strength = pow(1.0 - roughness, 3.0);
     let ambient_specular = sky_color(reflection) * f * ao * specular_strength;
 
-    let color = direct + ambient_diffuse + ambient_specular;
+    let color = (direct + ambient_diffuse + ambient_specular) * uniforms.exposure;
 
     // Reinhard tonemap + display gamma, since this texture is shown directly
     // to the user rather than fed back into the linear pipeline.
     let tonemapped = color / (color + vec3<f32>(1.0));
-    let gamma_corrected = pow(tonemapped, vec3<f32>(1.0 / 2.2));
+    let gamma_corrected = linear_to_srgb(tonemapped);
 
     return vec4<f32>(gamma_corrected, 1.0);
 }

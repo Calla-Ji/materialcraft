@@ -71,7 +71,8 @@ pub struct Viewport3d {
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
+    sampler_smooth: wgpu::Sampler,
+    sampler_pixel: wgpu::Sampler,
     // Built lazily and rebuilt whenever `(mesh_kind, tessellation)` changes,
     // rather than every `MeshKind` pre-built once at a fixed quality — see
     // `tessellated_mesh`. The tessellation value is rounded to a whole
@@ -91,9 +92,33 @@ pub struct Viewport3d {
     pub mesh_kind: MeshKind,
     pub height_scale: f32,
     pub tessellation: f32,
+    pub shading_mode: ShadingMode,
+    pub exposure: f32,
+    pub texture_filter: TextureFilter,
     yaw: f32,
     pitch: f32,
     distance: f32,
+}
+
+/// "Smooth" is trilinear + 16x anisotropic — the normal case. "Pixel"
+/// disables all interpolation (texel and mip), for inspecting dither/
+/// pixel-art materials without any blending softening the exact pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextureFilter {
+    #[default]
+    Smooth,
+    Pixel,
+}
+
+/// A debug ground-truth view (CLAUDE.md §8's linear/sRGB discipline):
+/// bypasses PBR shading and exposure/tonemapping entirely, outputting Base
+/// Color with just the sRGB encode applied — for comparing pixel-for-pixel
+/// against the 2D View and an exported PNG.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShadingMode {
+    #[default]
+    Lit,
+    UnlitBaseColor,
 }
 
 impl Viewport3d {
@@ -211,14 +236,33 @@ impl Viewport3d {
             }],
         });
 
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("viewport3d sampler"),
+        // Anisotropic filtering needs mag/min/mipmap filter all `Linear` to
+        // take effect at all (a wgpu validation requirement) — sharpens
+        // textures viewed at a glancing angle, where trilinear alone still
+        // blurs heavily since it can only pick an isotropic (square) mip
+        // footprint for a genuinely elongated one.
+        let sampler_smooth = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("viewport3d sampler (smooth)"),
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             address_mode_w: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: 16,
+            ..Default::default()
+        });
+        // No interpolation at all, mip or texel — for inspecting dither/
+        // pixel-art materials crisply, where any blending (even between
+        // adjacent texels at mip 0) muddies the exact pattern.
+        let sampler_pixel = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("viewport3d sampler (pixel)"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -261,7 +305,8 @@ impl Viewport3d {
             uniform_buffer,
             uniform_bind_group,
             texture_bind_group_layout,
-            sampler,
+            sampler_smooth,
+            sampler_pixel,
             current_mesh,
             current_mesh_key,
             fallback,
@@ -274,6 +319,9 @@ impl Viewport3d {
             mesh_kind: MeshKind::Sphere,
             height_scale: 0.15,
             tessellation: initial_tessellation,
+            shading_mode: ShadingMode::default(),
+            exposure: 1.0,
+            texture_filter: TextureFilter::default(),
             yaw: 0.6,
             pitch: 0.35,
             distance: 3.0,
@@ -338,52 +386,66 @@ impl Viewport3d {
 
     fn build_texture_bind_group(
         &self,
-        device: &wgpu::Device,
+        gpu: &mut mc_gpu::Context,
         pool: &mc_gpu::TexturePool,
         graph: &mc_core::Graph,
     ) -> wgpu::BindGroup {
-        let base_color =
-            resolve_channel(graph, pool, "output_base_color").unwrap_or(&self.fallback.base_color);
-        let normal = resolve_channel(graph, pool, "output_normal").unwrap_or(&self.fallback.normal);
-        let roughness =
-            resolve_channel(graph, pool, "output_roughness").unwrap_or(&self.fallback.roughness);
-        let metallic =
-            resolve_channel(graph, pool, "output_metallic").unwrap_or(&self.fallback.metallic);
-        let ao =
-            resolve_channel(graph, pool, "output_ambient_occlusion").unwrap_or(&self.fallback.ao);
-        let height = resolve_channel(graph, pool, "output_height").unwrap_or(&self.fallback.height);
+        // Resolves `kind`'s channel to a view spanning its *entire* mip
+        // chain (regenerating that chain first), or the 1x1 fallback —
+        // which has only one mip to begin with, so it's used as-is.
+        // `wgpu::TextureView` is a cheap `Clone` (a GPU-side handle, not a
+        // borrow of `pool`), so there's no need to keep anything alive
+        // beyond this closure call.
+        let mut channel_view = |kind: &str, is_normal_map: bool, fallback: &wgpu::TextureView| {
+            let Some(key) = resolve_channel_key(graph, kind) else {
+                return fallback.clone();
+            };
+            crate::mipgen::generate_mip_chain(gpu, pool, &key, is_normal_map);
+            crate::mipgen::full_mip_view(pool, &key).unwrap_or_else(|| fallback.clone())
+        };
 
+        let base_color = channel_view("output_base_color", false, &self.fallback.base_color);
+        let normal = channel_view("output_normal", true, &self.fallback.normal);
+        let roughness = channel_view("output_roughness", false, &self.fallback.roughness);
+        let metallic = channel_view("output_metallic", false, &self.fallback.metallic);
+        let ao = channel_view("output_ambient_occlusion", false, &self.fallback.ao);
+        let height = channel_view("output_height", false, &self.fallback.height);
+
+        let device = &gpu.device;
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("viewport3d textures bind group"),
             layout: &self.texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(base_color),
+                    resource: wgpu::BindingResource::TextureView(&base_color),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(normal),
+                    resource: wgpu::BindingResource::TextureView(&normal),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(roughness),
+                    resource: wgpu::BindingResource::TextureView(&roughness),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(metallic),
+                    resource: wgpu::BindingResource::TextureView(&metallic),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(ao),
+                    resource: wgpu::BindingResource::TextureView(&ao),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: wgpu::BindingResource::TextureView(height),
+                    resource: wgpu::BindingResource::TextureView(&height),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::Sampler(match self.texture_filter {
+                        TextureFilter::Smooth => &self.sampler_smooth,
+                        TextureFilter::Pixel => &self.sampler_pixel,
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
@@ -399,7 +461,7 @@ impl Viewport3d {
     /// side can just keep displaying the same id).
     pub fn render(
         &mut self,
-        gpu: &mc_gpu::Context,
+        gpu: &mut mc_gpu::Context,
         pool: &mc_gpu::TexturePool,
         graph: &mc_core::Graph,
         render_state: &egui_wgpu::RenderState,
@@ -426,10 +488,12 @@ impl Viewport3d {
             light_dir,
             self.environment_ambient_color,
             self.height_scale,
+            self.shading_mode,
+            self.exposure,
         );
         gpu.queue.write_buffer(&self.uniform_buffer, 0, &bytes);
 
-        let texture_bind_group = self.build_texture_bind_group(&gpu.device, pool, graph);
+        let texture_bind_group = self.build_texture_bind_group(gpu, pool, graph);
 
         let desired_key = (self.mesh_kind, tessellation_bucket(self.tessellation));
         if desired_key != self.current_mesh_key {
@@ -520,20 +584,16 @@ fn texture_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGrou
     }
 }
 
-/// The graph's texture for one Output kind (e.g. `"output_base_color"`), if
-/// the graph has that Output node and it resolves to something. Mirrors
-/// `mc_nodes::export::read_output`'s lookup, minus the readback.
-fn resolve_channel<'a>(
-    graph: &mc_core::Graph,
-    pool: &'a mc_gpu::TexturePool,
-    kind: &str,
-) -> Option<&'a wgpu::TextureView> {
+/// The graph's texture pool key for one Output kind (e.g.
+/// `"output_base_color"`), if the graph has that Output node and it
+/// resolves to something. Mirrors `mc_nodes::export::read_output`'s lookup,
+/// minus the readback.
+fn resolve_channel_key(graph: &mc_core::Graph, kind: &str) -> Option<String> {
     let id = graph
         .nodes()
         .find(|(_, n)| n.kind == kind)
         .map(|(id, _)| id)?;
-    let key = mc_nodes::registry::resolve_texture_key(graph, id)?;
-    pool.view(&key)
+    mc_nodes::registry::resolve_texture_key(graph, id)
 }
 
 fn solid_view(
@@ -641,6 +701,8 @@ fn uniform_bytes(
     light_dir: Vec3,
     ambient_color: Vec3,
     height_scale: f32,
+    shading_mode: ShadingMode,
+    exposure: f32,
 ) -> [u8; UNIFORM_SIZE] {
     let mut bytes = [0u8; UNIFORM_SIZE];
     let mut offset = 0;
@@ -661,8 +723,12 @@ fn uniform_bytes(
         put(component, &mut bytes, &mut offset);
     }
     put(height_scale, &mut bytes, &mut offset);
-    put(0.0, &mut bytes, &mut offset);
-    put(0.0, &mut bytes, &mut offset);
+    let shading_mode_value = match shading_mode {
+        ShadingMode::Lit => 0.0,
+        ShadingMode::UnlitBaseColor => 1.0,
+    };
+    put(shading_mode_value, &mut bytes, &mut offset);
+    put(exposure, &mut bytes, &mut offset);
     put(0.0, &mut bytes, &mut offset);
     bytes
 }

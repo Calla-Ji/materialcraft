@@ -226,6 +226,16 @@ impl TexturePool {
             None => true,
         };
         if needs_create {
+            // Every pool texture gets a full mip chain allocated, even
+            // though only the 6 PBR channel textures the 3D viewport reads
+            // (`mc_app::mipgen`) ever actually have mips beyond 0 computed —
+            // the extra levels just sit unused (and unsampled, since nothing
+            // ever binds a full-mip-range view of an intermediate node's
+            // texture) for any other node. Simpler than a second texture
+            // path just for "the 6 that matter," at the cost of ~33% more
+            // VRAM per texture, which isn't a concern at this project's
+            // scale.
+            let mip_level_count = size.max(1).ilog2() + 1;
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(key),
                 size: wgpu::Extent3d {
@@ -233,7 +243,7 @@ impl TexturePool {
                     height: size,
                     depth_or_array_layers: 1,
                 },
-                mip_level_count: 1,
+                mip_level_count,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
@@ -243,7 +253,20 @@ impl TexturePool {
                     | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            // Pinned to mip 0 only, regardless of how many mips the texture
+            // actually has: every existing caller (compute-shader storage
+            // write targets, `textureLoad` reads, the 2D View/thumbnails)
+            // expects exactly mip 0, and a storage-texture binding requires
+            // a single-mip view anyway — wgpu rejects a multi-mip view
+            // there. `mc_app::mipgen::full_mip_view` creates the
+            // all-mips view the 3D viewport's sampler actually needs,
+            // separately, on demand.
+            let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                label: None,
+                base_mip_level: 0,
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
             self.textures.insert(key.to_string(), (texture, view));
         }
         &self

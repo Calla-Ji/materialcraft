@@ -694,7 +694,10 @@ pub fn show(
             Vec2::splat(THUMBNAIL_SIZE * zoom),
         );
         if let Some(key) = mc_nodes::registry::resolve_texture_key(graph, id) {
-            if let Some(view) = pool.view(&key).cloned() {
+            // Thumbnails are node output, which is linear — see
+            // `display_encode.rs` for why this has to be a real encode pass,
+            // not just handing egui the raw (linear) texture view.
+            if let Some(view) = crate::display_encode::encode_for_display(gpu, pool, &key) {
                 let texture_id = match thumbnail_ids.get(&id).copied() {
                     Some(tex_id) => {
                         render_state

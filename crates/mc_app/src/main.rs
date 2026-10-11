@@ -10,9 +10,11 @@
 
 mod add_node_menu;
 mod canvas;
+mod display_encode;
 mod dock;
 mod export_dialog;
 mod hdri;
+mod mipgen;
 mod params_panel;
 mod theme;
 mod viewport3d;
@@ -274,6 +276,47 @@ impl eframe::App for MaterialCraftApp {
                                     egui::Slider::new(&mut viewport3d.tessellation, 0.0..=1.0)
                                         .text("Tessellation Density"),
                                 );
+                                ui.separator();
+                                let mut unlit = viewport3d.shading_mode
+                                    == viewport3d::ShadingMode::UnlitBaseColor;
+                                if ui
+                                    .checkbox(&mut unlit, "Unlit Base Color")
+                                    .on_hover_text(
+                                        "Shows Base Color directly, with no lighting, \
+                                         exposure, or tonemapping \u{2014} for checking it \
+                                         matches the 2D View and an exported PNG exactly.",
+                                    )
+                                    .changed()
+                                {
+                                    viewport3d.shading_mode = if unlit {
+                                        viewport3d::ShadingMode::UnlitBaseColor
+                                    } else {
+                                        viewport3d::ShadingMode::Lit
+                                    };
+                                }
+                                ui.add_enabled(
+                                    !unlit,
+                                    egui::Slider::new(&mut viewport3d.exposure, 0.1..=4.0)
+                                        .text("Exposure"),
+                                );
+                                ui.separator();
+                                let mut pixel_filter =
+                                    viewport3d.texture_filter == viewport3d::TextureFilter::Pixel;
+                                if ui
+                                    .checkbox(&mut pixel_filter, "Pixel / Nearest Filtering")
+                                    .on_hover_text(
+                                        "Disables all texture smoothing (texel and mip) \u{2014} \
+                                         for inspecting dither and pixel-art materials crisply \
+                                         instead of blended.",
+                                    )
+                                    .changed()
+                                {
+                                    viewport3d.texture_filter = if pixel_filter {
+                                        viewport3d::TextureFilter::Pixel
+                                    } else {
+                                        viewport3d::TextureFilter::Smooth
+                                    };
+                                }
                             }
                             viewport3d_panels::PanelKind::Camera
                             | viewport3d_panels::PanelKind::Environment => {}
@@ -487,7 +530,11 @@ impl MaterialCraftApp {
     fn preview_texture(&mut self) -> Option<egui::TextureId> {
         let id = self.selected?;
         let key = mc_nodes::registry::resolve_texture_key(&self.graph, id)?;
-        let view = self.pool.view(&key)?.clone();
+        // Node textures are linear; egui never decodes what it's given, so
+        // this view has to already be sRGB-encoded or the preview reads too
+        // dark/off relative to the 3D viewport and an exported PNG — see
+        // `display_encode.rs`.
+        let view = crate::display_encode::encode_for_display(&mut self.gpu, &mut self.pool, &key)?;
 
         Some(match self.preview_texture_id {
             Some(texture_id) => {
