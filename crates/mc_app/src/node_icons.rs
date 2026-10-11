@@ -32,6 +32,7 @@ pub fn icon_for_kind(kind: &str) -> char {
         "histogram_scan" => '\u{e915}',           // compare_arrows
         "threshold" => '\u{e3ca}',                // exposure
         "blur" => '\u{e3a5}',                     // blur_on
+        "bevel" => '\u{e920}',                    // rounded_corner
         "warp" => '\u{e176}',                     // waves
         "transform2d" => '\u{e428}',              // transform
         "directional_blur" => '\u{e3a3}',         // blur_linear

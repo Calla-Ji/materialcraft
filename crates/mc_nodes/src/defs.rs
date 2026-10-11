@@ -163,6 +163,7 @@ const TYPE_PRESERVING_KINDS: &[&str] = &[
     "directional_blur",
     "directional_warp",
     "slope_blur",
+    "bevel",
 ];
 
 /// The name of the port `effective_output_type` should follow upstream for a
@@ -985,6 +986,46 @@ static NODE_DEFS: &[NodeDef] = &[
                 default: 0.01,
             },
         }],
+    },
+    NodeDef {
+        kind: "bevel",
+        display_name: "Bevel",
+        category: "Filters/Spatial",
+        tooltip: "Rounds a mask or height input's edges into a beveled height map — chain \
+                  into Height to Normal for the usual beveled-edge look.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "distance",
+                display_name: "Distance",
+                tooltip: "How far the bevel reaches from an edge, in UV space.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.2,
+                    default: 0.05,
+                },
+            },
+            ParamSpec {
+                name: "convexity",
+                display_name: "Convexity",
+                tooltip: "0 is a plain linear chamfer; positive rounds the edge convex (a \
+                          dome), negative makes it concave (a scoop).",
+                kind: ParamSpecKind::Float {
+                    min: -1.0,
+                    max: 1.0,
+                    default: 0.3,
+                },
+            },
+        ],
     },
     NodeDef {
         kind: "warp",
@@ -2392,7 +2433,13 @@ mod tests {
     /// the first time around.
     #[test]
     fn newly_audited_type_preserving_nodes_follow_a_gray_source() {
-        for kind in ["histogram_scan", "blur", "transform2d", "directional_blur"] {
+        for kind in [
+            "histogram_scan",
+            "blur",
+            "transform2d",
+            "directional_blur",
+            "bevel",
+        ] {
             let mut graph = Graph::new();
             let noise = graph.add_node(Node::new("perlin_noise"));
             let node = graph.add_node(Node::new(kind));

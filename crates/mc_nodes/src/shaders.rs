@@ -40,6 +40,7 @@ fn embedded_source(file_name: &str) -> &'static str {
         "common.wgsl" => include_str!("../shaders/common.wgsl"),
         "perlin_noise.wgsl" => include_str!("../shaders/perlin_noise.wgsl"),
         "levels.wgsl" => include_str!("../shaders/levels.wgsl"),
+        "bevel_remap.wgsl" => include_str!("../shaders/bevel_remap.wgsl"),
         "blend.wgsl" => include_str!("../shaders/blend.wgsl"),
         "voronoi.wgsl" => include_str!("../shaders/voronoi.wgsl"),
         "fractal_sum.wgsl" => include_str!("../shaders/fractal_sum.wgsl"),

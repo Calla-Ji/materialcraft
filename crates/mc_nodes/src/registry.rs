@@ -8,12 +8,12 @@
 use std::collections::HashSet;
 
 use crate::{
-    blend, block_shift, blur, channel_split, checker, clamp, clouds, curvature_from_normal, curve,
-    data_corrupt, directional_blur, directional_warp, dither_pattern, edge_detect, fractal_sum,
-    gradient_linear, gradient_map, gradient_radial, grayscale_conversion, height_to_ao,
-    height_to_normal, histogram_scan, hsl_adjust, invert, levels, ordered_dither, palette_dither,
-    perlin, scanline_jitter, shape, simplex_noise, slope_blur, threshold, tile_generator,
-    transform2d, uniform_color, voronoi, warp, white_noise,
+    bevel, blend, block_shift, blur, channel_split, checker, clamp, clouds, curvature_from_normal,
+    curve, data_corrupt, directional_blur, directional_warp, dither_pattern, edge_detect,
+    fractal_sum, gradient_linear, gradient_map, gradient_radial, grayscale_conversion,
+    height_to_ao, height_to_normal, histogram_scan, hsl_adjust, invert, levels, ordered_dither,
+    palette_dither, perlin, scanline_jitter, shape, simplex_noise, slope_blur, threshold,
+    tile_generator, transform2d, uniform_color, voronoi, warp, white_noise,
 };
 
 /// The texture pool key a node's own output is stored under.
@@ -163,6 +163,11 @@ pub fn evaluate(
                     let input_key = texture_key(resolve_input("input")?);
                     let params = blur::BlurParams::from_graph(&node.params);
                     blur::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+                }
+                "bevel" => {
+                    let input_key = texture_key(resolve_input("input")?);
+                    let params = bevel::BevelParams::from_graph(&node.params);
+                    bevel::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "warp" => {
                     let input_key = texture_key(resolve_input("input")?);

@@ -5,6 +5,7 @@
 //! Each node's tests live alongside it in its own `#[cfg(test)] mod tests`,
 //! sharing the helpers in `test_support`.
 
+pub mod bevel;
 pub mod blend;
 pub mod block_shift;
 pub mod blur;
