@@ -15,11 +15,19 @@
 //               2*radius_px, matching the node's Distance param reaching
 //               that far from an edge)
 //
-// Subsamples at a resolution-independent stride (same reasoning as
-// blur.wgsl's adaptive step) rather than averaging every single texel in
-// the box, so cost stays bounded regardless of how large radius_px gets —
-// since every sample in a box blur carries equal weight, subsampling is an
-// unbiased estimate of the true average, not a biased approximation.
+// One thread per row (horizontal pass) or column (vertical pass), each
+// doing an exact sliding-window sum along its line — not subsampling at a
+// stride. An earlier version subsampled at a bounded number of taps to
+// keep cost independent of radius; for a sharp edge that produced a
+// faint, periodic staircase in the output ramp instead of a smooth line
+// (confirmed live by the owner: the resulting height map read as "ragged"
+// under lighting/displacement even at full mesh tessellation, since the
+// artifact was baked into the texture itself, not a geometry problem).
+// A sliding window is both *exact* (a true average of every texel in the
+// box, not an estimate) and just as cheap: each step is one add and one
+// subtract regardless of how large the radius gets, so total cost per
+// line is O(resolution), not O(resolution * radius) — there's no
+// bounded-tap tradeoff to make here.
 
 struct BoxBlurParams {
     resolution: u32,
@@ -32,35 +40,49 @@ struct BoxBlurParams {
 @group(0) @binding(1) var input_tex: texture_2d<f32>;
 @group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
 
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x >= params.resolution || id.y >= params.resolution) {
-        return;
+fn load_along(line: i32, pos: i32, size: i32, horizontal: bool) -> vec4<f32> {
+    let wrapped = wrap_coord(pos, size);
+    if horizontal {
+        return textureLoad(input_tex, vec2<i32>(wrapped, line), 0);
     }
-    let size = i32(params.resolution);
-    let radius = max(params.radius_px, 0.0);
-    if radius < 0.5 {
-        textureStore(output, vec2<i32>(id.xy), textureLoad(input_tex, vec2<i32>(id.xy), 0));
-        return;
-    }
-    let step = max(radius / 32.0, 1.0);
-    let taps = clamp(i32(round(radius / step)), 1, 32);
+    return textureLoad(input_tex, vec2<i32>(line, wrapped), 0);
+}
 
-    var sum = textureLoad(input_tex, vec2<i32>(id.xy), 0);
-    var count = 1.0;
-    for (var i = 1; i <= taps; i = i + 1) {
-        let dist = i32(round(f32(i) * step));
-        var coord_pos = vec2<i32>(id.xy);
-        var coord_neg = vec2<i32>(id.xy);
-        if params.direction == 0u {
-            coord_pos.x = wrap_coord(coord_pos.x + dist, size);
-            coord_neg.x = wrap_coord(coord_neg.x - dist, size);
-        } else {
-            coord_pos.y = wrap_coord(coord_pos.y + dist, size);
-            coord_neg.y = wrap_coord(coord_neg.y - dist, size);
-        }
-        sum = sum + textureLoad(input_tex, coord_pos, 0) + textureLoad(input_tex, coord_neg, 0);
-        count = count + 2.0;
+fn store_along(line: i32, pos: i32, horizontal: bool, value: vec4<f32>) {
+    if horizontal {
+        textureStore(output, vec2<i32>(pos, line), value);
+    } else {
+        textureStore(output, vec2<i32>(line, pos), value);
     }
-    textureStore(output, vec2<i32>(id.xy), sum / count);
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let size = i32(params.resolution);
+    if i32(id.x) >= size {
+        return;
+    }
+    let line = i32(id.x);
+    let horizontal = params.direction == 0u;
+
+    let radius = i32(round(max(params.radius_px, 0.0)));
+    if radius < 1 {
+        for (var pos = 0; pos < size; pos = pos + 1) {
+            store_along(line, pos, horizontal, load_along(line, pos, size, horizontal));
+        }
+        return;
+    }
+
+    let window = 2.0 * f32(radius) + 1.0;
+    var sum = vec4<f32>(0.0);
+    for (var dx = -radius; dx <= radius; dx = dx + 1) {
+        sum = sum + load_along(line, dx, size, horizontal);
+    }
+    store_along(line, 0, horizontal, sum / window);
+
+    for (var pos = 1; pos < size; pos = pos + 1) {
+        sum = sum + load_along(line, pos + radius, size, horizontal);
+        sum = sum - load_along(line, pos - radius - 1, size, horizontal);
+        store_along(line, pos, horizontal, sum / window);
+    }
 }

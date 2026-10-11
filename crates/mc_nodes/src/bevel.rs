@@ -142,8 +142,10 @@ fn box_blur_pass(
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        let workgroups = resolution.div_ceil(8);
-        pass.dispatch_workgroups(workgroups, workgroups, 1);
+        // One thread per row (horizontal pass) or column (vertical pass) —
+        // see bevel_box_blur.wgsl's doc comment for why this isn't a
+        // per-pixel dispatch.
+        pass.dispatch_workgroups(resolution.div_ceil(64), 1, 1);
     }
     gpu.queue.submit(Some(encoder.finish()));
 }

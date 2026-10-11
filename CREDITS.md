@@ -39,7 +39,10 @@ published technique each node builds on, as the paper trail for that.
   field), with no single canonical source — this project's own derivation of the box-blur
   radius/remap exponent parameterization, including the delta-based remap formulation (rather
   than reshaping the blurred value directly) that guarantees a no-bevel setting is an exact
-  no-op on any input.
+  no-op on any input. The box blur itself is computed with a sliding-window running sum (one
+  thread per row/column, add the texel entering the window and subtract the one leaving it) —
+  a standard, well-known box-filter technique, chosen here over a fixed-stride subsample after
+  the latter produced a visible staircase artifact on hard edges (see PROGRESS.md).
 
 ## Stylize & glitch
 
