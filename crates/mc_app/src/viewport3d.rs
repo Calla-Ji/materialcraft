@@ -757,9 +757,17 @@ fn tessellated_mesh(kind: MeshKind, tessellation: f32) -> (Vec<Vertex>, Vec<u32>
             lerp_segments(8, 96, tessellation),
             lerp_segments(16, 192, tessellation),
         ),
-        MeshKind::Cube => generate_rounded_cube(lerp_segments(4, 64, tessellation), 0.0),
+        // 64 segments/face wasn't enough resolution to follow a sharp height
+        // edge without visible faceting even at maximum tessellation,
+        // confirmed live by the owner with a clean hard-edged cutout shape
+        // (not fine texture detail the mesh "should" struggle with) — raised
+        // to 128, doubling the vertex density along each axis (4x the quads
+        // per face). Still not a complete fix for an arbitrarily sharp edge
+        // (no fixed mesh resolution ever fully is), but a meaningfully
+        // smaller artifact; see PROGRESS.md.
+        MeshKind::Cube => generate_rounded_cube(lerp_segments(4, 128, tessellation), 0.0),
         MeshKind::Plane => generate_plane(lerp_segments(8, 256, tessellation)),
-        MeshKind::RoundedCube => generate_rounded_cube(lerp_segments(4, 64, tessellation), 0.25),
+        MeshKind::RoundedCube => generate_rounded_cube(lerp_segments(4, 128, tessellation), 0.25),
         MeshKind::RoundedCylinder => generate_rounded_cylinder(
             lerp_segments(16, 192, tessellation),
             lerp_segments(2, 24, tessellation),
