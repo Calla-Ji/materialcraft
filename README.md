@@ -27,9 +27,11 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
   aside.
 - **Deterministic.** Same graph, same seed, same pixels — every time, on the same GPU.
 - **A custom node-graph canvas** — pan, zoom (including trackpad pinch-to-zoom, working
-  anywhere on the canvas), box-select, duplicate, undo/redo, and a searchable add-node menu —
-  built directly on top of the UI toolkit's own primitives rather than a third-party graph
-  widget.
+  anywhere on the canvas), box-select, duplicate, undo/redo, and a category-colored,
+  alphabetically-sorted searchable add-node menu — built directly on top of the UI toolkit's own
+  primitives rather than a third-party graph widget. Every node card is color-coded by category,
+  matching a dedicated Node Library panel along the canvas's left edge for browsing and adding
+  nodes by icon. New nodes always land wherever you last clicked on the canvas.
 - **Export** to PNG (8-bit and 16-bit) and 32-bit float EXR, at resolutions from 256px up to
   4096px (8192px where VRAM allows), with ready-made naming presets for Blender and for
   Unreal Engine (including an ORM-packed texture: AO/Roughness/Metallic in one file).
