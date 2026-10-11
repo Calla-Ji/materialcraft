@@ -161,6 +161,14 @@ impl eframe::App for MaterialCraftApp {
         // reads from `self.pool`.
         match mc_nodes::registry::evaluate(&mut self.gpu, &mut self.pool, &mut self.graph) {
             Ok(()) => self.last_eval_error = None,
+            // A required input not being connected yet is completely normal
+            // mid-edit state (e.g. a node just dragged in, not wired up
+            // yet) — `registry::evaluate`'s own doc comment calls this out
+            // explicitly. It isn't worth alarming the artist over; the
+            // node's pin/wire coloring already shows what's unconnected.
+            Err(mc_nodes::registry::EvalError::MissingInput(..)) => {
+                self.last_eval_error = None;
+            }
             Err(err) => {
                 log::warn!("graph evaluation error: {err}");
                 let message = err.to_string();
