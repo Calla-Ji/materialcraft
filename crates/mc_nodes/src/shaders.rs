@@ -68,6 +68,8 @@ fn embedded_source(file_name: &str) -> &'static str {
         "directional_warp.wgsl" => include_str!("../shaders/directional_warp.wgsl"),
         "edge_detect.wgsl" => include_str!("../shaders/edge_detect.wgsl"),
         "slope_blur.wgsl" => include_str!("../shaders/slope_blur.wgsl"),
+        "height_to_ao.wgsl" => include_str!("../shaders/height_to_ao.wgsl"),
+        "curvature_from_normal.wgsl" => include_str!("../shaders/curvature_from_normal.wgsl"),
         other => panic!("mc_nodes: unknown shader file {other:?}"),
     }
 }

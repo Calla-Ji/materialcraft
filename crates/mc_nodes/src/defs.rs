@@ -1376,6 +1376,70 @@ static NODE_DEFS: &[NodeDef] = &[
             },
         }],
     },
+    NodeDef {
+        kind: "height_to_ao",
+        display_name: "Height to AO",
+        category: "Converters",
+        tooltip: "A simple screen-space-style ambient occlusion map from height.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Gray,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "radius",
+                display_name: "Radius",
+                tooltip: "How far out the occlusion sample reaches, in UV space.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.1,
+                    default: 0.02,
+                },
+            },
+            ParamSpec {
+                name: "intensity",
+                display_name: "Intensity",
+                tooltip: "Multiplier on the occlusion strength.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 8.0,
+                    default: 2.0,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "curvature_from_normal",
+        display_name: "Curvature from Normal",
+        category: "Converters",
+        tooltip: "Convex edges read bright, concave crevices read dark.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[ParamSpec {
+            name: "intensity",
+            display_name: "Intensity",
+            tooltip: "Multiplier on the curvature strength.",
+            kind: ParamSpecKind::Float {
+                min: 0.1,
+                max: 16.0,
+                default: 4.0,
+            },
+        }],
+    },
     output_node_def("output_base_color", "Output: Base Color"),
     output_node_def("output_normal", "Output: Normal"),
     output_node_def("output_roughness", "Output: Roughness"),

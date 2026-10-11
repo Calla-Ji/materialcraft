@@ -6,10 +6,11 @@
 //! lives in the [`mc_gpu::TexturePool`] under the key from [`texture_key`].
 
 use crate::{
-    blend, blur, checker, clamp, clouds, curve, directional_blur, directional_warp, edge_detect,
-    fractal_sum, gradient_linear, gradient_map, gradient_radial, grayscale_conversion,
-    height_to_normal, histogram_scan, hsl_adjust, invert, levels, perlin, shape, simplex_noise,
-    slope_blur, threshold, tile_generator, transform2d, uniform_color, voronoi, warp, white_noise,
+    blend, blur, checker, clamp, clouds, curvature_from_normal, curve, directional_blur,
+    directional_warp, edge_detect, fractal_sum, gradient_linear, gradient_map, gradient_radial,
+    grayscale_conversion, height_to_ao, height_to_normal, histogram_scan, hsl_adjust, invert,
+    levels, perlin, shape, simplex_noise, slope_blur, threshold, tile_generator, transform2d,
+    uniform_color, voronoi, warp, white_noise,
 };
 
 /// The texture pool key a node's own output is stored under.
@@ -293,6 +294,23 @@ pub fn evaluate(
                     resolution,
                     &params,
                 );
+            }
+            "height_to_ao" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = height_to_ao::HeightToAoParams::from_graph(&node.params);
+                height_to_ao::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "curvature_from_normal" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params =
+                    curvature_from_normal::CurvatureFromNormalParams::from_graph(&node.params);
+                curvature_from_normal::dispatch(gpu, pool, &input_key, &key, resolution, &params);
             }
             other => return Err(EvalError::UnknownKind(id, other.to_string())),
         }
