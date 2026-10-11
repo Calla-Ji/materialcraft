@@ -6,13 +6,34 @@
 //! This is the real Ambient Occlusion *generator* — `Output: Ambient
 //! Occlusion` is just a pass-through marker like every other Output node,
 //! with no shader of its own.
+//!
+//! Implementation: compare the height map against three blurred copies of
+//! itself (fine/medium/broad radii, each a multiple of the node's own
+//! Radius param) via the existing Blur node, then darken wherever the real
+//! height sits notably below the *strongest*-occluding of those blurred
+//! averages. This replaced an earlier version that shot a handful of
+//! discrete rays outward from each pixel — cheap, but with gaps between
+//! sample directions that showed up as a hard ring around sharp edges
+//! instead of a soft falloff (see PROGRESS.md). Comparing against a blur
+//! has no such gaps (every neighbor in range contributes), and stacking
+//! three blur radii adds the kind of layered fine/broad detail a single
+//! scale can't — the same idea as combining octaves of noise.
 
 use crate::shaders::full_source;
 
 const NODE_KIND: &str = "height_to_ao";
 
+/// Multipliers on the node's own `radius` param for the fine/medium/broad
+/// blur passes `dispatch` compares the height map against. Fixed rather
+/// than exposed as params: three extra sliders for what's meant to be a
+/// one-knob "how far does occlusion reach" control would fight the
+/// artist-friendly, minimal-controls goal (CLAUDE.md §12) for a tuning
+/// knob most graphs won't need to touch.
+const SCALE_MULTIPLIERS: [f32; 3] = [1.0, 2.0, 4.0];
+
 pub struct HeightToAoParams {
-    /// In UV space (0..1) — converted to a pixel radius at dispatch time.
+    /// In UV space (0..1) — the *fine* scale's blur radius; the medium and
+    /// broad scales are fixed multiples of this (see `SCALE_MULTIPLIERS`).
     pub radius: f32,
     pub intensity: f32,
 }
@@ -50,19 +71,47 @@ pub fn dispatch(
     resolution: u32,
     params: &HeightToAoParams,
 ) {
+    // Blur::dispatch's cost is bounded (a fixed 32-tap kernel regardless of
+    // radius — see blur.wgsl), so three passes here stays cheap even at the
+    // largest (broad) scale.
+    let blur_keys: Vec<String> = SCALE_MULTIPLIERS
+        .iter()
+        .enumerate()
+        .map(|(i, multiplier)| {
+            let blur_key = format!("{output_key}__ao_blur_{i}");
+            crate::blur::dispatch(
+                gpu,
+                pool,
+                input_key,
+                &blur_key,
+                resolution,
+                &crate::blur::BlurParams {
+                    radius: params.radius * multiplier,
+                },
+            );
+            blur_key
+        })
+        .collect();
+
     let input_view = pool
         .view(input_key)
         .unwrap_or_else(|| panic!("height_to_ao: no texture at input key {input_key:?}"))
         .clone();
+    let blur_views: Vec<wgpu::TextureView> = blur_keys
+        .iter()
+        .map(|key| {
+            pool.view(key)
+                .unwrap_or_else(|| panic!("height_to_ao: no blurred texture at key {key:?}"))
+                .clone()
+        })
+        .collect();
 
     let shader_source = full_source("height_to_ao.wgsl");
     let pipeline = gpu.compute_pipeline(NODE_KIND, &shader_source, "main");
 
-    let radius_px = (params.radius * resolution as f32).max(1.0);
     let mut param_bytes = [0u8; 16];
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
-    param_bytes[4..8].copy_from_slice(&radius_px.to_le_bytes());
-    param_bytes[8..12].copy_from_slice(&params.intensity.to_le_bytes());
+    param_bytes[4..8].copy_from_slice(&params.intensity.to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("height_to_ao_params"),
         size: param_bytes.len() as u64,
@@ -93,6 +142,18 @@ pub fn dispatch(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
+                resource: wgpu::BindingResource::TextureView(&blur_views[0]),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&blur_views[1]),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&blur_views[2]),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
                 resource: wgpu::BindingResource::TextureView(output_view),
             },
         ],
@@ -241,17 +302,13 @@ mod tests {
             RESOLUTION,
             &CheckerParams { scale: 2 },
         );
-        // radius_px = 0.125 * 64 = 8 pixels.
         dispatch(
             &mut gpu,
             &mut pool,
             "input",
             "output",
             RESOLUTION,
-            &HeightToAoParams {
-                radius: 0.125,
-                intensity: 4.0,
-            },
+            &HeightToAoParams::default(),
         );
         let pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
         let y = 16; // within the first row of cells, so only the x=32 edge matters here.
@@ -259,17 +316,18 @@ mod tests {
 
         let at_edge = ao_at(32); // right at the edge, on the low side
         let near = ao_at(34); // 2px into the low side
-        let mid = ao_at(38); // 6px into the low side, close to the 8px radius
-        let far = ao_at(52); // 20px in, well outside the 8px radius
+        let mid = ao_at(38); // 6px into the low side
+        let far = ao_at(48); // 16px in — the black cell's center, farthest from both
+                             // this edge and the wrap-around edge at x=0/64.
 
         assert!(
-            at_edge < near && near < mid,
-            "occlusion should fade smoothly moving away from the edge, not stay flat \
-             (at_edge={at_edge}, near={near}, mid={mid})"
+            at_edge < near && near < mid && mid <= far,
+            "occlusion should fade smoothly moving away from the edge, not stay flat or jump \
+             (at_edge={at_edge}, near={near}, mid={mid}, far={far})"
         );
         assert!(
             far >= 254,
-            "a pixel well outside the AO radius should be fully unoccluded (got {far})"
+            "a pixel well outside every scale's reach should be fully unoccluded (got {far})"
         );
     }
 }

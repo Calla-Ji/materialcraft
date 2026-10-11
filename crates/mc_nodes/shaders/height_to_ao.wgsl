@@ -1,78 +1,57 @@
 // height_to_ao.wgsl — Converters / Height to AO
 //
-// Inputs:  `input_tex` — a height map.
-// Output:  `output` — a simple screen-space-style ambient occlusion map:
-//          darker wherever a pixel sits lower than nearby higher neighbors
-//          (a valley, or just inside a raised edge's shadow), unchanged
-//          (white) on flat or raised areas, or anywhere no higher neighbor
-//          is within reach. Wrap-addressed so it stays tileable.
+// Inputs:  `input_tex` — the original height map, plus three pre-blurred
+//          copies of it at progressively larger radii (fine/medium/broad —
+//          see `height_to_ao.rs`'s `dispatch`, which produces them via the
+//          Blur node before this pass runs).
+// Output:  `output` — darker wherever a pixel sits notably below its local
+//          blurred-neighborhood average at *any* of the three scales
+//          (a crevice relative to its surroundings), unchanged (white)
+//          where it's at or above every scale's local average.
 // Params:
-//   radius_px — how far out sampling reaches, in pixels
 //   intensity — multiplier on the occlusion strength
 //
-// Samples a ring of directions at several distances out to radius_px
-// (rather than one single fixed-distance ring) and weights closer samples
-// more heavily. A single fixed-radius ring only darkens the one exact
-// distance where it happens to cross a height boundary, which for a sharp
-// edge (e.g. a disc's silhouette) reads as a thin, hard-edged *ring*
-// tracing that boundary rather than a soft occlusion falloff — and makes
-// the Radius/Intensity params only relocate or recolor that ring instead
-// of visibly widening or softening a gradient. Multi-distance, distance-
-// weighted sampling fixes both: every pixel within radius_px of a raised
-// edge now picks up smoothly graduated occlusion (strongest at the edge,
-// fading out toward the radius), so Radius controls how wide that fade is
-// and Intensity controls how dark it gets, as an artist would expect.
+// Comparing a pixel to a *blurred* version of the height map (rather than a
+// handful of discrete directional ray samples) means every pixel within
+// reach contributes to the average smoothly, with no "gaps" between sample
+// directions — so occlusion grades evenly around a contour of any shape,
+// instead of only picking up the specific few directions/distances a ray
+// happened to sample. Comparing against three different blur radii at once
+// (instead of one) layers fine crevice detail with broader-scale shadowing,
+// the same way combining several octaves of noise adds richness a single
+// scale can't.
 
 struct HeightToAoParams {
     resolution: u32,
-    radius_px: f32,
     intensity: f32,
     _pad0: f32,
+    _pad1: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: HeightToAoParams;
 @group(0) @binding(1) var input_tex: texture_2d<f32>;
-@group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
-
-const PI: f32 = 3.14159265358979;
-const DIRECTIONS: u32 = 8u;
-const STEPS: u32 = 4u;
-
-fn height_at(x: i32, y: i32, size: i32) -> f32 {
-    return textureLoad(input_tex, vec2<i32>(wrap_coord(x, size), wrap_coord(y, size)), 0).r;
-}
+@group(0) @binding(2) var blurred_fine: texture_2d<f32>;
+@group(0) @binding(3) var blurred_medium: texture_2d<f32>;
+@group(0) @binding(4) var blurred_broad: texture_2d<f32>;
+@group(0) @binding(5) var output: texture_storage_2d<rgba8unorm, write>;
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= params.resolution || id.y >= params.resolution) {
         return;
     }
-    let size = i32(params.resolution);
-    let x = i32(id.x);
-    let y = i32(id.y);
-    let h = height_at(x, y, size);
+    let coord = vec2<i32>(id.xy);
+    let h = textureLoad(input_tex, coord, 0).r;
+    let fine = textureLoad(blurred_fine, coord, 0).r;
+    let medium = textureLoad(blurred_medium, coord, 0).r;
+    let broad = textureLoad(blurred_broad, coord, 0).r;
 
-    var occlusion = 0.0;
-    var weight_sum = 0.0;
-    for (var dir = 0u; dir < DIRECTIONS; dir = dir + 1u) {
-        let angle = f32(dir) / f32(DIRECTIONS) * 2.0 * PI;
-        let dir_vec = vec2<f32>(cos(angle), sin(angle));
-        for (var step = 1u; step <= STEPS; step = step + 1u) {
-            // 0 (closest) .. 1 (full radius), so `weight` fades linearly
-            // to zero right at the radius boundary instead of cutting off
-            // sharply.
-            let t = f32(step) / f32(STEPS);
-            let dist = params.radius_px * t;
-            let dx = i32(round(dir_vec.x * dist));
-            let dy = i32(round(dir_vec.y * dist));
-            let neighbor = height_at(x + dx, y + dy, size);
-            let weight = 1.0 - t;
-            occlusion = occlusion + max(neighbor - h, 0.0) * weight;
-            weight_sum = weight_sum + weight;
-        }
-    }
-    occlusion = occlusion / weight_sum;
+    // The strongest-occluding scale wins, rather than averaging the three —
+    // averaging would wash out a real crevice that only one scale's radius
+    // happens to "see," since the other two scales correctly report ~0
+    // there.
+    let occlusion = max(fine - h, max(medium - h, broad - h));
 
-    let ao = clamp(1.0 - occlusion * params.intensity, 0.0, 1.0);
-    textureStore(output, vec2<i32>(id.xy), vec4<f32>(vec3<f32>(ao), 1.0));
+    let ao = clamp(1.0 - max(occlusion, 0.0) * params.intensity, 0.0, 1.0);
+    textureStore(output, coord, vec4<f32>(vec3<f32>(ao), 1.0));
 }
