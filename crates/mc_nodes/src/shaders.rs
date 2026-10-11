@@ -58,6 +58,9 @@ fn embedded_source(file_name: &str) -> &'static str {
         "threshold.wgsl" => include_str!("../shaders/threshold.wgsl"),
         "grayscale_conversion.wgsl" => include_str!("../shaders/grayscale_conversion.wgsl"),
         "checker.wgsl" => include_str!("../shaders/checker.wgsl"),
+        "hsl_adjust.wgsl" => include_str!("../shaders/hsl_adjust.wgsl"),
+        "curve.wgsl" => include_str!("../shaders/curve.wgsl"),
+        "gradient_map.wgsl" => include_str!("../shaders/gradient_map.wgsl"),
         other => panic!("mc_nodes: unknown shader file {other:?}"),
     }
 }

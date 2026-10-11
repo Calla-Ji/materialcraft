@@ -157,6 +157,55 @@ fn show_inner(
                     }
                 });
             }
+            mc_nodes::defs::ParamSpecKind::Gradient { default } => {
+                let mut stops = match &current {
+                    Some(mc_core::ParamValue::Gradient(s)) if !s.is_empty() => s.clone(),
+                    _ => default.to_vec(),
+                };
+                ui.label(param.display_name);
+                let stop_count = stops.len();
+                let mut changed = false;
+                let mut remove_index = None;
+                for (i, stop) in stops.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add(egui::Slider::new(&mut stop.position, 0.0..=1.0).text("pos"))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        if ui
+                            .color_edit_button_rgba_unmultiplied(&mut stop.color)
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        if stop_count > 2 && ui.small_button("✕").clicked() {
+                            remove_index = Some(i);
+                        }
+                    });
+                }
+                if let Some(i) = remove_index {
+                    stops.remove(i);
+                    changed = true;
+                }
+                if ui.small_button("+ Add Stop").clicked() {
+                    stops.push(mc_core::GradientStop {
+                        position: 0.5,
+                        color: [0.5, 0.5, 0.5, 1.0],
+                    });
+                    changed = true;
+                }
+                if changed {
+                    commit_once(
+                        graph,
+                        history,
+                        id,
+                        param.name,
+                        mc_core::ParamValue::Gradient(stops),
+                    );
+                }
+            }
         }
     }
 }

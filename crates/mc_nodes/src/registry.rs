@@ -6,9 +6,9 @@
 //! lives in the [`mc_gpu::TexturePool`] under the key from [`texture_key`].
 
 use crate::{
-    blend, blur, checker, clamp, fractal_sum, gradient_linear, gradient_radial,
-    grayscale_conversion, height_to_normal, histogram_scan, invert, levels, perlin, shape,
-    threshold, tile_generator, transform2d, uniform_color, voronoi, warp,
+    blend, blur, checker, clamp, curve, fractal_sum, gradient_linear, gradient_map,
+    gradient_radial, grayscale_conversion, height_to_normal, histogram_scan, hsl_adjust, invert,
+    levels, perlin, shape, threshold, tile_generator, transform2d, uniform_color, voronoi, warp,
 };
 
 /// The texture pool key a node's own output is stored under.
@@ -200,6 +200,30 @@ pub fn evaluate(
             "checker" => {
                 let params = checker::CheckerParams::from_graph(&node.params);
                 checker::dispatch(gpu, pool, &key, resolution, &params);
+            }
+            "hsl_adjust" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = hsl_adjust::HslAdjustParams::from_graph(&node.params);
+                hsl_adjust::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "curve" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = curve::CurveParams::from_graph(&node.params);
+                curve::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "gradient_map" => {
+                let input_id = graph
+                    .upstream(id, "input")
+                    .ok_or_else(|| EvalError::MissingInput(id, "input".to_string()))?;
+                let input_key = texture_key(input_id);
+                let params = gradient_map::GradientMapParams::from_graph(&node.params);
+                gradient_map::dispatch(gpu, pool, &input_key, &key, resolution, &params);
             }
             other => return Err(EvalError::UnknownKind(id, other.to_string())),
         }

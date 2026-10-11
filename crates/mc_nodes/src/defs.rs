@@ -11,7 +11,7 @@
 //! are deliberately independent — dispatch code doesn't depend on this
 //! metadata layer.
 
-use mc_core::{ParamValue, PortType};
+use mc_core::{GradientStop, ParamValue, PortType};
 
 /// One parameter a node declares, independent of its current value in any
 /// particular graph.
@@ -22,8 +22,8 @@ pub struct ParamSpec {
     pub kind: ParamSpecKind,
 }
 
-/// A param's type and allowed range/options. New variants (Bool, Vec2,
-/// Gradient) get added here once a node that needs them exists.
+/// A param's type and allowed range/options. New variants (Bool, Vec2) get
+/// added here once a node that needs them exists.
 pub enum ParamSpecKind {
     Float {
         min: f32,
@@ -45,6 +45,11 @@ pub enum ParamSpecKind {
     Color {
         default: [f32; 4],
     },
+    /// Gradient Map's color ramp — at most 8 stops (`gradient_map.wgsl`'s
+    /// fixed-size uniform array), interpolated in position order.
+    Gradient {
+        default: &'static [GradientStop],
+    },
 }
 
 impl ParamSpec {
@@ -55,6 +60,7 @@ impl ParamSpec {
             ParamSpecKind::Seed { default } => ParamValue::Seed(default),
             ParamSpecKind::Enum { default, .. } => ParamValue::Enum(default.to_string()),
             ParamSpecKind::Color { default } => ParamValue::Color(default),
+            ParamSpecKind::Gradient { default } => ParamValue::Gradient(default.to_vec()),
         }
     }
 }
@@ -955,6 +961,155 @@ static NODE_DEFS: &[NodeDef] = &[
                 min: 2,
                 max: 32,
                 default: 8,
+            },
+        }],
+    },
+    NodeDef {
+        kind: "hsl_adjust",
+        display_name: "HSL Adjust",
+        category: "Filters/Adjustments",
+        tooltip: "Shift hue, scale saturation, and shift lightness.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "hue_shift",
+                display_name: "Hue Shift",
+                tooltip: "Fraction of a full turn to rotate hue by.",
+                kind: ParamSpecKind::Float {
+                    min: -0.5,
+                    max: 0.5,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "saturation",
+                display_name: "Saturation",
+                tooltip: "Multiplier on saturation (0 = grayscale).",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 2.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
+                name: "lightness",
+                display_name: "Lightness",
+                tooltip: "Additive shift on lightness.",
+                kind: ParamSpecKind::Float {
+                    min: -1.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "curve",
+        display_name: "Curve",
+        category: "Filters/Adjustments",
+        tooltip: "A 5-point curve — drag each point's output value.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Color,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "v0",
+                display_name: "At 0.00",
+                tooltip: "Output value when the input is 0.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "v1",
+                display_name: "At 0.25",
+                tooltip: "Output value when the input is 0.25.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.25,
+                },
+            },
+            ParamSpec {
+                name: "v2",
+                display_name: "At 0.50",
+                tooltip: "Output value when the input is 0.5.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "v3",
+                display_name: "At 0.75",
+                tooltip: "Output value when the input is 0.75.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.75,
+                },
+            },
+            ParamSpec {
+                name: "v4",
+                display_name: "At 1.00",
+                tooltip: "Output value when the input is 1.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 1.0,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "gradient_map",
+        display_name: "Gradient Map",
+        category: "Filters/Adjustments",
+        tooltip: "Maps a Gray input through a color gradient.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Input",
+            port_type: PortType::Gray,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[ParamSpec {
+            name: "gradient",
+            display_name: "Gradient",
+            tooltip: "Color stops the input value is mapped through, in position order.",
+            kind: ParamSpecKind::Gradient {
+                default: &[
+                    GradientStop {
+                        position: 0.0,
+                        color: [0.0, 0.0, 0.0, 1.0],
+                    },
+                    GradientStop {
+                        position: 1.0,
+                        color: [1.0, 1.0, 1.0, 1.0],
+                    },
+                ],
             },
         }],
     },
