@@ -5,16 +5,21 @@
 //! intensity map — pushes pixels toward or away from bright spots."
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "warp";
 
 pub struct WarpParams {
     pub amount: f32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for WarpParams {
     fn default() -> Self {
-        Self { amount: 0.05 }
+        Self {
+            amount: 0.05,
+            tiling_mode: TilingMode::default(),
+        }
     }
 }
 
@@ -26,6 +31,13 @@ impl WarpParams {
                 .get("amount")
                 .and_then(mc_core::ParamValue::as_float)
                 .unwrap_or(defaults.amount),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -54,6 +66,7 @@ pub fn dispatch(
     let mut param_bytes = [0u8; 16];
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     param_bytes[4..8].copy_from_slice(&params.amount.to_le_bytes());
+    param_bytes[8..12].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("warp_params"),
         size: param_bytes.len() as u64,
@@ -116,6 +129,7 @@ mod tests {
     use super::{dispatch, WarpParams};
     use crate::perlin::{dispatch as perlin_dispatch, PerlinParams};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::tiling::TilingMode;
 
     fn render(params: &WarpParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -155,12 +169,21 @@ mod tests {
 
     #[test]
     fn preserves_tiling_of_its_inputs() {
-        assert_tiles_seamlessly(&render(&WarpParams { amount: 0.05 }), RESOLUTION);
+        assert_tiles_seamlessly(
+            &render(&WarpParams {
+                amount: 0.05,
+                tiling_mode: TilingMode::Both,
+            }),
+            RESOLUTION,
+        );
     }
 
     #[test]
     fn is_deterministic() {
-        let params = WarpParams { amount: 0.03 };
+        let params = WarpParams {
+            amount: 0.03,
+            tiling_mode: TilingMode::Both,
+        };
         assert_eq!(
             render(&params),
             render(&params),
@@ -198,10 +221,86 @@ mod tests {
             "intensity",
             "output",
             RESOLUTION,
-            &WarpParams { amount: 0.0 },
+            &WarpParams {
+                amount: 0.0,
+                tiling_mode: TilingMode::Both,
+            },
         );
         let after = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
 
         assert_eq!(before, after, "amount = 0 must not change pixels");
+    }
+
+    /// A smooth, periodic (no sawtooth discontinuity) sine ramp as the
+    /// intensity map — its gradient is at its *strongest* right at x=0/
+    /// x=resolution-1 (cos(0) = 1), guaranteeing the pixels this test cares
+    /// about actually get pushed out of range, unlike noisy Perlin at a
+    /// realistic `amount` (confirmed by hand: a Perlin intensity map's
+    /// gradient at the seam isn't reliably large enough to leave [0, size)
+    /// at all, so disabling wrap has nothing to clamp there).
+    fn upload_sine_intensity(gpu: &mut mc_gpu::Context, pool: &mut mc_gpu::TexturePool, key: &str) {
+        let r = RESOLUTION;
+        let mut pixels = vec![0u8; (r * r * 4) as usize];
+        for y in 0..r {
+            for x in 0..r {
+                let v = (std::f32::consts::TAU * x as f32 / r as f32).sin() * 0.5 + 0.5;
+                let byte = (v * 255.0).round() as u8;
+                let i = ((y * r + x) * 4) as usize;
+                pixels[i..i + 4].copy_from_slice(&[byte, byte, byte, 255]);
+            }
+        }
+        pool.get_or_create(&gpu.device, key, r, wgpu::TextureFormat::Rgba8Unorm);
+        let texture = pool.texture(key).expect("just created above");
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(r * 4),
+                rows_per_image: Some(r),
+            },
+            wgpu::Extent3d {
+                width: r,
+                height: r,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    #[test]
+    fn tiling_off_is_no_longer_seamless() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        perlin_dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            RESOLUTION,
+            &PerlinParams::default(),
+        );
+        upload_sine_intensity(&mut gpu, &mut pool, "intensity");
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            "intensity",
+            "output",
+            RESOLUTION,
+            &WarpParams {
+                amount: 0.05,
+                tiling_mode: TilingMode::Off,
+            },
+        );
+        let pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
+        assert!(
+            crate::test_support::tiles_seamlessly(&pixels, RESOLUTION).is_err(),
+            "disabling tiling should introduce a real seam where the intensity map's gradient \
+             pushes sampling out of range"
+        );
     }
 }

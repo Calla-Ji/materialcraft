@@ -12,7 +12,7 @@
 struct WarpParams {
     resolution: u32,
     amount: f32,
-    _pad0: f32,
+    tiling_mode: u32,
     _pad1: f32,
 }
 
@@ -29,11 +29,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let size = i32(params.resolution);
     let x = i32(id.x);
     let y = i32(id.y);
+    let wrap_x = wraps_x(params.tiling_mode);
+    let wrap_y = wraps_y(params.tiling_mode);
 
-    let left = textureLoad(intensity_tex, vec2<i32>(wrap_coord(x - 1, size), y), 0).r;
-    let right = textureLoad(intensity_tex, vec2<i32>(wrap_coord(x + 1, size), y), 0).r;
-    let down = textureLoad(intensity_tex, vec2<i32>(x, wrap_coord(y - 1, size)), 0).r;
-    let up = textureLoad(intensity_tex, vec2<i32>(x, wrap_coord(y + 1, size)), 0).r;
+    let left = textureLoad(intensity_tex, vec2<i32>(tile_coord(x - 1, size, wrap_x), y), 0).r;
+    let right = textureLoad(intensity_tex, vec2<i32>(tile_coord(x + 1, size, wrap_x), y), 0).r;
+    let down = textureLoad(intensity_tex, vec2<i32>(x, tile_coord(y - 1, size, wrap_y)), 0).r;
+    let up = textureLoad(intensity_tex, vec2<i32>(x, tile_coord(y + 1, size, wrap_y)), 0).r;
 
     // `gradient` here is a per-texel finite difference (Δheight over 1
     // texel), which shrinks as 1/resolution for a fixed-frequency input —
@@ -48,8 +50,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let offset_uv = gradient_duv * params.amount;
     let offset_px = offset_uv * f32(params.resolution);
     let sample_coord = vec2<i32>(
-        wrap_coord(x + i32(round(offset_px.x)), size),
-        wrap_coord(y + i32(round(offset_px.y)), size),
+        tile_coord(x + i32(round(offset_px.x)), size, wrap_x),
+        tile_coord(y + i32(round(offset_px.y)), size, wrap_y),
     );
     textureStore(output, vec2<i32>(id.xy), textureLoad(input_tex, sample_coord, 0));
 }

@@ -1087,16 +1087,19 @@ static NODE_DEFS: &[NodeDef] = &[
             display_name: "Output",
             port_type: PortType::Color,
         }],
-        params: &[ParamSpec {
-            name: "amount",
-            display_name: "Amount",
-            tooltip: "Warp strength.",
-            kind: ParamSpecKind::Float {
-                min: 0.0,
-                max: 0.2,
-                default: 0.05,
+        params: &[
+            ParamSpec {
+                name: "amount",
+                display_name: "Amount",
+                tooltip: "Warp strength.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.2,
+                    default: 0.05,
+                },
             },
-        }],
+            tiling_mode_param(),
+        ],
     },
     NodeDef {
         kind: "transform2d",
@@ -1749,6 +1752,7 @@ static NODE_DEFS: &[NodeDef] = &[
                     default: 0.1,
                 },
             },
+            tiling_mode_param(),
         ],
     },
     NodeDef {

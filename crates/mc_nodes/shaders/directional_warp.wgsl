@@ -14,7 +14,7 @@ struct DirectionalWarpParams {
     resolution: u32,
     angle: f32,
     amount: f32,
-    _pad0: f32,
+    tiling_mode: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: DirectionalWarpParams;
@@ -36,8 +36,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let intensity = textureLoad(intensity_tex, vec2<i32>(id.xy), 0).r;
     let offset_px = dir * (intensity - 0.5) * params.amount * f32(params.resolution);
     let sample_coord = vec2<i32>(
-        wrap_coord(i32(id.x) + i32(round(offset_px.x)), size),
-        wrap_coord(i32(id.y) + i32(round(offset_px.y)), size),
+        tile_coord(i32(id.x) + i32(round(offset_px.x)), size, wraps_x(params.tiling_mode)),
+        tile_coord(i32(id.y) + i32(round(offset_px.y)), size, wraps_y(params.tiling_mode)),
     );
     textureStore(output, vec2<i32>(id.xy), textureLoad(input_tex, sample_coord, 0));
 }

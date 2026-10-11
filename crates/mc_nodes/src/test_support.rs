@@ -26,6 +26,21 @@ pub fn max_channel_diff(a: [u8; 4], b: [u8; 4]) -> i32 {
 /// Not appropriate for nodes whose output is an intentionally discontinuous
 /// ramp (Gradient Linear/Radial) — see their own tests for why.
 pub fn assert_tiles_seamlessly(pixels: &[u8], resolution: u32) {
+    if let Err(message) = tiles_seamlessly(pixels, resolution) {
+        panic!("{message}");
+    }
+}
+
+/// Same check as [`assert_tiles_seamlessly`], returning the failure message
+/// instead of panicking — for a node whose Tiling Mode can be turned off,
+/// where the useful assertion is "this is no longer seamless", not a fixed
+/// numeric comparison against some other render (not every node's
+/// wrap-vs-clamp difference points the same direction pixel-for-pixel —
+/// e.g. Warp pushes each pixel by a different, signed amount depending on
+/// the local gradient, unlike a blur kernel's always-smoothing effect — so
+/// re-using this exact seam-vs-interior-baseline definition is the robust
+/// way to confirm "doesn't tile anymore" for any of them).
+pub fn tiles_seamlessly(pixels: &[u8], resolution: u32) -> Result<(), String> {
     let r = resolution;
     let mut max_interior_diff = 0;
     for y in 0..r {
@@ -47,16 +62,19 @@ pub fn assert_tiles_seamlessly(pixels: &[u8], resolution: u32) {
 
     for y in 0..r {
         let diff = max_channel_diff(pixel(pixels, r, 0, y), pixel(pixels, r, r - 1, y));
-        assert!(
-            diff <= tolerance,
-            "left/right seam at y={y}: diff {diff} > interior baseline {max_interior_diff}"
-        );
+        if diff > tolerance {
+            return Err(format!(
+                "left/right seam at y={y}: diff {diff} > interior baseline {max_interior_diff}"
+            ));
+        }
     }
     for x in 0..r {
         let diff = max_channel_diff(pixel(pixels, r, x, 0), pixel(pixels, r, x, r - 1));
-        assert!(
-            diff <= tolerance,
-            "top/bottom seam at x={x}: diff {diff} > interior baseline {max_interior_diff}"
-        );
+        if diff > tolerance {
+            return Err(format!(
+                "top/bottom seam at x={x}: diff {diff} > interior baseline {max_interior_diff}"
+            ));
+        }
     }
+    Ok(())
 }
