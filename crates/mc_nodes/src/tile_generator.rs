@@ -16,6 +16,9 @@ pub struct TileGeneratorParams {
     pub seed: u32,
     pub offset: f32,
     pub gap: f32,
+    /// Shown to the artist as "Edge Darkening" (see `defs.rs`) — a flat
+    /// per-tile luminance fade toward the gap, not a height-shaping bevel.
+    /// Field/param-key name left as `bevel` for `.mcgraph` compatibility.
     pub bevel: f32,
     pub size_jitter: f32,
     pub rotation_jitter: f32,

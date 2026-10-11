@@ -673,9 +673,19 @@ static NODE_DEFS: &[NodeDef] = &[
                 },
             },
             ParamSpec {
+                // Display name/tooltip only, deliberately not "Bevel" — this
+                // is a flat per-tile luminance fade (see tile_generator.wgsl:
+                // `mix(0.5, 1.0, bevel_amount)`), not a height-shaping
+                // operation, and keeping the old name invited confusion with
+                // the real Bevel node (owner feedback: built two comparable
+                // graphs and found they "looked nothing alike," which they
+                // never were going to — same name, unrelated effects). The
+                // `name` key stays "bevel" so existing .mcgraph files with
+                // this param saved under that key keep loading correctly.
                 name: "bevel",
-                display_name: "Bevel",
-                tooltip: "How much of each tile's edge softens toward the gap.",
+                display_name: "Edge Darkening",
+                tooltip: "How much each tile's edge darkens toward the gap — a flat shading \
+                          fade, not a height change.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 0.4,

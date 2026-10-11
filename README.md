@@ -57,8 +57,8 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 - **Clouds** — an fBm preset tuned for a cloud-like look.
 
 ### Generators — Patterns
-- **Pattern Generator** — a brick or grid pattern, with gap, bevel, and per-tile size/rotation/
-  luminance jitter.
+- **Pattern Generator** — a brick or grid pattern, with gap, edge darkening (a flat luminance
+  fade toward the gap), and per-tile size/rotation/luminance jitter.
 - **Shape** — a disc, square, polygon, star, or leaf, centered in the tile. The star and leaf
   are original constructions, not smoothed approximations: the star's points are exact
   straight edges that can "unfold" a plain polygon into a star via one setting, and the leaf
