@@ -181,9 +181,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let color = (direct + ambient_diffuse + ambient_specular) * uniforms.exposure;
 
-    // Reinhard tonemap + display gamma, since this texture is shown directly
-    // to the user rather than fed back into the linear pipeline.
-    let tonemapped = color / (color + vec3<f32>(1.0));
+    // Reinhard tonemap on *luminance only*, not per-channel: compressing
+    // each of R/G/B independently (the common naive version) distorts hue
+    // and desaturates anything bright or saturated, since a channel's own
+    // ratio to the others shifts as it individually approaches 1 — compared
+    // directly against the 2D View's untonemapped, unlit color, a Base
+    // Color this washes out reads as "duller/muddier than it should be."
+    // Tonemapping luminance and rescaling the original color by the same
+    // factor compresses brightness without touching the color's own ratios
+    // at all.
+    let luminance = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let tonemapped_luminance = luminance / (luminance + 1.0);
+    let luminance_scale = select(0.0, tonemapped_luminance / luminance, luminance > 0.0001);
+    let tonemapped = color * luminance_scale;
     let gamma_corrected = linear_to_srgb(tonemapped);
 
     return vec4<f32>(gamma_corrected, 1.0);
