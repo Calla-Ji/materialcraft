@@ -20,7 +20,8 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
   displacement on every mesh — not just a flat plane. Channel textures get a real generated
   mip chain and 16x anisotropic filtering, with an Unlit Base Color debug mode, an Exposure
   slider, and a Pixel/Nearest filtering toggle for inspecting dither/pixel-art materials
-  crisply.
+  crisply. The Alpha output channel drives real transparency in the preview, not just an
+  exported mask.
 - **Seamless tiling, guaranteed.** Every generator is periodic and every filter samples with
   wrap-around addressing; each node ships with its own automated tiling test.
   Resolution-independent by design — a graph looks the same at 512px and 4096px, detail
@@ -115,8 +116,9 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 
 ### Outputs
 One pass-through marker node per PBR channel: Base Color, Normal, Roughness, Metallic,
-Height, Ambient Occlusion, Emissive. (Bevel and an Alpha channel are planned next — see
-[PROGRESS.md](PROGRESS.md).)
+Height, Ambient Occlusion, Emissive, Alpha. Alpha drives real transparency in the 3D preview
+(not just an exported mask) and exports as its own standalone grayscale map. (A Bevel node is
+planned next — see [PROGRESS.md](PROGRESS.md).)
 
 ## Building from source
 
