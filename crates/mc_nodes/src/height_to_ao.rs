@@ -119,6 +119,7 @@ pub fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::{dispatch, HeightToAoParams};
+    use crate::checker::{dispatch as checker_dispatch, CheckerParams};
     use crate::perlin::{dispatch as perlin_dispatch, PerlinParams};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
     use crate::uniform_color::{dispatch as uniform_color_dispatch, UniformColorParams};
@@ -217,6 +218,58 @@ mod tests {
         assert!(
             center_ao < rim_ao,
             "the pit's center ({center_ao}) should be darker than its rim ({rim_ao})"
+        );
+    }
+
+    /// Regression test for a reported bug: a sharp height edge (e.g. a
+    /// disc's silhouette) produced a thin, hard-edged occlusion *ring*
+    /// traced at one fixed distance from the edge, rather than a smooth
+    /// falloff — so dragging Radius/Intensity just relocated or recolored
+    /// that ring instead of visibly widening/softening a gradient. A 2x2
+    /// Checker gives a pixel-exact vertical edge at x=32 (white/raised for
+    /// x<32, black/low for x>=32); AO should now fade in smoothly moving
+    /// away from that edge on the low side, not jump straight from "fully
+    /// occluded" to "fully unoccluded" at one specific distance.
+    #[test]
+    fn a_sharp_edge_occludes_smoothly_not_as_a_hard_ring() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        checker_dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            RESOLUTION,
+            &CheckerParams { scale: 2 },
+        );
+        // radius_px = 0.125 * 64 = 8 pixels.
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            "output",
+            RESOLUTION,
+            &HeightToAoParams {
+                radius: 0.125,
+                intensity: 4.0,
+            },
+        );
+        let pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
+        let y = 16; // within the first row of cells, so only the x=32 edge matters here.
+        let ao_at = |x: u32| pixels[((y * RESOLUTION + x) * 4) as usize];
+
+        let at_edge = ao_at(32); // right at the edge, on the low side
+        let near = ao_at(34); // 2px into the low side
+        let mid = ao_at(38); // 6px into the low side, close to the 8px radius
+        let far = ao_at(52); // 20px in, well outside the 8px radius
+
+        assert!(
+            at_edge < near && near < mid,
+            "occlusion should fade smoothly moving away from the edge, not stay flat \
+             (at_edge={at_edge}, near={near}, mid={mid})"
+        );
+        assert!(
+            far >= 254,
+            "a pixel well outside the AO radius should be fully unoccluded (got {far})"
         );
     }
 }
