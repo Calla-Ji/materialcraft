@@ -6,9 +6,10 @@
 //! lives in the [`mc_gpu::TexturePool`] under the key from [`texture_key`].
 
 use crate::{
-    blend, blur, checker, clamp, curve, fractal_sum, gradient_linear, gradient_map,
+    blend, blur, checker, clamp, clouds, curve, fractal_sum, gradient_linear, gradient_map,
     gradient_radial, grayscale_conversion, height_to_normal, histogram_scan, hsl_adjust, invert,
-    levels, perlin, shape, threshold, tile_generator, transform2d, uniform_color, voronoi, warp,
+    levels, perlin, shape, simplex_noise, threshold, tile_generator, transform2d, uniform_color,
+    voronoi, warp, white_noise,
 };
 
 /// The texture pool key a node's own output is stored under.
@@ -224,6 +225,18 @@ pub fn evaluate(
                 let input_key = texture_key(input_id);
                 let params = gradient_map::GradientMapParams::from_graph(&node.params);
                 gradient_map::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+            }
+            "simplex_noise" => {
+                let params = simplex_noise::SimplexParams::from_graph(&node.params);
+                simplex_noise::dispatch(gpu, pool, &key, resolution, &params);
+            }
+            "white_noise" => {
+                let params = white_noise::WhiteNoiseParams::from_graph(&node.params);
+                white_noise::dispatch(gpu, pool, &key, resolution, &params);
+            }
+            "clouds" => {
+                let params = clouds::CloudsParams::from_graph(&node.params);
+                clouds::dispatch(gpu, pool, &key, resolution, &params);
             }
             other => return Err(EvalError::UnknownKind(id, other.to_string())),
         }

@@ -1113,6 +1113,127 @@ static NODE_DEFS: &[NodeDef] = &[
             },
         }],
     },
+    NodeDef {
+        kind: "simplex_noise",
+        display_name: "Simplex Noise",
+        category: "Generators/Noise",
+        tooltip:
+            "Gradient noise on a triangular lattice — fewer directional artifacts than Perlin.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "scale",
+                display_name: "Scale",
+                tooltip: "How many noise cells tile across the texture.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 32,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "octaves",
+                display_name: "Octaves",
+                tooltip: "How many layers of noise are summed.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 8,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "persistence",
+                display_name: "Persistence",
+                tooltip: "How much each octave's contribution shrinks.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the pattern without changing its character.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "white_noise",
+        display_name: "White Noise",
+        category: "Generators/Noise",
+        tooltip: "Fully uncorrelated random cells — no smooth interpolation.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "scale",
+                display_name: "Scale",
+                tooltip: "Cells spanning the texture.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 16,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the pattern.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "clouds",
+        display_name: "Clouds",
+        category: "Generators/Noise",
+        tooltip: "An fBm preset tuned for a cloud-like look.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "scale",
+                display_name: "Scale",
+                tooltip: "How many noise cells tile across the texture.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 32,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "softness",
+                display_name: "Softness",
+                tooltip: "How soft/fluffy the clouds look.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the pattern without changing its character.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
+    },
     output_node_def("output_base_color", "Output: Base Color"),
     output_node_def("output_normal", "Output: Normal"),
     output_node_def("output_roughness", "Output: Roughness"),

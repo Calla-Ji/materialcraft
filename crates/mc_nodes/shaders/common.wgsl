@@ -65,6 +65,96 @@ fn perlin_2d(uv: vec2<f32>, period: i32, seed: u32) -> f32 {
     return mix(nx0, nx1, v);
 }
 
+// 2D simplex noise (Gustavson-style skewed-triangle lattice). `uv` is in
+// [0, 1); `period` is how many noise cells fit across the texture. Returns a
+// value in roughly [-1, 1].
+//
+// NOT tileable on its own, unlike `perlin_2d` — this is the raw primitive;
+// use `tileable_simplex_2d` below for an actually-seamless result. Every
+// lattice point's gradient comes from `gradient()`, which wraps to `period`
+// before hashing, so the *gradients* repeat every `period` cells — but
+// simplex's skewed lattice doesn't line up with that period the way
+// Perlin's axis-aligned square grid does (skewing by a non-integer amount
+// shifts which simplex cell/corner a given point falls into, so the
+// triangle boundaries themselves drift relative to the gradient period).
+// Confirmed by testing, not assumed: `simplex_2d` alone fails the tiling
+// test by a real, visible margin, not a rounding-level one.
+fn simplex_2d(uv: vec2<f32>, period: i32, seed: u32) -> f32 {
+    let skew = 0.36602540378; // (sqrt(3) - 1) / 2
+    let unskew = 0.21132486541; // (3 - sqrt(3)) / 6
+
+    let p = uv * f32(period);
+    let s = (p.x + p.y) * skew;
+    let cell_f = floor(p + vec2<f32>(s, s));
+    let t = (cell_f.x + cell_f.y) * unskew;
+    let origin = cell_f - vec2<f32>(t, t);
+    let d0 = p - origin;
+
+    var i1 = 0;
+    var j1 = 1;
+    if d0.x > d0.y {
+        i1 = 1;
+        j1 = 0;
+    }
+
+    let d1 = d0 - vec2<f32>(f32(i1), f32(j1)) + vec2<f32>(unskew, unskew);
+    let d2 = d0 - vec2<f32>(1.0, 1.0) + vec2<f32>(2.0 * unskew, 2.0 * unskew);
+
+    let cell = vec2<i32>(cell_f);
+    let g0 = gradient(cell, period, seed);
+    let g1 = gradient(cell + vec2<i32>(i1, j1), period, seed);
+    let g2 = gradient(cell + vec2<i32>(1, 1), period, seed);
+
+    var n0 = 0.0;
+    var t0 = 0.5 - dot(d0, d0);
+    if t0 > 0.0 {
+        t0 = t0 * t0;
+        n0 = t0 * t0 * dot(g0, d0);
+    }
+
+    var n1 = 0.0;
+    var t1 = 0.5 - dot(d1, d1);
+    if t1 > 0.0 {
+        t1 = t1 * t1;
+        n1 = t1 * t1 * dot(g1, d1);
+    }
+
+    var n2 = 0.0;
+    var t2 = 0.5 - dot(d2, d2);
+    if t2 > 0.0 {
+        t2 = t2 * t2;
+        n2 = t2 * t2 * dot(g2, d2);
+    }
+
+    return 70.0 * (n0 + n1 + n2);
+}
+
+// A genuinely seamless-tiling version of `simplex_2d`, built by blending it
+// with 3 copies of itself shifted by exactly one period in x, y, and both —
+// the standard technique for tiling a noise function that isn't periodic on
+// its own (Perlin's original 2002 tileable-noise note describes the same
+// idea). `uv` is in [0, 1), not pre-multiplied by `period`, since the blend
+// weights need the unscaled position.
+//
+// Why this is exact, not approximate: at uv.x = 0 the weight `wx` is exactly
+// 1, so the blend reduces to just `simplex_2d(uv, ...)`; at uv.x = 1, `wx`
+// is exactly 0, so it reduces to just the shifted copy evaluated at
+// `uv.x - 1 = 0` — the *same* function call as the uv.x = 0 case. The two
+// edges are mathematically forced to agree, not just close. In practice a
+// texel never lands exactly on uv.x/y = 0 or 1 (samples are at pixel
+// centers), so the match is extremely close rather than bit-exact, same as
+// every other tileable noise here.
+fn tileable_simplex_2d(uv: vec2<f32>, period: i32, seed: u32) -> f32 {
+    let wx = 1.0 - uv.x;
+    let wy = 1.0 - uv.y;
+    let n00 = simplex_2d(uv, period, seed);
+    let n10 = simplex_2d(vec2<f32>(uv.x - 1.0, uv.y), period, seed);
+    let n01 = simplex_2d(vec2<f32>(uv.x, uv.y - 1.0), period, seed);
+    let n11 = simplex_2d(vec2<f32>(uv.x - 1.0, uv.y - 1.0), period, seed);
+    return n00 * wx * wy + n10 * (1.0 - wx) * wy + n01 * wx * (1.0 - wy)
+        + n11 * (1.0 - wx) * (1.0 - wy);
+}
+
 // Wraps an integer pixel coordinate into [0, size) — repeat addressing for
 // `textureLoad`, which (unlike `textureSample`) has no built-in wrap mode.
 fn wrap_coord(coord: i32, size: i32) -> i32 {
