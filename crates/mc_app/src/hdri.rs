@@ -269,6 +269,103 @@ fn upload(
     )
 }
 
+const THUMBNAIL_WIDTH: u32 = 128;
+const THUMBNAIL_HEIGHT: u32 = 64;
+
+/// Renders a small sRGB-encoded preview of an environment map — see
+/// `hdri_thumbnail.wgsl`'s doc comment for why this needs its own tonemap
+/// pass rather than reusing `display_encode`. Returns a plain
+/// `Rgba8Unorm` texture the caller can register as an egui texture
+/// directly, with no further encoding needed.
+pub fn render_thumbnail(
+    gpu: &mut mc_gpu::Context,
+    environment_view: &wgpu::TextureView,
+) -> wgpu::TextureView {
+    let shader_source = include_str!("../shaders/hdri_thumbnail.wgsl");
+    let pipeline = gpu.compute_pipeline("hdri_thumbnail", shader_source, "main");
+
+    let mut param_bytes = [0u8; 16];
+    param_bytes[0..4].copy_from_slice(&THUMBNAIL_WIDTH.to_le_bytes());
+    param_bytes[4..8].copy_from_slice(&THUMBNAIL_HEIGHT.to_le_bytes());
+    let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("hdri_thumbnail_params"),
+        size: param_bytes.len() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue.write_buffer(&param_buffer, 0, &param_bytes);
+
+    // Wraps horizontally (matching `equirect_uv`'s own addressing, so the
+    // thumbnail has no seam at the left/right edge) but clamps vertically —
+    // the poles aren't periodic.
+    let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("hdri_thumbnail_sampler"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+
+    let output_texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("hdri_thumbnail"),
+        size: wgpu::Extent3d {
+            width: THUMBNAIL_WIDTH,
+            height: THUMBNAIL_HEIGHT,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    });
+    let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let bind_group_layout = pipeline.get_bind_group_layout(0);
+    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("hdri_thumbnail_bind_group"),
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: param_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(environment_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&output_view),
+            },
+        ],
+    });
+
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("hdri_thumbnail_encoder"),
+        });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("hdri_thumbnail_pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(THUMBNAIL_WIDTH.div_ceil(8), THUMBNAIL_HEIGHT.div_ceil(8), 1);
+    }
+    gpu.queue.submit(Some(encoder.finish()));
+
+    output_view
+}
+
 /// Decodes and uploads a bundled preset. The bundled bytes are checked into
 /// this repo and covered by a decode test (see `tests` below), so a failure
 /// here means a corrupted build, not bad user input — a panic is correct.

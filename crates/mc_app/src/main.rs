@@ -411,6 +411,15 @@ impl eframe::App for MaterialCreatorApp {
                                             }
                                         }
                                     });
+                                if let Some(texture_id) = viewport3d.environment_thumbnail() {
+                                    ui.add_space(4.0);
+                                    let width = ui.available_width();
+                                    ui.image(egui::load::SizedTexture::new(
+                                        texture_id,
+                                        egui::vec2(width, width * 0.5),
+                                    ));
+                                    ui.add_space(4.0);
+                                }
                                 if ui.button("Load custom HDRI\u{2026}").clicked() {
                                     if let Some(path) = rfd::FileDialog::new()
                                         .add_filter("HDRI", &["hdr", "exr"])

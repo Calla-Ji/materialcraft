@@ -19,7 +19,8 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
   metallic-roughness PBR shader, with real per-vertex tangents and height-driven
   displacement on every mesh — not just a flat plane. The Environment panel lets you pick
   between 4 bundled CC0 HDRIs (Poly Haven) for the sky and reflections, or load your own
-  `.hdr`/`.exr` file, to see how a material reads under a different lighting mood. Channel
+  `.hdr`/`.exr` file, to see how a material reads under a different lighting mood — a small
+  tonemapped preview of the active HDRI shows right under the picker. Channel
   textures get a real generated mip chain and 16x anisotropic filtering, with an Unlit Base
   Color debug mode, an Exposure slider, and a Pixel/Nearest filtering toggle for inspecting
   dither/pixel-art materials crisply. The Alpha output channel drives real transparency in the

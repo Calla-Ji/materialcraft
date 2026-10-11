@@ -86,6 +86,13 @@ pub struct Viewport3d {
     environment_view: wgpu::TextureView,
     environment_ambient_color: Vec3,
     pub environment_source: EnvironmentSource,
+    /// Set whenever the environment changes; `render()` regenerates and
+    /// (re-)registers `environment_thumbnail_id` the next time it runs, the
+    /// same lazy-rebuild-on-change pattern as `current_mesh_key`. Starts
+    /// `true` so the default environment's thumbnail exists from the first
+    /// frame without `new()` needing an `egui_wgpu::RenderState` of its own.
+    environment_thumbnail_dirty: bool,
+    environment_thumbnail_id: Option<egui::TextureId>,
 
     color_view: Option<wgpu::TextureView>,
     depth_view: Option<wgpu::TextureView>,
@@ -370,6 +377,8 @@ impl Viewport3d {
             environment_view,
             environment_ambient_color,
             environment_source: EnvironmentSource::Preset(initial_preset),
+            environment_thumbnail_dirty: true,
+            environment_thumbnail_id: None,
             color_view: None,
             depth_view: None,
             texture_id: None,
@@ -398,6 +407,7 @@ impl Viewport3d {
         self.environment_view = view;
         self.environment_ambient_color = Vec3::from(ambient);
         self.environment_source = EnvironmentSource::Preset(preset);
+        self.environment_thumbnail_dirty = true;
     }
 
     /// Switches the sky/reflection environment to a user-supplied `.hdr`/
@@ -418,7 +428,15 @@ impl Viewport3d {
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string()),
         );
+        self.environment_thumbnail_dirty = true;
         Ok(())
+    }
+
+    /// The active environment's preview thumbnail, registered as an egui
+    /// texture — `None` only for the first frame or two after startup or an
+    /// environment change, before `render()` has run once to build it.
+    pub fn environment_thumbnail(&self) -> Option<egui::TextureId> {
+        self.environment_thumbnail_id
     }
 
     /// Orbit (drag) and zoom (scroll, while hovered) camera controls.
@@ -571,6 +589,30 @@ impl Viewport3d {
         if self.size != (width, height) || self.color_view.is_none() {
             self.recreate_targets(&gpu.device, width, height);
             self.size = (width, height);
+        }
+
+        if self.environment_thumbnail_dirty {
+            let thumbnail_view = crate::hdri::render_thumbnail(gpu, &self.environment_view);
+            self.environment_thumbnail_id = Some(match self.environment_thumbnail_id {
+                Some(texture_id) => {
+                    render_state
+                        .renderer
+                        .write()
+                        .update_egui_texture_from_wgpu_texture(
+                            &gpu.device,
+                            &thumbnail_view,
+                            wgpu::FilterMode::Linear,
+                            texture_id,
+                        );
+                    texture_id
+                }
+                None => render_state.renderer.write().register_native_texture(
+                    &gpu.device,
+                    &thumbnail_view,
+                    wgpu::FilterMode::Linear,
+                ),
+            });
+            self.environment_thumbnail_dirty = false;
         }
 
         let aspect = width as f32 / height as f32;
