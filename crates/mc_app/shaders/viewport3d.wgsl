@@ -66,7 +66,22 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // real per-vertex normal, so displacing along it is meaningful
     // everywhere — not just on a flat plane. Vertex shaders can't use
     // implicit-derivative texture sampling, so this needs an explicit LOD.
-    let height = textureSampleLevel(height_tex, tex_sampler, in.uv, 0.0).r;
+    //
+    // Sampling a higher (coarser, pre-blurred by the mip chain) level
+    // rather than mip 0 here is deliberate: a sharp height edge (a hard
+    // silhouette, not a gradual ramp) can cross within a single vertex-to-
+    // vertex span even at this mesh's highest tessellation setting, so two
+    // adjacent vertices land on wildly different heights — every quad along
+    // that edge folds into a sharp "shard" instead of following the curve
+    // smoothly, since vertex displacement has no sub-vertex resolution to
+    // fall back on. Reading a coarser mip spreads that same transition
+    // across more of the UV range before it ever reaches the vertex shader,
+    // which turns the same sharp edge into a gradual ramp over several
+    // vertices instead. This only affects the *live preview's* displaced
+    // geometry — the exported Height map and the 2D View both still read
+    // mip 0, full sharpness, unaffected by this.
+    const DISPLACEMENT_LOD: f32 = 3.0;
+    let height = textureSampleLevel(height_tex, tex_sampler, in.uv, DISPLACEMENT_LOD).r;
     let position = in.position + in.normal * (height - 0.5) * uniforms.height_scale;
 
     out.world_pos = position;
