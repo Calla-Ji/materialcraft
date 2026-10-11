@@ -31,10 +31,12 @@ published technique each node builds on, as the paper trail for that.
   Feldman, 1968), a standard image-gradient kernel.
 - **Warp / Directional Warp** — displacing a texture by the gradient of a second ("intensity")
   input, a standard procedural-texturing technique with no single canonical source.
-- **Bevel** — blur-then-remap: blur a mask/height input, then reshape the blurred transition
-  with a power curve. A standard, cheap approximation of a distance-based bevel (vs. computing
-  a true distance-to-edge field), with no single canonical source — this project's own
-  derivation of the blur radius/remap exponent parameterization.
+- **Bevel** — box-blur-then-remap: a uniform box blur (not a Gaussian — a box blur of a hard
+  step produces an exactly linear ramp over its own width, which reads as a defined chamfer
+  rather than a generic soft blur) at a mask/height input's edges, then reshape that ramp with a
+  power curve. A standard, cheap approximation of a distance-based bevel (vs. computing a true
+  distance-to-edge field), with no single canonical source — this project's own derivation of
+  the box-blur radius/remap exponent parameterization.
 
 ## Stylize & glitch
 
