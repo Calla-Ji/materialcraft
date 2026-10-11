@@ -155,8 +155,57 @@ pub fn export_material(
         written.push(path);
     }
 
+    if let Some(pixels) = read_output("output_alpha", resolution, graph, pool, gpu) {
+        let path = out_dir.join(preset.alpha_file_name(graph_name));
+        mc_export::write_png8(
+            &pixels,
+            resolution,
+            resolution,
+            mc_export::ColorSpace::Linear,
+            &path,
+        )?;
+        written.push(path);
+    }
+
     graph.settings.resolution = original_resolution;
     crate::registry::evaluate(gpu, pool, graph)?;
 
     Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::export_material;
+
+    /// Regression/coverage test for the new Alpha output channel: a graph
+    /// with just Perlin Noise -> Output: Alpha should write exactly one
+    /// file, named per each preset's own convention.
+    #[test]
+    fn exports_alpha_with_the_right_name_per_preset() {
+        for (preset, expected_name) in [
+            (mc_export::naming::Preset::Blender, "test_Alpha.png"),
+            (mc_export::naming::Preset::Unreal, "T_test_A.png"),
+        ] {
+            let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+            let mut pool = mc_gpu::TexturePool::default();
+            let mut graph = mc_core::Graph::new();
+            let noise = graph.add_node(mc_core::Node::new("perlin_noise"));
+            let output = graph.add_node(mc_core::Node::new("output_alpha"));
+            graph.connect(noise, "output", output, "input").unwrap();
+            graph.settings.resolution = 32;
+
+            let out_dir =
+                std::env::temp_dir().join(format!("mc_nodes_export_alpha_test_{}", preset.name()));
+            let written = export_material(
+                &mut gpu, &mut pool, &mut graph, preset, 32, "test", &out_dir,
+            )
+            .expect("export succeeds");
+
+            assert_eq!(written.len(), 1, "expected exactly one file written");
+            assert_eq!(written[0].file_name().unwrap(), expected_name);
+            assert!(written[0].exists());
+
+            std::fs::remove_dir_all(&out_dir).ok();
+        }
+    }
 }

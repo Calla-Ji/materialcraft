@@ -2262,6 +2262,7 @@ static NODE_DEFS: &[NodeDef] = &[
     output_node_def("output_height", "Output: Height"),
     output_node_def("output_ambient_occlusion", "Output: Ambient Occlusion"),
     output_node_def("output_emissive", "Output: Emissive"),
+    output_node_def("output_alpha", "Output: Alpha"),
 ];
 
 #[cfg(test)]

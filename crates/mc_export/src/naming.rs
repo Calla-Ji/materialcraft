@@ -87,6 +87,13 @@ impl Preset {
             Preset::Unreal => Some(format!("T_{graph_name}_ORM.png")),
         }
     }
+
+    pub fn alpha_file_name(self, graph_name: &str) -> String {
+        match self {
+            Preset::Blender => format!("{graph_name}_Alpha.png"),
+            Preset::Unreal => format!("T_{graph_name}_A.png"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -121,6 +128,10 @@ mod tests {
         );
         assert_eq!(Preset::Blender.orm_file_name("bricks"), None);
         assert_eq!(
+            Preset::Blender.alpha_file_name("bricks"),
+            "bricks_Alpha.png"
+        );
+        assert_eq!(
             Preset::Blender.normal_format(),
             mc_core::NormalFormat::OpenGl
         );
@@ -141,6 +152,7 @@ mod tests {
         assert_eq!(Preset::Unreal.roughness_file_name("bricks"), None);
         assert_eq!(Preset::Unreal.metallic_file_name("bricks"), None);
         assert_eq!(Preset::Unreal.ambient_occlusion_file_name("bricks"), None);
+        assert_eq!(Preset::Unreal.alpha_file_name("bricks"), "T_bricks_A.png");
         assert_eq!(
             Preset::Unreal.normal_format(),
             mc_core::NormalFormat::DirectX
