@@ -1,6 +1,6 @@
-//! Filters / Spatial / Directional Warp.
+//! Filters / Spatial / Push Warp.
 //!
-//! Display name: "Directional Warp". Tooltip: "Shift pixels along one fixed
+//! Display name: "Push Warp". Tooltip: "Shift pixels along one fixed
 //! direction, by how much an intensity map's value says at that point —
 //! unlike Warp, which pushes along the intensity map's gradient instead."
 

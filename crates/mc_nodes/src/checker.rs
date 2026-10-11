@@ -40,7 +40,7 @@ pub fn dispatch(
 
     // Even-ize the cell count before it ever reaches the shader: an odd
     // count flips the checker's parity exactly at the wrap edge, breaking
-    // seamless tiling (same reasoning as Tile Generator's "rows must be
+    // seamless tiling (same reasoning as Pattern Generator's "rows must be
     // even" — see its own doc comment).
     let even_scale = params.scale + (params.scale & 1);
     let mut param_bytes = [0u8; 16];

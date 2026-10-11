@@ -1,7 +1,7 @@
-//! Generators / Patterns / Tile Generator.
+//! Generators / Patterns / Pattern Generator.
 //!
-//! Display name: "Tile Generator". Tooltip: "A brick or grid pattern — use
-//! Offset 0.5 for a classic running-bond brick layout."
+//! Display name: "Pattern Generator". Tooltip: "A brick or grid pattern —
+//! use Offset 0.5 for a classic running-bond brick layout."
 //!
 //! For the brick stagger to tile seamlessly top-to-bottom, `rows` needs to
 //! be even — see the shader's doc comment.

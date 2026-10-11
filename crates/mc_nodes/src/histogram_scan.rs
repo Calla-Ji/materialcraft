@@ -1,6 +1,6 @@
-//! Filters / Blending & Masking / Histogram Scan.
+//! Filters / Blending & Masking / Value Range.
 //!
-//! Display name: "Histogram Scan". Tooltip: "Threshold/window the input
+//! Display name: "Value Range". Tooltip: "Threshold/window the input
 //! around a position, with adjustable sharpness."
 
 use crate::shaders::full_source;

@@ -463,7 +463,7 @@ static NODE_DEFS: &[NodeDef] = &[
     },
     NodeDef {
         kind: "tile_generator",
-        display_name: "Tile Generator",
+        display_name: "Pattern Generator",
         category: "Generators/Patterns",
         tooltip: "A brick or grid pattern — Offset 0.5 for a classic running-bond brick layout.",
         inputs: &[],
@@ -766,7 +766,7 @@ static NODE_DEFS: &[NodeDef] = &[
     },
     NodeDef {
         kind: "histogram_scan",
-        display_name: "Histogram Scan",
+        display_name: "Value Range",
         category: "Filters/Blending & Masking",
         tooltip: "Threshold/window the input around a position.",
         inputs: &[PortSpec {
@@ -1379,7 +1379,7 @@ static NODE_DEFS: &[NodeDef] = &[
     },
     NodeDef {
         kind: "directional_warp",
-        display_name: "Directional Warp",
+        display_name: "Push Warp",
         category: "Filters/Spatial",
         tooltip: "Shift pixels along one fixed direction by an intensity map's value.",
         inputs: &[
@@ -1450,7 +1450,7 @@ static NODE_DEFS: &[NodeDef] = &[
     },
     NodeDef {
         kind: "slope_blur",
-        display_name: "Slope Blur",
+        display_name: "Flow Blur",
         category: "Filters/Spatial",
         tooltip: "Blur along a control map's gradient, strength scaled by its steepness.",
         inputs: &[

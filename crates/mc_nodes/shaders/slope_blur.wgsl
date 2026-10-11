@@ -1,4 +1,4 @@
-// slope_blur.wgsl — Filters / Spatial / Slope Blur
+// slope_blur.wgsl — Filters / Spatial / Flow Blur
 //
 // Inputs:  `input_tex`   — the texture to blur.
 //          `control_tex` — drives both the blur's direction (its local

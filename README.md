@@ -46,7 +46,7 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 - **Clouds** — an fBm preset tuned for a cloud-like look.
 
 ### Generators — Patterns
-- **Tile Generator** — a brick or grid pattern, with gap, bevel, and per-tile size/rotation/
+- **Pattern Generator** — a brick or grid pattern, with gap, bevel, and per-tile size/rotation/
   luminance jitter.
 - **Shape** — a disc, square, polygon, star, or leaf, centered in the tile. The star and leaf
   are original constructions, not smoothed approximations: the star's points are exact
@@ -69,15 +69,15 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 ### Filters — Blending & Masking
 - **Blend** — 9 blend modes (Copy, Add, Subtract, Multiply, Screen, Overlay, Max, Min,
   Difference), opacity, and an optional mask.
-- **Histogram Scan** — threshold/window an input around a position.
+- **Value Range** — threshold/window an input around a position.
 - **Threshold** — a hard black/white cutoff at a given value.
 
 ### Filters — Spatial
 - **Blur** and **Directional Blur** — separable Gaussian blur, omnidirectional or along one
   fixed angle.
-- **Warp** and **Directional Warp** — distort an input by the gradient of an intensity map,
+- **Warp** and **Push Warp** — distort an input by the gradient of an intensity map,
   omnidirectional or along a fixed angle.
-- **Slope Blur** — blur along a control map's own gradient, strength scaled by its steepness.
+- **Flow Blur** — blur along a control map's own gradient, strength scaled by its steepness.
 - **Transform 2D** — offset, rotate, and scale, with wrap-around tiling.
 - **Edge Detect** — highlight where an input changes sharply.
 

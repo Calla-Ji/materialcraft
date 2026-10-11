@@ -1,4 +1,4 @@
-// histogram_scan.wgsl — Filters / Blending & Masking / Histogram Scan
+// histogram_scan.wgsl — Filters / Blending & Masking / Value Range
 //
 // Inputs:  `input_tex` — the texture to threshold/window.
 // Output:  `output` — a ramp of width (1 - contrast) centered on `position`:

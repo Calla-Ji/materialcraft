@@ -1,4 +1,4 @@
-// tile_generator.wgsl — Generators / Patterns / Tile Generator
+// tile_generator.wgsl — Generators / Patterns / Pattern Generator
 //
 // Inputs:  none.
 // Output:  `output` — a brick/grid pattern: a height-like value, bright on

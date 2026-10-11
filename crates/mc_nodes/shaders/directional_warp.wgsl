@@ -1,4 +1,4 @@
-// directional_warp.wgsl — Filters / Spatial / Directional Warp
+// directional_warp.wgsl — Filters / Spatial / Push Warp
 //
 // Inputs:  `input_tex`     — the texture to distort.
 //          `intensity_tex` — drives how far each pixel shifts, by its own

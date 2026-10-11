@@ -1,6 +1,6 @@
-//! Filters / Spatial / Slope Blur.
+//! Filters / Spatial / Flow Blur.
 //!
-//! Display name: "Slope Blur". Tooltip: "Blur along a control map's local
+//! Display name: "Flow Blur". Tooltip: "Blur along a control map's local
 //! gradient, strength scaled by its steepness — key for organic, eroded
 //! looks."
 
