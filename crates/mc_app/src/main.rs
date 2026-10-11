@@ -14,6 +14,7 @@ mod dock;
 mod export_dialog;
 mod hdri;
 mod params_panel;
+mod theme;
 mod viewport3d;
 mod viewport3d_panels;
 
@@ -42,37 +43,60 @@ struct MaterialCraftApp {
     dock: dock::DockLayout,
 
     preview_texture_id: Option<egui::TextureId>,
+
+    /// Where the current graph was last loaded from or saved to — `None`
+    /// for a never-saved graph, in which case Save behaves like Save As.
+    current_path: Option<std::path::PathBuf>,
 }
 
 impl eframe::App for MaterialCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::Panel::top("menu_bar").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("MaterialCraft").strong());
-                ui.separator();
-                ui.label("New");
-                ui.label("Open");
-                ui.label("Save");
-                ui.label("Save As");
-                if ui.button("Export…").clicked() {
-                    self.export_dialog.open = true;
-                }
-                ui.separator();
-                if ui
-                    .add_enabled(self.history.can_undo(), egui::Button::new("Undo"))
-                    .clicked()
-                {
-                    self.history.undo(&mut self.graph);
-                }
-                if ui
-                    .add_enabled(self.history.can_redo(), egui::Button::new("Redo"))
-                    .clicked()
-                {
-                    self.history.redo(&mut self.graph);
-                }
-                ui.label("Examples");
+        egui::Panel::top("menu_bar")
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 8)))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("MaterialCraft")
+                            .strong()
+                            .color(theme::SUPERNOVA_LIGHT),
+                    );
+                    ui.add_space(4.0);
+                    ui.separator();
+                    if ui.button("New").clicked() {
+                        self.do_new();
+                    }
+                    if ui.button("Open").clicked() {
+                        self.do_open();
+                    }
+                    if ui.button("Save").clicked() {
+                        self.do_save();
+                    }
+                    if ui.button("Save As").clicked() {
+                        self.do_save_as();
+                    }
+                    if ui.button("Export…").clicked() {
+                        self.export_dialog.open = true;
+                    }
+                    ui.add_space(4.0);
+                    ui.separator();
+                    if ui
+                        .add_enabled(self.history.can_undo(), egui::Button::new("Undo"))
+                        .clicked()
+                    {
+                        self.history.undo(&mut self.graph);
+                    }
+                    if ui
+                        .add_enabled(self.history.can_redo(), egui::Button::new("Redo"))
+                        .clicked()
+                    {
+                        self.history.redo(&mut self.graph);
+                    }
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.label("Examples");
+                });
             });
-        });
 
         // Re-evaluate whatever the previous frame's edits (including
         // anything undo/redo just changed) left dirty, before any panel
@@ -282,12 +306,20 @@ impl eframe::App for MaterialCraftApp {
         // those keys keep doing normal text editing instead of being
         // hijacked into graph-wide actions.
         if ui.memory(|m| m.focused()).is_none() {
-            let (select_all, delete_pressed) = ui.ctx().input(|i| {
-                (
-                    i.modifiers.command && i.key_pressed(egui::Key::A),
-                    i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
-                )
-            });
+            let (select_all, delete_pressed, new_pressed, open_pressed, save_pressed) =
+                ui.ctx().input(|i| {
+                    (
+                        i.modifiers.command && i.key_pressed(egui::Key::A),
+                        i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
+                        i.modifiers.command && i.key_pressed(egui::Key::N),
+                        i.modifiers.command && i.key_pressed(egui::Key::O),
+                        i.modifiers.command && i.key_pressed(egui::Key::S),
+                    )
+                });
+            // Shift+Cmd+S (Save As) vs. plain Cmd+S (Save): read `modifiers`
+            // separately from the tuple above, since `key_pressed` already
+            // consumed the event by the time `save_pressed` is true.
+            let save_as = save_pressed && ui.ctx().input(|i| i.modifiers.shift);
 
             if select_all {
                 self.canvas.selected = self.graph.nodes().map(|(id, _)| id).collect();
@@ -301,6 +333,20 @@ impl eframe::App for MaterialCraftApp {
                     self.selected = None;
                 }
                 self.canvas.selected.clear();
+            }
+
+            if new_pressed {
+                self.do_new();
+            }
+            if open_pressed {
+                self.do_open();
+            }
+            if save_pressed {
+                if save_as {
+                    self.do_save_as();
+                } else {
+                    self.do_save();
+                }
             }
         }
 
@@ -371,6 +417,71 @@ impl eframe::App for MaterialCraftApp {
 }
 
 impl MaterialCraftApp {
+    /// Swaps in a different graph wholesale (New/Open) — resets every piece
+    /// of state that's keyed off the *previous* graph's nodes (history,
+    /// selection, cached thumbnails/preview texture, the GPU texture pool),
+    /// not just the graph field itself, so nothing stale lingers (a node ID
+    /// from the old graph reused by the new one would otherwise find an
+    /// orphaned texture already sitting in the pool under that key).
+    fn replace_graph(&mut self, graph: mc_core::Graph, path: Option<std::path::PathBuf>) {
+        self.graph = graph;
+        self.current_path = path;
+        self.history = mc_core::History::new();
+        self.canvas = CanvasState::default();
+        self.thumbnail_ids.clear();
+        self.selected = None;
+        self.add_node_menu = None;
+        self.pending_wire_connect = None;
+        self.preview_texture_id = None;
+        self.pool = mc_gpu::TexturePool::default();
+    }
+
+    fn do_new(&mut self) {
+        self.replace_graph(mc_core::Graph::new(), None);
+    }
+
+    fn do_open(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("MaterialCraft Graph", &["mcgraph"])
+            .pick_file()
+        else {
+            return;
+        };
+        match mc_core::Graph::load_from_file(&path) {
+            Ok(graph) => self.replace_graph(graph, Some(path)),
+            // No error-toast system yet (CLAUDE.md M6 polish) — logging is
+            // at least visible in the terminal the app was launched from,
+            // same as every other fallible path in this app today (e.g.
+            // `registry::evaluate`'s error handling just above).
+            Err(err) => log::warn!("failed to open {}: {err}", path.display()),
+        }
+    }
+
+    fn do_save(&mut self) {
+        match self.current_path.clone() {
+            Some(path) => self.save_to(path),
+            None => self.do_save_as(),
+        }
+    }
+
+    fn do_save_as(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("MaterialCraft Graph", &["mcgraph"])
+            .set_file_name("untitled.mcgraph")
+            .save_file()
+        else {
+            return;
+        };
+        self.save_to(path);
+    }
+
+    fn save_to(&mut self, path: std::path::PathBuf) {
+        match self.graph.save_to_file(&path) {
+            Ok(()) => self.current_path = Some(path),
+            Err(err) => log::warn!("failed to save {}: {err}", path.display()),
+        }
+    }
+
     /// The selected node's resolved output texture, registered/updated as an
     /// egui texture for the 2D view.
     fn preview_texture(&mut self) -> Option<egui::TextureId> {
@@ -437,11 +548,28 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// The app's window/taskbar icon: the bundled Material Icons Round "texture"
+/// glyph (Apache-2.0, see ASSETS.md) on Neutron Star, in Supernova Light —
+/// generated once from the brand palette and committed as a PNG rather than
+/// rendered at startup, so this has zero runtime cost beyond decoding it.
+fn app_icon() -> egui::IconData {
+    let bytes = include_bytes!("../../../assets/icon/icon_256.png");
+    let (rgba, width, height) =
+        mc_export::decode_png_rgba8(bytes).expect("bundled app icon PNG is well-formed");
+    egui::IconData {
+        rgba,
+        width,
+        height,
+    }
+}
+
 fn main() -> eframe::Result<()> {
     env_logger::init();
 
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("MaterialCraft"),
+        viewport: egui::ViewportBuilder::default()
+            .with_title("MaterialCraft")
+            .with_icon(app_icon()),
         ..Default::default()
     };
 
@@ -449,7 +577,7 @@ fn main() -> eframe::Result<()> {
         "MaterialCraft",
         native_options,
         Box::new(|cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            theme::apply(&cc.egui_ctx);
             install_fonts(&cc.egui_ctx);
 
             let render_state = cc
@@ -476,6 +604,7 @@ fn main() -> eframe::Result<()> {
                 viewport_panels: viewport3d_panels::ViewportPanels::default(),
                 dock: dock::DockLayout::default(),
                 preview_texture_id: None,
+                current_path: None,
             }))
         }),
     )
