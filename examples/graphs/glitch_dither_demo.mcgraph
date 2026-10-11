@@ -1,0 +1,208 @@
+{
+  "format_version": 1,
+  "settings": {
+    "resolution": 512,
+    "seed": 0,
+    "normal_format": "OpenGl"
+  },
+  "nodes": {
+    "0": {
+      "kind": "perlin_noise",
+      "params": {
+        "octaves": {
+          "type": "Int",
+          "value": 4
+        },
+        "scale": {
+          "type": "Int",
+          "value": 6
+        },
+        "seed": {
+          "type": "Seed",
+          "value": 2
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "1": {
+      "kind": "gradient_map",
+      "params": {
+        "gradient": {
+          "type": "Gradient",
+          "value": [
+            {
+              "position": 0.0,
+              "color": [
+                0.05,
+                0.05,
+                0.2,
+                1.0
+              ]
+            },
+            {
+              "position": 0.5,
+              "color": [
+                0.9,
+                0.45,
+                0.1,
+                1.0
+              ]
+            },
+            {
+              "position": 1.0,
+              "color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          ]
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "2": {
+      "kind": "block_shift",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "columns": {
+          "type": "Int",
+          "value": 12
+        },
+        "direction": {
+          "type": "Enum",
+          "value": "Both"
+        },
+        "max_offset": {
+          "type": "Float",
+          "value": 0.08
+        },
+        "rows": {
+          "type": "Int",
+          "value": 12
+        },
+        "seed": {
+          "type": "Seed",
+          "value": 3
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "3": {
+      "kind": "channel_split",
+      "params": {
+        "offset_b": {
+          "type": "Vec2",
+          "value": [
+            -0.015,
+            0.0
+          ]
+        },
+        "offset_g": {
+          "type": "Vec2",
+          "value": [
+            0.0,
+            0.0
+          ]
+        },
+        "offset_r": {
+          "type": "Vec2",
+          "value": [
+            0.015,
+            0.0
+          ]
+        },
+        "strength": {
+          "type": "Float",
+          "value": 0.8
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "4": {
+      "kind": "ordered_dither",
+      "params": {
+        "cells": {
+          "type": "Int",
+          "value": 96
+        },
+        "levels": {
+          "type": "Int",
+          "value": 5
+        },
+        "mode": {
+          "type": "Enum",
+          "value": "Luminance"
+        },
+        "pattern": {
+          "type": "Enum",
+          "value": "Bayer 4x4"
+        },
+        "spread": {
+          "type": "Float",
+          "value": 0.8
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "5": {
+      "kind": "output_base_color",
+      "params": {},
+      "position": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "connections": [
+    {
+      "from_node": 0,
+      "from_port": "output",
+      "to_node": 1,
+      "to_port": "input"
+    },
+    {
+      "from_node": 1,
+      "from_port": "output",
+      "to_node": 2,
+      "to_port": "image"
+    },
+    {
+      "from_node": 2,
+      "from_port": "output",
+      "to_node": 3,
+      "to_port": "image"
+    },
+    {
+      "from_node": 3,
+      "from_port": "output",
+      "to_node": 4,
+      "to_port": "image"
+    },
+    {
+      "from_node": 4,
+      "from_port": "output",
+      "to_node": 5,
+      "to_port": "input"
+    }
+  ]
+}
