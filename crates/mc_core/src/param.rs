@@ -76,4 +76,11 @@ impl ParamValue {
             _ => None,
         }
     }
+
+    pub fn as_vec2(&self) -> Option<[f32; 2]> {
+        match self {
+            ParamValue::Vec2(v) => Some(*v),
+            _ => None,
+        }
+    }
 }

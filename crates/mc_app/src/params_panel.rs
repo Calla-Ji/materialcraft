@@ -161,6 +161,43 @@ fn show_inner(
                     }
                 });
             }
+            mc_nodes::defs::ParamSpecKind::Vec2 { min, max, default } => {
+                let mut value = current.and_then(|v| v.as_vec2()).unwrap_or(*default);
+                ui.horizontal(|ui| {
+                    ui.label(param.display_name);
+                    let x_response = ui
+                        .add(egui::Slider::new(&mut value[0], *min..=*max).text("X"))
+                        .on_hover_text(param.tooltip);
+                    let y_response = ui
+                        .add(egui::Slider::new(&mut value[1], *min..=*max).text("Y"))
+                        .on_hover_text(param.tooltip);
+                    // One slider's `changed()` already reflects both axes
+                    // together, since `value` is read fresh each frame —
+                    // committing on either response alone (not a merged
+                    // one) just means only the axis actually dragged
+                    // triggers a write.
+                    commit_live(
+                        ui,
+                        graph,
+                        history,
+                        dragging,
+                        id,
+                        param.name,
+                        &x_response,
+                        mc_core::ParamValue::Vec2(value),
+                    );
+                    commit_live(
+                        ui,
+                        graph,
+                        history,
+                        dragging,
+                        id,
+                        param.name,
+                        &y_response,
+                        mc_core::ParamValue::Vec2(value),
+                    );
+                });
+            }
             mc_nodes::defs::ParamSpecKind::Gradient { default } => {
                 let mut stops = match &current {
                     Some(mc_core::ParamValue::Gradient(s)) if !s.is_empty() => s.clone(),
