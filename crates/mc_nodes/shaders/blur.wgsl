@@ -28,17 +28,24 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let size = i32(params.resolution);
     let sigma = max(params.radius_px, 0.5);
-    let taps = clamp(i32(ceil(sigma * 2.0)), 1, 32);
+    // Fixed at 32 taps max — beyond sigma = 16px, the step between samples
+    // grows instead of the tap count, so the sampled window keeps reaching
+    // out to 2*sigma for any radius instead of plateauing at a fixed ±32
+    // texel window (which is what made the blur stop visibly getting
+    // stronger past a small radius).
+    let step = max(sigma / 16.0, 1.0);
+    let taps = clamp(i32(ceil(sigma * 2.0 / step)), 1, 32);
 
     var sum = vec4<f32>(0.0);
     var weight_sum = 0.0;
     for (var i = -taps; i <= taps; i = i + 1) {
-        let weight = exp(-f32(i * i) / (2.0 * sigma * sigma));
+        let dist = f32(i) * step;
+        let weight = exp(-(dist * dist) / (2.0 * sigma * sigma));
         var coord = vec2<i32>(id.xy);
         if params.direction == 0u {
-            coord.x = wrap_coord(coord.x + i, size);
+            coord.x = wrap_coord(coord.x + i32(round(dist)), size);
         } else {
-            coord.y = wrap_coord(coord.y + i, size);
+            coord.y = wrap_coord(coord.y + i32(round(dist)), size);
         }
         sum = sum + textureLoad(input_tex, coord, 0) * weight;
         weight_sum = weight_sum + weight;

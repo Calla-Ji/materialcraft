@@ -48,13 +48,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     let dir = grad / slope;
-    let taps = clamp(i32(ceil(sigma * 2.0)), 1, 32);
+    // See blur.wgsl: step lets the sampled window keep reaching out to
+    // 2*sigma for any radius instead of capping at a fixed ±32 texels.
+    let step = max(sigma / 16.0, 1.0);
+    let taps = clamp(i32(ceil(sigma * 2.0 / step)), 1, 32);
 
     var sum = vec4<f32>(0.0);
     var weight_sum = 0.0;
     for (var i = -taps; i <= taps; i = i + 1) {
-        let weight = exp(-f32(i * i) / (2.0 * sigma * sigma));
-        let offset = dir * f32(i);
+        let dist = f32(i) * step;
+        let weight = exp(-(dist * dist) / (2.0 * sigma * sigma));
+        let offset = dir * dist;
         let coord = vec2<i32>(
             wrap_coord(x + i32(round(offset.x)), size),
             wrap_coord(y + i32(round(offset.y)), size),
