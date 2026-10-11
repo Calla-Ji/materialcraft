@@ -565,7 +565,7 @@ static NODE_DEFS: &[NodeDef] = &[
         kind: "shape",
         display_name: "Shape",
         category: "Generators/Patterns",
-        tooltip: "A single disc, square, polygon, or star, centered in the tile.",
+        tooltip: "A single disc, square, polygon, star, or leaf, centered in the tile.",
         inputs: &[],
         outputs: &[PortSpec {
             name: "output",
