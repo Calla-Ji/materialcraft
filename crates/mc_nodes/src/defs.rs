@@ -1218,6 +1218,7 @@ static NODE_DEFS: &[NodeDef] = &[
                     default: "OpenGL",
                 },
             },
+            tiling_mode_param(),
         ],
     },
     NodeDef {
@@ -1778,16 +1779,19 @@ static NODE_DEFS: &[NodeDef] = &[
             display_name: "Output",
             port_type: PortType::Gray,
         }],
-        params: &[ParamSpec {
-            name: "intensity",
-            display_name: "Intensity",
-            tooltip: "Multiplier on the detected edge strength.",
-            kind: ParamSpecKind::Float {
-                min: 0.1,
-                max: 16.0,
-                default: 4.0,
+        params: &[
+            ParamSpec {
+                name: "intensity",
+                display_name: "Intensity",
+                tooltip: "Multiplier on the detected edge strength.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 16.0,
+                    default: 4.0,
+                },
             },
-        }],
+            tiling_mode_param(),
+        ],
     },
     NodeDef {
         kind: "slope_blur",

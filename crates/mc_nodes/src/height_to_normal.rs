@@ -5,6 +5,7 @@
 //! tangent-space normal map via a Sobel gradient."
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "height_to_normal";
 
@@ -36,6 +37,7 @@ impl NormalFormat {
 pub struct HeightToNormalParams {
     pub intensity: f32,
     pub format: NormalFormat,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for HeightToNormalParams {
@@ -43,6 +45,7 @@ impl Default for HeightToNormalParams {
         Self {
             intensity: 1.0,
             format: NormalFormat::OpenGl,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -62,6 +65,13 @@ impl HeightToNormalParams {
                     _ => None,
                 })
                 .unwrap_or(defaults.format),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -86,6 +96,7 @@ pub fn dispatch(
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     param_bytes[4..8].copy_from_slice(&params.intensity.to_le_bytes());
     param_bytes[8..12].copy_from_slice(&params.format.as_u32().to_le_bytes());
+    param_bytes[12..16].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("height_to_normal_params"),
         size: param_bytes.len() as u64,
@@ -142,8 +153,10 @@ pub fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::{dispatch, HeightToNormalParams, NormalFormat};
+    use crate::checker::{dispatch as checker_dispatch, CheckerParams};
     use crate::perlin::{dispatch as perlin_dispatch, PerlinParams};
-    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::test_support::{assert_tiles_seamlessly, tiles_seamlessly, RESOLUTION};
+    use crate::tiling::TilingMode;
 
     fn render(params: &HeightToNormalParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -211,6 +224,35 @@ mod tests {
                 "flat height should produce a flat up-facing normal (128,128,255-ish), got {pixel:?}"
             );
         }
+    }
+
+    #[test]
+    fn tiling_off_is_no_longer_seamless() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        checker_dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            RESOLUTION,
+            &CheckerParams { scale: 2 },
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            "output",
+            RESOLUTION,
+            &HeightToNormalParams {
+                tiling_mode: TilingMode::Off,
+                ..HeightToNormalParams::default()
+            },
+        );
+        let pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
+        assert!(
+            tiles_seamlessly(&pixels, RESOLUTION).is_err(),
+            "disabling tiling should introduce a real seam"
+        );
     }
 
     #[test]

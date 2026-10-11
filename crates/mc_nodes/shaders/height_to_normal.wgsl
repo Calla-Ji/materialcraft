@@ -11,7 +11,7 @@ struct HeightToNormalParams {
     resolution: u32,
     intensity: f32,
     flip_y: u32,
-    _pad0: f32,
+    tiling_mode: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: HeightToNormalParams;
@@ -19,7 +19,14 @@ struct HeightToNormalParams {
 @group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
 
 fn height_at(x: i32, y: i32, size: i32) -> f32 {
-    return textureLoad(input_tex, vec2<i32>(wrap_coord(x, size), wrap_coord(y, size)), 0).r;
+    return textureLoad(
+        input_tex,
+        vec2<i32>(
+            tile_coord(x, size, wraps_x(params.tiling_mode)),
+            tile_coord(y, size, wraps_y(params.tiling_mode)),
+        ),
+        0,
+    ).r;
 }
 
 @compute @workgroup_size(8, 8)
