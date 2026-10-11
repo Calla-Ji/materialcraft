@@ -34,8 +34,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let down = textureLoad(intensity_tex, vec2<i32>(x, wrap_coord(y - 1, size)), 0).r;
     let up = textureLoad(intensity_tex, vec2<i32>(x, wrap_coord(y + 1, size)), 0).r;
 
+    // `gradient` here is a per-texel finite difference (Δheight over 1
+    // texel), which shrinks as 1/resolution for a fixed-frequency input —
+    // multiplying by `resolution` once just cancels that back out to the
+    // resolution-independent continuous derivative (Δheight/ΔUV), not a
+    // pixel offset. `amount` is applied to that continuous derivative to get
+    // a resolution-independent UV-space offset, which *then* needs
+    // converting to texel space (another factor of `resolution`) for this
+    // shader's texel-indexed sampling loop below.
     let gradient = vec2<f32>(right - left, up - down) * 0.5;
-    let offset_px = gradient * params.amount * f32(params.resolution);
+    let gradient_duv = gradient * f32(params.resolution);
+    let offset_uv = gradient_duv * params.amount;
+    let offset_px = offset_uv * f32(params.resolution);
     let sample_coord = vec2<i32>(
         wrap_coord(x + i32(round(offset_px.x)), size),
         wrap_coord(y + i32(round(offset_px.y)), size),
