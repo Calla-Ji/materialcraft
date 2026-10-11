@@ -45,7 +45,7 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 
 ## Nodes
 
-39 nodes, each with its own tiling and determinism tests.
+40 nodes, each with its own tiling and determinism tests.
 
 ### Generators — Noise
 - **Perlin Noise** — classic gradient noise, smooth and organic.
@@ -107,6 +107,9 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 - **Flow Blur** — blur along a control map's own gradient, strength scaled by its steepness.
 - **Transform 2D** — offset, rotate, and scale, with wrap-around tiling.
 - **Edge Detect** — highlight where an input changes sharply.
+- **Bevel** — rounds a mask or height input's edges into a beveled height map, with a
+  Convexity control from a plain chamfer through a rounded dome to a concave scoop. Chain into
+  Height to Normal for the usual beveled-edge normal look.
 
 ### Converters
 - **Height to Normal** — a tangent-space normal map from a height map, Sobel-based, with an
@@ -117,8 +120,7 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 ### Outputs
 One pass-through marker node per PBR channel: Base Color, Normal, Roughness, Metallic,
 Height, Ambient Occlusion, Emissive, Alpha. Alpha drives real transparency in the 3D preview
-(not just an exported mask) and exports as its own standalone grayscale map. (A Bevel node is
-planned next — see [PROGRESS.md](PROGRESS.md).)
+(not just an exported mask) and exports as its own standalone grayscale map.
 
 ## Building from source
 
