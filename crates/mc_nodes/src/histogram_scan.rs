@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Blending & Masking / Value Range.
 //!
 //! Display name: "Value Range". Tooltip: "Threshold/window the input

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Icon-button toolbar + slide-out side panel for the 3D viewport, Blender
 //! N-panel style: click an icon to slide a panel out from the right edge of
 //! the viewport image; click it again (or a different icon) to switch or

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! mc_core: the graph model — nodes, connections, parameter values,
 //! topological evaluation order, and dirty/cache tracking.
 //!

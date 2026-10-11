@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The graph model: nodes, connections, settings, evaluation order, and the
 //! dirty/cache tracking that decides what needs re-evaluating.
 //!

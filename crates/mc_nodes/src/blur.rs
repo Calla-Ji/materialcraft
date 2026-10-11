@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Spatial / Blur.
 //!
 //! Display name: "Blur". Tooltip: "Gaussian blur — softens detail. Wrap-

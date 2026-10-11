@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // curve.wgsl — Filters / Adjustments / Curve
 //
 // Inputs:  `input_tex` — the texture to remap.

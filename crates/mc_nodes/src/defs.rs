@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Node metadata: display name, category, inputs/outputs, params with
 //! defaults, and a tooltip for every node kind (CLAUDE.md §6.6). This is the
 //! single source of truth the UI (M3) uses to populate the add-node search

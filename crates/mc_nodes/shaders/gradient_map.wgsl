@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // gradient_map.wgsl — Filters / Adjustments / Gradient Map
 //
 // Inputs:  `input_tex` — a Gray texture (value read from .r).

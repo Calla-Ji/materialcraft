@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Shader source loading, with hot-reload from disk in debug builds.
 //!
 //! WGSL has no `#include`, so a node's full shader is assembled by hand: the

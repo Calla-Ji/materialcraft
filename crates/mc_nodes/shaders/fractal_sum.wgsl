@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // fractal_sum.wgsl — Generators / Noise / Fractal Sum
 //
 // Inputs:  none.

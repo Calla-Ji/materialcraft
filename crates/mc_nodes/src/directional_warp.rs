@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Spatial / Push Warp.
 //!
 //! Display name: "Push Warp". Tooltip: "Shift pixels along one fixed

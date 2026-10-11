@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! mc_cli: headless rendering, with no window.
 //!
 //! Builds the `bricks` example graph (CLAUDE.md's M4 acceptance target),

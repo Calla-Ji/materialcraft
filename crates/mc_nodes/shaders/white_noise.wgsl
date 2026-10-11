@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // white_noise.wgsl — Generators / Noise / White Noise
 //
 // Inputs:  none (this is a generator node).

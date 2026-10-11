@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A generic parameter panel: every widget comes from the selected node's
 //! `NodeDef` (CLAUDE.md §6.6) — no per-node-kind UI code here, so a new node
 //! added in `mc_nodes` gets a working panel for free.

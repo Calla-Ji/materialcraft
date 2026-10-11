@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // warp.wgsl — Filters / Spatial / Warp
 //
 // Inputs:  `input_tex`  — the texture to distort.

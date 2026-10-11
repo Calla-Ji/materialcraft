@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Glitch / Data Corrupt.
 //!
 //! Display name: "Data Corrupt". Tooltip: "Posterizes, channel-swaps, or

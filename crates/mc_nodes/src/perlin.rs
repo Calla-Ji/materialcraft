@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Generators / Noise / Perlin Noise.
 //!
 //! Display name: "Perlin Noise". Tooltip: "Classic gradient noise — smooth,

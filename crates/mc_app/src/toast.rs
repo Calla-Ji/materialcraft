@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A small stack of auto-dismissing notification cards, anchored to the
 //! window's bottom-right corner — CLAUDE.md's M6 "error toasts" item. Before
 //! this existed, every fallible path in the app (failed Open/Save, a graph

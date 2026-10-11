@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // simplex_noise.wgsl — Generators / Noise / Simplex Noise
 //
 // Inputs:  none (this is a generator node).

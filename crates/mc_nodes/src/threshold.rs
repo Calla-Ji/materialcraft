@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Blending & Masking / Threshold.
 //!
 //! Display name: "Threshold". Tooltip: "Hard black/white cutoff: channels at

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // dither_pattern.wgsl — Generators / Patterns / Dither Pattern
 //
 // Output:  `output` — the raw ordered-dither threshold mask itself (Gray),

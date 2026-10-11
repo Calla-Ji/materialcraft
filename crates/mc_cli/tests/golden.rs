@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Golden-image regression tests (CLAUDE.md §10's M6 item): loads an example
 //! graph from disk, evaluates it exactly the way `mc_cli` does, and compares
 //! its Base Color output against a checked-in reference PNG in

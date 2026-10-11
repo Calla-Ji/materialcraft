@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Glitch / Scanline Jitter.
 //!
 //! Display name: "Scanline Jitter". Tooltip: "Shifts random horizontal or

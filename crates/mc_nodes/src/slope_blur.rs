@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Spatial / Flow Blur.
 //!
 //! Display name: "Flow Blur". Tooltip: "Blur along a control map's local

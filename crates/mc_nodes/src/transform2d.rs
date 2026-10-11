@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Spatial / Transform 2D.
 //!
 //! Display name: "Transform 2D". Tooltip: "Offset, rotate, and scale, with

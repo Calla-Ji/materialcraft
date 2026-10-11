@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Converters / Height to Normal.
 //!
 //! Display name: "Height to Normal". Tooltip: "Converts a height map to a

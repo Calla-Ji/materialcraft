@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Command-based undo/redo (CLAUDE.md §9, §11).
 //!
 //! Every graph mutation — `add_node`, `remove_node`, `connect`, `disconnect`,

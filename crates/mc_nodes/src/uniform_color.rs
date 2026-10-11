@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Generators / Patterns / Uniform Color.
 //!
 //! Display name: "Uniform Color". Tooltip: "A flat, solid color fill."

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Generators / Patterns / Dither Pattern.
 //!
 //! Display name: "Dither Pattern". Tooltip: "The raw ordered-dither

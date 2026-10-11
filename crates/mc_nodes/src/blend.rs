@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Blending & Masking / Blend.
 //!
 //! Display name: "Blend". Tooltip: "Combine two inputs with a blend mode,

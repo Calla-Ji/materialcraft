@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Glitch / Block Shift.
 //!
 //! Display name: "Block Shift". Tooltip: "Shifts random blocks of the image

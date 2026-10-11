@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // ordered_dither.wgsl — Filters / Stylize / Ordered Dither
 //
 // Inputs:  `image_tex` — the texture to dither (Gray or Color — both are

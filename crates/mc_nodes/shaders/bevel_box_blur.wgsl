@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // bevel_box_blur.wgsl — one separable pass of a *uniform* box blur, for
 // Filters / Spatial / Bevel's first stage. Deliberately not the existing
 // Blur node's Gaussian kernel: a Gaussian has no sharp start or end to its

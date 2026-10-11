@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Adjustments / Levels.
 //!
 //! Display name: "Levels". Tooltip: "Remap an input/output range, with a

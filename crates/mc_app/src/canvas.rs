@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A fully custom node-graph canvas: pan, zoom, node dragging, click/shift/
 //! box selection, and drag-to-connect wires — built directly on egui
 //! primitives instead of egui-snarl.

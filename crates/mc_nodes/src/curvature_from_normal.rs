@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Converters / Curvature from Normal.
 //!
 //! Display name: "Curvature from Normal". Tooltip: "Convex edges read

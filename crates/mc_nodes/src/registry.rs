@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Bridges mc_core's generic graph model to actual GPU node dispatch.
 //!
 //! Given a [`mc_core::Graph`], [`evaluate`] walks it in topological order,

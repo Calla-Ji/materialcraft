@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Spatial / Bevel.
 //!
 //! Display name: "Bevel". Tooltip: "Rounds a mask or height input's edges

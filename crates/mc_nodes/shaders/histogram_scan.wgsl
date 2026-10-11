@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // histogram_scan.wgsl — Filters / Blending & Masking / Value Range
 //
 // Inputs:  `input_tex` — the texture to threshold/window.

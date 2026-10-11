@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // clamp.wgsl — Filters / Adjustments / Clamp
 //
 // Inputs:  `input_tex` — the texture to clamp.

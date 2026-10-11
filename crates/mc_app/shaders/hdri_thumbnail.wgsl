@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // hdri_thumbnail.wgsl — downsamples an HDRI equirectangular environment map
 // (linear, unbounded HDR values) into a small sRGB-encoded preview for the
 // Environment panel, so the artist can see which HDRI is active without

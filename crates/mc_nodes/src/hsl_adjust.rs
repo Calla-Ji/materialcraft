@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Adjustments / HSL Adjust.
 //!
 //! Display name: "HSL Adjust". Tooltip: "Shift hue, scale saturation, and

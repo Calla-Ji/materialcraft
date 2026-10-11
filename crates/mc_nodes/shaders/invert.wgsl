@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // invert.wgsl — Filters / Adjustments / Invert
 //
 // Inputs:  `input_tex` — the texture to invert.

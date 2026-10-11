@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Spatial / Warp.
 //!
 //! Display name: "Warp". Tooltip: "Distort an input by the gradient of an

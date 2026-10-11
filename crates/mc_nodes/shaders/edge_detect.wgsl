@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // edge_detect.wgsl — Filters / Spatial / Edge Detect
 //
 // Inputs:  `input_tex`.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Parameter values a node's `params` map can hold (CLAUDE.md §5).
 //!
 //! The *meaning* of a param — its min/max/default, what it does — is node

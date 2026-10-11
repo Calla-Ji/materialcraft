@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Spatial / Edge Detect.
 //!
 //! Display name: "Edge Detect". Tooltip: "Highlights where the input changes

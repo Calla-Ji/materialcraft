@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The Export… dialog: pick a preset, resolution, output folder, and graph
 //! name, then write the material via `mc_nodes::export::export_material`.
 

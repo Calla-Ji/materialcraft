@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // curvature_from_normal.wgsl — Converters / Curvature from Normal
 //
 // Inputs:  `input_tex` — a tangent-space normal map (RGB, 0.5 = flat).

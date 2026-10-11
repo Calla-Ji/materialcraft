@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Generators / Noise / Clouds.
 //!
 //! Display name: "Clouds". Tooltip: "An fBm preset tuned for a cloud-like

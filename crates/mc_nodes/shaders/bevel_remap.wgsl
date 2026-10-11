@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // bevel_remap.wgsl — second pass of Filters / Spatial / Bevel: reshapes how
 // much the box blur (see `bevel_box_blur.wgsl`) changed each pixel, with a
 // power curve controlled by `exponent` (derived from the node's Convexity

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Stylize / Ordered Dither.
 //!
 //! Display name: "Ordered Dither". Tooltip: "Reduces an image to a few

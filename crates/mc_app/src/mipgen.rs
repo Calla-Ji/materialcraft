@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Generates a full box-filtered mip chain for a channel texture already in
 //! the pool, so the 3D viewport's mipmap-filtered sampler has real data to
 //! blend between instead of only ever reading mip 0 (the root cause of the

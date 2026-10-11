@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The app's color palette — adapted from the owner's personal brand
 //! identity (astronomically-named colors) for a dark-mode tool, not a
 //! literal copy of the brand guide's own light-mode usage: there, Supernova

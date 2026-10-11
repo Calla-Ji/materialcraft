@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Crash-safe autosave: periodically snapshots the current graph to a fixed
 //! recovery file outside the user's own save location, so a crash or force-
 //! quit doesn't lose work back to the last manual save (CLAUDE.md's M6

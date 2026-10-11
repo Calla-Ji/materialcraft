@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // hsl_adjust.wgsl — Filters / Adjustments / HSL Adjust
 //
 // Inputs:  `input_tex` — a Color texture.

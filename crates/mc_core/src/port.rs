@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Port types a node's inputs/outputs can carry (CLAUDE.md §5).
 //!
 //! `mc_core` stores this for completeness but doesn't enforce compatibility

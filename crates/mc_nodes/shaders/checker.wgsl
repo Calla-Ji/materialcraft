@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // checker.wgsl — Generators / Patterns / Checker
 //
 // Output:  `output` — an alternating black/white grid, `scale` cells across.

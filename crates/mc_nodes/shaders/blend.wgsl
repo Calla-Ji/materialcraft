@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // blend.wgsl — Filters / Blending & Masking / Blend
 //
 // Inputs:  `base_tex`, `blend_tex` — the two layers to combine.

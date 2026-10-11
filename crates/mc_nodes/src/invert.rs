@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Adjustments / Invert.
 //!
 //! Display name: "Invert". Tooltip: "Flips light and dark: output = 1 - input."

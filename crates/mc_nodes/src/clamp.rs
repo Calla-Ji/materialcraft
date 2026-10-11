@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Adjustments / Clamp.
 //!
 //! Display name: "Clamp". Tooltip: "Restricts values to a [low, high] range."

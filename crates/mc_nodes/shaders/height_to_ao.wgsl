@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // height_to_ao.wgsl — Converters / Height to AO
 //
 // Inputs:  `input_tex` — the original height map, plus three max-filtered

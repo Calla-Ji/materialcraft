@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Adjustments / Curve.
 //!
 //! Display name: "Curve". Tooltip: "A 5-point piecewise-linear curve at

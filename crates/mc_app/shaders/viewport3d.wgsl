@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // viewport3d.wgsl — the 3D preview's render pipeline (CLAUDE.md §9's "3D
 // View": GGX metallic-roughness PBR, a simple procedural sky instead of a
 // bundled HDRI, height used as vertex displacement, normal mapping from a

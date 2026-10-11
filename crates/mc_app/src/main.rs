@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! mc_app: the desktop application shell.
 //!
 //! Owns the window and the overall panel layout (menu, 2D/3D previews, node

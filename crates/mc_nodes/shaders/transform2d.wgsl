@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // transform2d.wgsl — Filters / Spatial / Transform 2D
 //
 // Inputs:  `input_tex`.

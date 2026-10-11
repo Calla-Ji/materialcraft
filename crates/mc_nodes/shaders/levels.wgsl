@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // levels.wgsl — Filters / Adjustments / Levels
 //
 // Inputs:  `input_tex` — the texture to adjust.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Export naming presets (CLAUDE.md §8): fixed for v0.1 rather than the
 //! fully editable templates the spec eventually wants, but using the same
 //! `{name}` substitution so making them editable later is a small change.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // height_to_normal.wgsl — Converters / Height to Normal
 //
 // Inputs:  `input_tex` — a height/gray map.

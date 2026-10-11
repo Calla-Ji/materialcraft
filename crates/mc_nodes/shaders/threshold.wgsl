@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // threshold.wgsl — Filters / Blending & Masking / Threshold
 //
 // Inputs:  `input_tex` — the texture to threshold.

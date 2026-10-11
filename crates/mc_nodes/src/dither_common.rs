@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Shared helpers for the Dither family (Dither Pattern, Ordered Dither,
 //! Palette Dither) — the bundled CC0 blue noise mask and the boilerplate to
 //! get it onto the GPU, which all three need identically (see ASSETS.md).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Generators / Patterns / Shape.
 //!
 //! Display name: "Shape". Tooltip: "A single disc, square, polygon, or star,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Encodes a node's linear-space output texture to sRGB gamma for on-screen
 //! display — see `shaders/display_encode.wgsl`'s doc comment for why this
 //! has to be a real GPU pass and not just "register the texture as-is."

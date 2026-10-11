@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! An edge in the graph: one node's output port feeding another's input port.
 
 use serde::{Deserialize, Serialize};

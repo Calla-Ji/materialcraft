@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Generators / Patterns / Pattern Generator.
 //!
 //! Display name: "Pattern Generator". Tooltip: "A brick or grid pattern —

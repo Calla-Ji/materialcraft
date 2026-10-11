@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Glitch / Channel Split.
 //!
 //! Display name: "Channel Split". Tooltip: "Samples each RGB channel at its

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Converters / Height to AO.
 //!
 //! Display name: "Height to AO". Tooltip: "A simple screen-space-style

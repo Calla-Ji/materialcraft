@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Adjustments / Gradient Map.
 //!
 //! Display name: "Gradient Map". Tooltip: "Maps a Gray input through a color

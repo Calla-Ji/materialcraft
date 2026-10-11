@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The 3D preview (CLAUDE.md §9's "3D View"): a render pipeline (as opposed
 //! to the compute pipelines everywhere else in the app) that draws a sphere,
 //! cube, or plane lit by one directional light plus a procedural sky,

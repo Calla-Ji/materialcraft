@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! mc_nodes: node definitions — metadata, params, and the WGSL compute
 //! shader that implements each one. [`registry`] bridges mc_core's generic
 //! graph model to actually dispatching each node's GPU work.

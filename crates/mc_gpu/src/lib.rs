@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! mc_gpu: shared wgpu device/queue, a texture pool, and a compute pipeline cache.
 //!
 //! Blender/Unreal analogy: this is the "render engine" plumbing underneath the

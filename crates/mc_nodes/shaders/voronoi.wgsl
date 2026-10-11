@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // voronoi.wgsl — Generators / Noise / Voronoi
 //
 // Inputs:  none.

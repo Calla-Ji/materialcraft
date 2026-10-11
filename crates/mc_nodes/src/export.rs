@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Bridges the graph (`mc_core` + [`crate::registry`]) to `mc_export`: finds
 //! each Output node present in `graph`, reads its texture back at the
 //! requested export resolution, and writes files per the naming preset.

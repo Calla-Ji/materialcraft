@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Shared test helpers (CLAUDE.md §11: every node gets a tiling test and a
 //! determinism test). Not compiled outside `#[cfg(test)]`.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // blur.wgsl — Filters / Spatial / Blur
 //
 // Inputs:  `input_tex`.

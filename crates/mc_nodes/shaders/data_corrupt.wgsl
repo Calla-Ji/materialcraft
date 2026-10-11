@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // data_corrupt.wgsl — Filters / Glitch / Data Corrupt
 //
 // Inputs:  `image_tex` — the texture to corrupt (Gray or Color — both are

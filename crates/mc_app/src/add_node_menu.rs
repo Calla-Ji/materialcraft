@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A screen-space "add node" popup for right-clicking empty canvas, or for
 //! dropping a dragged wire on empty canvas (filtered to node kinds with a
 //! compatible port, auto-connected on pick — see `canvas.rs`'s

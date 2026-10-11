@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // mip_downsample.wgsl — one box-filter step of a channel texture's mip
 // chain: reads mip L-1, writes mip L at half the resolution.
 //

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // channel_split.wgsl — Filters / Glitch / Channel Split
 //
 // Inputs:  `image_tex` — the texture to split.

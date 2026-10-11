@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A fixed-topology docking layout for the four main panels ("crates"): 2D
 //! View, 3D View, Node Graph, and Parameters. Built directly on raw egui
 //! primitives (`Painter`, `Sense::drag`, rects we own) rather than

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // display_encode.wgsl — encodes a linear-space source texture to sRGB gamma
 // for on-screen display.
 //

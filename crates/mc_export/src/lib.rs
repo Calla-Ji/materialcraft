@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! mc_export: PNG/EXR writing, channel packing, naming presets.
 //!
 //! Pure CPU-side post-processing — no GPU dependency. Callers (`mc_app`,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Generators / Patterns / Gradient Linear.
 //!
 //! Display name: "Gradient Linear". Tooltip: "A left-to-right ramp from

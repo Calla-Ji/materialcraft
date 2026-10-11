@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // block_shift.wgsl — Filters / Glitch / Block Shift
 //
 // Inputs:  `image_tex` — the texture to glitch (Gray or Color — both are

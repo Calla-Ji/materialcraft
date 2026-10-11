@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Stylize / Palette Dither.
 //!
 //! Display name: "Palette Dither". Tooltip: "Dithers a Color image down to a

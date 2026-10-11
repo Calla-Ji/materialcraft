@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Adjustments / Grayscale Conversion.
 //!
 //! Display name: "Grayscale Conversion". Tooltip: "Converts Color to Gray by

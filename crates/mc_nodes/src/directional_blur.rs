@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Filters / Spatial / Directional Blur.
 //!
 //! Display name: "Directional Blur". Tooltip: "A motion-blur-like smear

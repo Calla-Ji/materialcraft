@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // common.wgsl — shared helpers for node shaders (hashing, gradients, tiling).
 //
 // Every generator must be *periodic*: sampling just past the right edge of

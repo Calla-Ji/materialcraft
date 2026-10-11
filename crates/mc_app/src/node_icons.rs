@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A Material Icons Round glyph per node kind, for the Node Library panel
 //! (same bundled font as the 3D viewport toolbar — see ASSETS.md). These are
 //! placeholder choices: picked for a reasonable visual match per node, not

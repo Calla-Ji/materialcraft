@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // grayscale_conversion.wgsl — Filters / Adjustments / Grayscale Conversion
 //
 // Inputs:  `input_tex` — a Color texture.

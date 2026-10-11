@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // uniform_color.wgsl — Generators / Patterns / Uniform Color
 //
 // Inputs:  none.

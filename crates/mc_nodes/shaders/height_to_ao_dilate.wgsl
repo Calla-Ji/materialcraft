@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // height_to_ao_dilate.wgsl — one separable pass of a *falloff-weighted* max
 // filter: each output texel becomes the highest nearby height found,
 // attenuated by a Gaussian falloff with distance (same curve blur.wgsl

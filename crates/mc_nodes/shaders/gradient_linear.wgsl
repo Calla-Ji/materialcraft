@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // gradient_linear.wgsl — Generators / Patterns / Gradient Linear
 //
 // Inputs:  none.

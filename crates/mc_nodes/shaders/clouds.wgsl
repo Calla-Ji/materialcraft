@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // clouds.wgsl — Generators / Noise / Clouds
 //
 // Inputs:  none (this is a generator node).

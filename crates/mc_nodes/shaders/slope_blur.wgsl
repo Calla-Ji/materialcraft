@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // slope_blur.wgsl — Filters / Spatial / Flow Blur
 //
 // Inputs:  `input_tex`   — the texture to blur.

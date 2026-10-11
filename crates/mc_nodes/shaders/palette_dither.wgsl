@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // palette_dither.wgsl — Filters / Stylize / Palette Dither
 //
 // Inputs:  `image_tex` — the Color texture to dither down to a fixed

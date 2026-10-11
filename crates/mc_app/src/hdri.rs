@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Loads equirectangular HDRI environment maps for the 3D viewport's sky and
 //! reflections: a handful of bundled CC0 presets (see ASSETS.md for each
 //! one's source/license) plus an arbitrary user-supplied `.hdr`/`.exr` file,
