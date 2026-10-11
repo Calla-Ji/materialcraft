@@ -10,12 +10,15 @@
 //   radius_px — blur radius in pixels (converted from the node's UV-space
 //               radius param on the Rust side, since params here are in
 //               texel space for the sampling loop)
+//   wrap — whether *this pass's* axis should wrap (tile) or clamp to the
+//          edge texel instead — resolved from the node's Tiling Mode param
+//          on the Rust side, since each pass only ever touches one axis.
 
 struct BlurParams {
     resolution: u32,
     direction: u32,
     radius_px: f32,
-    _pad0: f32,
+    wrap: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: BlurParams;
@@ -43,10 +46,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let dist = f32(i) * step;
         let weight = exp(-(dist * dist) / (2.0 * sigma * sigma));
         var coord = vec2<i32>(id.xy);
+        let wrap = params.wrap != 0u;
         if params.direction == 0u {
-            coord.x = wrap_coord(coord.x + i32(round(dist)), size);
+            coord.x = tile_coord(coord.x + i32(round(dist)), size, wrap);
         } else {
-            coord.y = wrap_coord(coord.y + i32(round(dist)), size);
+            coord.y = tile_coord(coord.y + i32(round(dist)), size, wrap);
         }
         sum = sum + textureLoad(input_tex, coord, 0) * weight;
         weight_sum = weight_sum + weight;

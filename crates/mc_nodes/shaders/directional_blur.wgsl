@@ -13,7 +13,7 @@ struct DirectionalBlurParams {
     resolution: u32,
     angle: f32,
     radius_px: f32,
-    _pad0: f32,
+    tiling_mode: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: DirectionalBlurParams;
@@ -44,8 +44,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let weight = exp(-(dist * dist) / (2.0 * sigma * sigma));
         let offset = dir * dist;
         let coord = vec2<i32>(
-            wrap_coord(i32(id.x) + i32(round(offset.x)), size),
-            wrap_coord(i32(id.y) + i32(round(offset.y)), size),
+            tile_coord(i32(id.x) + i32(round(offset.x)), size, wraps_x(params.tiling_mode)),
+            tile_coord(i32(id.y) + i32(round(offset.y)), size, wraps_y(params.tiling_mode)),
         );
         sum = sum + textureLoad(input_tex, coord, 0) * weight;
         weight_sum = weight_sum + weight;

@@ -6,6 +6,7 @@
 //! looks."
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "slope_blur";
 
@@ -13,11 +14,15 @@ pub struct SlopeBlurParams {
     /// In UV space (0..1), like `BlurParams::radius` — the blur radius
     /// reached at the control map's steepest point.
     pub radius: f32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for SlopeBlurParams {
     fn default() -> Self {
-        Self { radius: 0.03 }
+        Self {
+            radius: 0.03,
+            tiling_mode: TilingMode::default(),
+        }
     }
 }
 
@@ -29,6 +34,13 @@ impl SlopeBlurParams {
                 .get("radius")
                 .and_then(mc_core::ParamValue::as_float)
                 .unwrap_or(defaults.radius),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -58,6 +70,7 @@ pub fn dispatch(
     let mut param_bytes = [0u8; 16];
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     param_bytes[4..8].copy_from_slice(&radius_px.to_le_bytes());
+    param_bytes[8..12].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("slope_blur_params"),
         size: param_bytes.len() as u64,
@@ -119,7 +132,8 @@ pub fn dispatch(
 mod tests {
     use super::{dispatch, SlopeBlurParams};
     use crate::perlin::{dispatch as perlin_dispatch, PerlinParams};
-    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::test_support::{assert_tiles_seamlessly, max_channel_diff, pixel, RESOLUTION};
+    use crate::tiling::TilingMode;
     use crate::uniform_color::{dispatch as uniform_color_dispatch, UniformColorParams};
 
     fn render(params: &SlopeBlurParams) -> Vec<u8> {
@@ -154,12 +168,21 @@ mod tests {
 
     #[test]
     fn preserves_tiling_of_its_inputs() {
-        assert_tiles_seamlessly(&render(&SlopeBlurParams { radius: 0.05 }), RESOLUTION);
+        assert_tiles_seamlessly(
+            &render(&SlopeBlurParams {
+                radius: 0.05,
+                tiling_mode: TilingMode::Both,
+            }),
+            RESOLUTION,
+        );
     }
 
     #[test]
     fn is_deterministic() {
-        let params = SlopeBlurParams { radius: 0.03 };
+        let params = SlopeBlurParams {
+            radius: 0.03,
+            tiling_mode: TilingMode::Both,
+        };
         assert_eq!(render(&params), render(&params));
     }
 
@@ -194,13 +217,43 @@ mod tests {
             "control",
             "output",
             RESOLUTION,
-            &SlopeBlurParams { radius: 0.05 },
+            &SlopeBlurParams {
+                radius: 0.05,
+                tiling_mode: TilingMode::Both,
+            },
         );
         let after = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
 
         assert_eq!(
             before, after,
             "a flat control map must not blur the input at all"
+        );
+    }
+
+    #[test]
+    fn tiling_off_introduces_a_seam() {
+        let wrapped = render(&SlopeBlurParams {
+            radius: 0.1,
+            tiling_mode: TilingMode::Both,
+        });
+        let clamped = render(&SlopeBlurParams {
+            radius: 0.1,
+            tiling_mode: TilingMode::Off,
+        });
+        let seam = |pixels: &[u8]| -> i32 {
+            (0..RESOLUTION)
+                .map(|y| {
+                    max_channel_diff(
+                        pixel(pixels, RESOLUTION, 0, y),
+                        pixel(pixels, RESOLUTION, RESOLUTION - 1, y),
+                    )
+                })
+                .max()
+                .unwrap()
+        };
+        assert!(
+            seam(&clamped) > seam(&wrapped),
+            "disabling tiling should make the left/right edges blur independently"
         );
     }
 }

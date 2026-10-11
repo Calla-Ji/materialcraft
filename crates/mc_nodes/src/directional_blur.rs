@@ -5,6 +5,7 @@
 //! along one fixed direction, rather than Blur's even spread."
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "directional_blur";
 
@@ -13,6 +14,7 @@ pub struct DirectionalBlurParams {
     pub radius: f32,
     /// Fraction of a full turn.
     pub angle: f32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for DirectionalBlurParams {
@@ -20,6 +22,7 @@ impl Default for DirectionalBlurParams {
         Self {
             radius: 0.02,
             angle: 0.0,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -36,6 +39,13 @@ impl DirectionalBlurParams {
         Self {
             radius: float("radius", defaults.radius),
             angle: float("angle", defaults.angle),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -61,6 +71,7 @@ pub fn dispatch(
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     param_bytes[4..8].copy_from_slice(&params.angle.to_le_bytes());
     param_bytes[8..12].copy_from_slice(&radius_px.to_le_bytes());
+    param_bytes[12..16].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("directional_blur_params"),
         size: param_bytes.len() as u64,
@@ -118,7 +129,8 @@ pub fn dispatch(
 mod tests {
     use super::{dispatch, DirectionalBlurParams};
     use crate::perlin::{dispatch as perlin_dispatch, PerlinParams};
-    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::test_support::{assert_tiles_seamlessly, max_channel_diff, pixel, RESOLUTION};
+    use crate::tiling::TilingMode;
 
     fn render(params: &DirectionalBlurParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -140,6 +152,7 @@ mod tests {
         let params = DirectionalBlurParams {
             radius: 0.04,
             angle: 0.2,
+            tiling_mode: TilingMode::Both,
         };
         assert_tiles_seamlessly(&render(&params), RESOLUTION);
     }
@@ -149,6 +162,7 @@ mod tests {
         let params = DirectionalBlurParams {
             radius: 0.03,
             angle: 0.1,
+            tiling_mode: TilingMode::Both,
         };
         assert_eq!(render(&params), render(&params));
     }
@@ -161,6 +175,7 @@ mod tests {
         let pixels = render(&DirectionalBlurParams {
             radius: 0.06,
             angle: 0.0,
+            tiling_mode: TilingMode::Both,
         });
         let r = RESOLUTION as usize;
         let row_diff: i64 = (0..r)
@@ -186,6 +201,35 @@ mod tests {
             row_diff < col_diff,
             "a horizontal directional blur should smooth left-right variation \
              ({row_diff}) more than top-bottom variation ({col_diff})"
+        );
+    }
+
+    #[test]
+    fn tiling_off_introduces_a_seam_on_both_axes() {
+        let wrapped = render(&DirectionalBlurParams {
+            radius: 0.08,
+            angle: 0.125,
+            tiling_mode: TilingMode::Both,
+        });
+        let clamped = render(&DirectionalBlurParams {
+            radius: 0.08,
+            angle: 0.125,
+            tiling_mode: TilingMode::Off,
+        });
+        let seam = |pixels: &[u8]| -> i32 {
+            (0..RESOLUTION)
+                .map(|y| {
+                    max_channel_diff(
+                        pixel(pixels, RESOLUTION, 0, y),
+                        pixel(pixels, RESOLUTION, RESOLUTION - 1, y),
+                    )
+                })
+                .max()
+                .unwrap()
+        };
+        assert!(
+            seam(&clamped) > seam(&wrapped),
+            "disabling tiling should make the left/right edges blur independently"
         );
     }
 }

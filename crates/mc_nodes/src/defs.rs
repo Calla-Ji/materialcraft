@@ -80,6 +80,26 @@ impl ParamSpec {
     }
 }
 
+/// The shared "Tiling Mode" param (see `crate::tiling::TilingMode`) for any
+/// node whose neighbor-sampling can show a visible edge-duplication
+/// artifact — one helper rather than repeating the same `ParamSpec` at
+/// every call site, so the name/wording stays identical everywhere it
+/// appears.
+const fn tiling_mode_param() -> ParamSpec {
+    ParamSpec {
+        name: "tiling_mode",
+        display_name: "Tiling",
+        tooltip: "This node can read past a tile's edge (e.g. a blur or an offset), which \
+                  normally wraps around to the opposite edge to stay seamless. Turn an axis \
+                  off here if you'd rather that content just clip at the edge instead of \
+                  reappearing on the other side.",
+        kind: ParamSpecKind::Enum {
+            options: &crate::tiling::TilingMode::NAMES,
+            default: "Both (Seamless)",
+        },
+    }
+}
+
 /// One input or output port a node declares.
 pub struct PortSpec {
     pub name: &'static str,
@@ -991,16 +1011,19 @@ static NODE_DEFS: &[NodeDef] = &[
             display_name: "Output",
             port_type: PortType::Color,
         }],
-        params: &[ParamSpec {
-            name: "radius",
-            display_name: "Radius",
-            tooltip: "Blur radius, in UV space.",
-            kind: ParamSpecKind::Float {
-                min: 0.0,
-                max: 0.1,
-                default: 0.01,
+        params: &[
+            ParamSpec {
+                name: "radius",
+                display_name: "Radius",
+                tooltip: "Blur radius, in UV space.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.1,
+                    default: 0.01,
+                },
             },
-        }],
+            tiling_mode_param(),
+        ],
     },
     NodeDef {
         kind: "bevel",
@@ -1153,18 +1176,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 tooltip: "Mirrors the input top-to-bottom.",
                 kind: ParamSpecKind::Bool { default: false },
             },
-            ParamSpec {
-                name: "tiling_mode",
-                display_name: "Tiling",
-                tooltip: "An offset/rotation/scale that pushes content past a tile edge \
-                          normally wraps it around to the opposite edge, to stay seamless. \
-                          Turn an axis off here if you'd rather that content just clip at the \
-                          edge instead of reappearing on the other side.",
-                kind: ParamSpecKind::Enum {
-                    options: &crate::tiling::TilingMode::NAMES,
-                    default: "Both (Seamless)",
-                },
-            },
+            tiling_mode_param(),
         ],
     },
     NodeDef {
@@ -1691,6 +1703,7 @@ static NODE_DEFS: &[NodeDef] = &[
                     default: 0.0,
                 },
             },
+            tiling_mode_param(),
         ],
     },
     NodeDef {
@@ -1793,16 +1806,19 @@ static NODE_DEFS: &[NodeDef] = &[
             display_name: "Output",
             port_type: PortType::Color,
         }],
-        params: &[ParamSpec {
-            name: "radius",
-            display_name: "Radius",
-            tooltip: "Maximum blur radius, reached at the control map's steepest point.",
-            kind: ParamSpecKind::Float {
-                min: 0.0,
-                max: 0.1,
-                default: 0.03,
+        params: &[
+            ParamSpec {
+                name: "radius",
+                display_name: "Radius",
+                tooltip: "Maximum blur radius, reached at the control map's steepest point.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.1,
+                    default: 0.03,
+                },
             },
-        }],
+            tiling_mode_param(),
+        ],
     },
     NodeDef {
         kind: "height_to_ao",

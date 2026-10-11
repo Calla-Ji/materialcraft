@@ -285,6 +285,7 @@ pub fn dispatch(
         resolution,
         &crate::blur::BlurParams {
             radius: params.radius * 0.5,
+            tiling_mode: crate::tiling::TilingMode::default(),
         },
     );
 }

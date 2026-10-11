@@ -5,6 +5,7 @@
 //! addressed so it stays tileable."
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "blur";
 
@@ -12,11 +13,15 @@ pub struct BlurParams {
     /// In UV space (0..1), per CLAUDE.md §6.2 — converted to a pixel radius
     /// at dispatch time since the shader's sampling loop needs texel steps.
     pub radius: f32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for BlurParams {
     fn default() -> Self {
-        Self { radius: 0.01 }
+        Self {
+            radius: 0.01,
+            tiling_mode: TilingMode::default(),
+        }
     }
 }
 
@@ -28,6 +33,13 @@ impl BlurParams {
                 .get("radius")
                 .and_then(mc_core::ParamValue::as_float)
                 .unwrap_or(defaults.radius),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -45,8 +57,26 @@ pub fn dispatch(
     let radius_px = params.radius * resolution as f32;
     let temp_key = format!("{output_key}__blur_temp");
 
-    dispatch_pass(gpu, pool, input_key, &temp_key, resolution, 0, radius_px);
-    dispatch_pass(gpu, pool, &temp_key, output_key, resolution, 1, radius_px);
+    dispatch_pass(
+        gpu,
+        pool,
+        input_key,
+        &temp_key,
+        resolution,
+        0,
+        radius_px,
+        params.tiling_mode.wrap_x(),
+    );
+    dispatch_pass(
+        gpu,
+        pool,
+        &temp_key,
+        output_key,
+        resolution,
+        1,
+        radius_px,
+        params.tiling_mode.wrap_y(),
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -58,6 +88,7 @@ fn dispatch_pass(
     resolution: u32,
     direction: u32,
     radius_px: f32,
+    wrap: bool,
 ) {
     let input_view = pool
         .view(input_key)
@@ -71,6 +102,7 @@ fn dispatch_pass(
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     param_bytes[4..8].copy_from_slice(&direction.to_le_bytes());
     param_bytes[8..12].copy_from_slice(&radius_px.to_le_bytes());
+    param_bytes[12..16].copy_from_slice(&(wrap as u32).to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("blur_params"),
         size: param_bytes.len() as u64,
@@ -128,7 +160,35 @@ fn dispatch_pass(
 mod tests {
     use super::{dispatch, BlurParams};
     use crate::perlin::{dispatch as perlin_dispatch, PerlinParams};
-    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::test_support::{assert_tiles_seamlessly, max_channel_diff, pixel, RESOLUTION};
+    use crate::tiling::TilingMode;
+
+    /// The largest left/right-edge mismatch anywhere along the seam —
+    /// `assert_tiles_seamlessly` checks this stays within the interior
+    /// baseline; these tests check the opposite, that it doesn't.
+    fn left_right_seam_diff(pixels: &[u8]) -> i32 {
+        (0..RESOLUTION)
+            .map(|y| {
+                max_channel_diff(
+                    pixel(pixels, RESOLUTION, 0, y),
+                    pixel(pixels, RESOLUTION, RESOLUTION - 1, y),
+                )
+            })
+            .max()
+            .unwrap()
+    }
+
+    fn top_bottom_seam_diff(pixels: &[u8]) -> i32 {
+        (0..RESOLUTION)
+            .map(|x| {
+                max_channel_diff(
+                    pixel(pixels, RESOLUTION, x, 0),
+                    pixel(pixels, RESOLUTION, x, RESOLUTION - 1),
+                )
+            })
+            .max()
+            .unwrap()
+    }
 
     fn render(params: &BlurParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -150,12 +210,21 @@ mod tests {
     /// outside the texture.
     #[test]
     fn preserves_tiling_of_its_input() {
-        assert_tiles_seamlessly(&render(&BlurParams { radius: 0.03 }), RESOLUTION);
+        assert_tiles_seamlessly(
+            &render(&BlurParams {
+                radius: 0.03,
+                tiling_mode: TilingMode::Both,
+            }),
+            RESOLUTION,
+        );
     }
 
     #[test]
     fn is_deterministic() {
-        let params = BlurParams { radius: 0.02 };
+        let params = BlurParams {
+            radius: 0.02,
+            tiling_mode: TilingMode::Both,
+        };
         assert_eq!(
             render(&params),
             render(&params),
@@ -182,7 +251,10 @@ mod tests {
             "input",
             "output",
             RESOLUTION,
-            &BlurParams { radius: 0.05 },
+            &BlurParams {
+                radius: 0.05,
+                tiling_mode: TilingMode::Both,
+            },
         );
         let after = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
 
@@ -201,6 +273,40 @@ mod tests {
         assert!(
             roughness(&after) < roughness(&before),
             "blurred output should be smoother (less pixel-to-pixel variation) than the input"
+        );
+    }
+
+    #[test]
+    fn horizontal_tiling_off_introduces_a_left_right_seam() {
+        let wrapped = render(&BlurParams {
+            radius: 0.1,
+            tiling_mode: TilingMode::Both,
+        });
+        let clamped = render(&BlurParams {
+            radius: 0.1,
+            tiling_mode: TilingMode::VerticalOnly,
+        });
+        assert!(
+            left_right_seam_diff(&clamped) > left_right_seam_diff(&wrapped),
+            "disabling horizontal tiling should make the left/right edges blur independently \
+             instead of blending across the seam"
+        );
+    }
+
+    #[test]
+    fn vertical_tiling_off_introduces_a_top_bottom_seam() {
+        let wrapped = render(&BlurParams {
+            radius: 0.1,
+            tiling_mode: TilingMode::Both,
+        });
+        let clamped = render(&BlurParams {
+            radius: 0.1,
+            tiling_mode: TilingMode::HorizontalOnly,
+        });
+        assert!(
+            top_bottom_seam_diff(&clamped) > top_bottom_seam_diff(&wrapped),
+            "disabling vertical tiling should make the top/bottom edges blur independently \
+             instead of blending across the seam"
         );
     }
 }

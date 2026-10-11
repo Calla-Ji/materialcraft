@@ -13,7 +13,7 @@
 struct SlopeBlurParams {
     resolution: u32,
     radius_px: f32,
-    _pad0: f32,
+    tiling_mode: u32,
     _pad1: f32,
 }
 
@@ -22,8 +22,12 @@ struct SlopeBlurParams {
 @group(0) @binding(2) var control_tex: texture_2d<f32>;
 @group(0) @binding(3) var output: texture_storage_2d<rgba8unorm, write>;
 
-fn control_at(x: i32, y: i32, size: i32) -> f32 {
-    return textureLoad(control_tex, vec2<i32>(wrap_coord(x, size), wrap_coord(y, size)), 0).r;
+fn control_at(x: i32, y: i32, size: i32, wrap_x: bool, wrap_y: bool) -> f32 {
+    return textureLoad(
+        control_tex,
+        vec2<i32>(tile_coord(x, size, wrap_x), tile_coord(y, size, wrap_y)),
+        0,
+    ).r;
 }
 
 @compute @workgroup_size(8, 8)
@@ -34,11 +38,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let size = i32(params.resolution);
     let x = i32(id.x);
     let y = i32(id.y);
+    let wrap_x = wraps_x(params.tiling_mode);
+    let wrap_y = wraps_y(params.tiling_mode);
 
-    let left = control_at(x - 1, y, size);
-    let right = control_at(x + 1, y, size);
-    let down = control_at(x, y - 1, size);
-    let up = control_at(x, y + 1, size);
+    let left = control_at(x - 1, y, size, wrap_x, wrap_y);
+    let right = control_at(x + 1, y, size, wrap_x, wrap_y);
+    let down = control_at(x, y - 1, size, wrap_x, wrap_y);
+    let up = control_at(x, y + 1, size, wrap_x, wrap_y);
     let grad = vec2<f32>(right - left, up - down) * 0.5;
     let slope = length(grad);
 
@@ -61,8 +67,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let weight = exp(-(dist * dist) / (2.0 * sigma * sigma));
         let offset = dir * dist;
         let coord = vec2<i32>(
-            wrap_coord(x + i32(round(offset.x)), size),
-            wrap_coord(y + i32(round(offset.y)), size),
+            tile_coord(x + i32(round(offset.x)), size, wrap_x),
+            tile_coord(y + i32(round(offset.y)), size, wrap_y),
         );
         sum = sum + textureLoad(input_tex, coord, 0) * weight;
         weight_sum = weight_sum + weight;
