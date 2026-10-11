@@ -204,6 +204,413 @@ fn build_glitch_dither_demo_graph() -> mc_core::Graph {
     graph
 }
 
+/// CLAUDE.md §10's M6 example graph: Voronoi "Edges" (cell cracks) blended
+/// with a surface fractal, colorized gray/tan by height.
+fn build_rock_graph() -> mc_core::Graph {
+    let mut graph = mc_core::Graph::new();
+    graph.settings.resolution = 512;
+
+    // "Edges" reads bright exactly at a cell boundary and ~0 everywhere
+    // else (confirmed by rendering it alone) — the opposite polarity of
+    // what a height map wants (cracks recessed/dark, faces raised/bright),
+    // so it's used as a *mask* carving black into the surface noise below,
+    // not blended directly into the driving signal itself.
+    let cracks = graph.add_node(
+        mc_core::Node::new("voronoi")
+            .with_param("scale", mc_core::ParamValue::Int(8))
+            .with_param("jitter", mc_core::ParamValue::Float(0.9))
+            .with_param("mode", mc_core::ParamValue::Enum("Edges".to_string()))
+            .with_param("seed", mc_core::ParamValue::Seed(11)),
+    );
+    let surface_noise = graph.add_node(
+        mc_core::Node::new("fractal_sum")
+            .with_param("scale", mc_core::ParamValue::Int(6))
+            .with_param("octaves", mc_core::ParamValue::Int(5))
+            .with_param("gain", mc_core::ParamValue::Float(0.55))
+            .with_param("seed", mc_core::ParamValue::Seed(12)),
+    );
+    let black = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.0, 0.0, 0.0, 1.0])),
+    );
+    let combined = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Multiply".to_string()))
+            .with_param("opacity", mc_core::ParamValue::Float(0.85)),
+    );
+    graph
+        .connect(surface_noise, "output", combined, "base")
+        .unwrap();
+    graph.connect(black, "output", combined, "blend").unwrap();
+    graph.connect(cracks, "output", combined, "mask").unwrap();
+
+    let colorize = graph.add_node(mc_core::Node::new("gradient_map").with_param(
+        "gradient",
+        mc_core::ParamValue::Gradient(vec![
+            mc_core::GradientStop {
+                position: 0.0,
+                color: [0.12, 0.11, 0.10, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 0.5,
+                color: [0.35, 0.33, 0.30, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 1.0,
+                color: [0.58, 0.55, 0.49, 1.0],
+            },
+        ]),
+    ));
+    graph
+        .connect(combined, "output", colorize, "input")
+        .unwrap();
+
+    let normal = graph.add_node(
+        mc_core::Node::new("height_to_normal")
+            .with_param("intensity", mc_core::ParamValue::Float(1.5)),
+    );
+    graph.connect(combined, "output", normal, "input").unwrap();
+
+    let roughness = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.85, 0.85, 0.85, 1.0])),
+    );
+    let metallic = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.0, 0.0, 0.0, 1.0])),
+    );
+
+    let out_base_color = graph.add_node(mc_core::Node::new("output_base_color"));
+    let out_normal = graph.add_node(mc_core::Node::new("output_normal"));
+    let out_height = graph.add_node(mc_core::Node::new("output_height"));
+    let out_roughness = graph.add_node(mc_core::Node::new("output_roughness"));
+    let out_metallic = graph.add_node(mc_core::Node::new("output_metallic"));
+    let out_ao = graph.add_node(mc_core::Node::new("output_ambient_occlusion"));
+
+    graph
+        .connect(colorize, "output", out_base_color, "input")
+        .unwrap();
+    graph
+        .connect(normal, "output", out_normal, "input")
+        .unwrap();
+    graph
+        .connect(combined, "output", out_height, "input")
+        .unwrap();
+    graph
+        .connect(roughness, "output", out_roughness, "input")
+        .unwrap();
+    graph
+        .connect(metallic, "output", out_metallic, "input")
+        .unwrap();
+    // Crevices between rock faces (where cracks/surface noise are dark) read
+    // as occluded — the same crude-but-plausible proxy `bricks` uses.
+    graph.connect(combined, "output", out_ao, "input").unwrap();
+
+    graph
+}
+
+/// CLAUDE.md §10's M6 example graph: a directionally-blurred fractal noise
+/// gives both the brush streaks and a matching narrow-band roughness
+/// variation, over a fully metallic base.
+fn build_brushed_metal_graph() -> mc_core::Graph {
+    let mut graph = mc_core::Graph::new();
+    graph.settings.resolution = 512;
+
+    let noise = graph.add_node(
+        mc_core::Node::new("fractal_sum")
+            .with_param("scale", mc_core::ParamValue::Int(24))
+            .with_param("octaves", mc_core::ParamValue::Int(3))
+            .with_param("gain", mc_core::ParamValue::Float(0.5))
+            .with_param("seed", mc_core::ParamValue::Seed(21)),
+    );
+    let brushed = graph.add_node(
+        mc_core::Node::new("directional_blur")
+            .with_param("radius", mc_core::ParamValue::Float(0.04))
+            .with_param("angle", mc_core::ParamValue::Float(0.0)),
+    );
+    graph.connect(noise, "output", brushed, "input").unwrap();
+
+    let steel_tint = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.72, 0.73, 0.75, 1.0])),
+    );
+    let colorize = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Multiply".to_string()))
+            .with_param("opacity", mc_core::ParamValue::Float(0.4)),
+    );
+    graph
+        .connect(steel_tint, "output", colorize, "base")
+        .unwrap();
+    graph.connect(brushed, "output", colorize, "blend").unwrap();
+
+    let normal = graph.add_node(
+        mc_core::Node::new("height_to_normal")
+            .with_param("intensity", mc_core::ParamValue::Float(0.6)),
+    );
+    graph.connect(brushed, "output", normal, "input").unwrap();
+
+    // Remaps the same brush-streak noise into a narrow roughness band
+    // instead of a flat value — streaks read as faint variation in
+    // reflection sharpness, not just in the normal map.
+    let roughness = graph.add_node(
+        mc_core::Node::new("levels")
+            .with_param("out_low", mc_core::ParamValue::Float(0.25))
+            .with_param("out_high", mc_core::ParamValue::Float(0.45)),
+    );
+    graph
+        .connect(brushed, "output", roughness, "input")
+        .unwrap();
+
+    let metallic = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([1.0, 1.0, 1.0, 1.0])),
+    );
+    let ao = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([1.0, 1.0, 1.0, 1.0])),
+    );
+
+    let out_base_color = graph.add_node(mc_core::Node::new("output_base_color"));
+    let out_normal = graph.add_node(mc_core::Node::new("output_normal"));
+    let out_height = graph.add_node(mc_core::Node::new("output_height"));
+    let out_roughness = graph.add_node(mc_core::Node::new("output_roughness"));
+    let out_metallic = graph.add_node(mc_core::Node::new("output_metallic"));
+    let out_ao = graph.add_node(mc_core::Node::new("output_ambient_occlusion"));
+
+    graph
+        .connect(colorize, "output", out_base_color, "input")
+        .unwrap();
+    graph
+        .connect(normal, "output", out_normal, "input")
+        .unwrap();
+    graph
+        .connect(brushed, "output", out_height, "input")
+        .unwrap();
+    graph
+        .connect(roughness, "output", out_roughness, "input")
+        .unwrap();
+    graph
+        .connect(metallic, "output", out_metallic, "input")
+        .unwrap();
+    graph.connect(ao, "output", out_ao, "input").unwrap();
+
+    graph
+}
+
+/// CLAUDE.md §10's M6 example graph: a small woven grid (Pattern Generator)
+/// overlaid with fine fiber noise, colorized as denim.
+fn build_fabric_graph() -> mc_core::Graph {
+    let mut graph = mc_core::Graph::new();
+    graph.settings.resolution = 512;
+
+    let weave = graph.add_node(
+        mc_core::Node::new("tile_generator")
+            .with_param("rows", mc_core::ParamValue::Int(48))
+            .with_param("columns", mc_core::ParamValue::Int(48))
+            .with_param("offset", mc_core::ParamValue::Float(0.5))
+            .with_param("gap", mc_core::ParamValue::Float(0.12))
+            .with_param("bevel", mc_core::ParamValue::Float(0.3))
+            .with_param("seed", mc_core::ParamValue::Seed(31)),
+    );
+    let fiber_noise = graph.add_node(
+        mc_core::Node::new("fractal_sum")
+            .with_param("scale", mc_core::ParamValue::Int(32))
+            .with_param("octaves", mc_core::ParamValue::Int(4))
+            .with_param("gain", mc_core::ParamValue::Float(0.5))
+            .with_param("seed", mc_core::ParamValue::Seed(32)),
+    );
+    let combined = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Overlay".to_string()))
+            .with_param("opacity", mc_core::ParamValue::Float(0.3)),
+    );
+    graph.connect(weave, "output", combined, "base").unwrap();
+    graph
+        .connect(fiber_noise, "output", combined, "blend")
+        .unwrap();
+
+    let colorize = graph.add_node(mc_core::Node::new("gradient_map").with_param(
+        "gradient",
+        mc_core::ParamValue::Gradient(vec![
+            mc_core::GradientStop {
+                position: 0.0,
+                color: [0.10, 0.16, 0.30, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 1.0,
+                color: [0.22, 0.32, 0.52, 1.0],
+            },
+        ]),
+    ));
+    graph
+        .connect(combined, "output", colorize, "input")
+        .unwrap();
+
+    let normal = graph.add_node(
+        mc_core::Node::new("height_to_normal")
+            .with_param("intensity", mc_core::ParamValue::Float(0.8)),
+    );
+    graph.connect(combined, "output", normal, "input").unwrap();
+
+    let roughness = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.9, 0.9, 0.9, 1.0])),
+    );
+    let metallic = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.0, 0.0, 0.0, 1.0])),
+    );
+
+    let out_base_color = graph.add_node(mc_core::Node::new("output_base_color"));
+    let out_normal = graph.add_node(mc_core::Node::new("output_normal"));
+    let out_height = graph.add_node(mc_core::Node::new("output_height"));
+    let out_roughness = graph.add_node(mc_core::Node::new("output_roughness"));
+    let out_metallic = graph.add_node(mc_core::Node::new("output_metallic"));
+    let out_ao = graph.add_node(mc_core::Node::new("output_ambient_occlusion"));
+
+    graph
+        .connect(colorize, "output", out_base_color, "input")
+        .unwrap();
+    graph
+        .connect(normal, "output", out_normal, "input")
+        .unwrap();
+    graph
+        .connect(combined, "output", out_height, "input")
+        .unwrap();
+    graph
+        .connect(roughness, "output", out_roughness, "input")
+        .unwrap();
+    graph
+        .connect(metallic, "output", out_metallic, "input")
+        .unwrap();
+    graph.connect(combined, "output", out_ao, "input").unwrap();
+
+    graph
+}
+
+/// CLAUDE.md §10's M6 example graph: a fractal noise squashed heavily along
+/// one axis (Transform 2D) into grain lines, colorized brown.
+fn build_wood_graph() -> mc_core::Graph {
+    let mut graph = mc_core::Graph::new();
+    graph.settings.resolution = 512;
+
+    let grain_noise = graph.add_node(
+        mc_core::Node::new("fractal_sum")
+            .with_param("scale", mc_core::ParamValue::Int(5))
+            .with_param("octaves", mc_core::ParamValue::Int(5))
+            .with_param("gain", mc_core::ParamValue::Float(0.5))
+            .with_param("seed", mc_core::ParamValue::Seed(41)),
+    );
+    let grain = graph.add_node(
+        mc_core::Node::new("transform2d")
+            .with_param("scale_x", mc_core::ParamValue::Float(6.0))
+            .with_param("scale_y", mc_core::ParamValue::Float(1.0)),
+    );
+    graph
+        .connect(grain_noise, "output", grain, "input")
+        .unwrap();
+
+    let colorize = graph.add_node(mc_core::Node::new("gradient_map").with_param(
+        "gradient",
+        mc_core::ParamValue::Gradient(vec![
+            mc_core::GradientStop {
+                position: 0.0,
+                color: [0.20, 0.11, 0.05, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 0.5,
+                color: [0.42, 0.26, 0.13, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 1.0,
+                color: [0.65, 0.46, 0.28, 1.0],
+            },
+        ]),
+    ));
+    graph.connect(grain, "output", colorize, "input").unwrap();
+
+    let normal = graph.add_node(
+        mc_core::Node::new("height_to_normal")
+            .with_param("intensity", mc_core::ParamValue::Float(1.0)),
+    );
+    graph.connect(grain, "output", normal, "input").unwrap();
+
+    let roughness = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.5, 0.5, 0.5, 1.0])),
+    );
+    let metallic = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.0, 0.0, 0.0, 1.0])),
+    );
+
+    let out_base_color = graph.add_node(mc_core::Node::new("output_base_color"));
+    let out_normal = graph.add_node(mc_core::Node::new("output_normal"));
+    let out_height = graph.add_node(mc_core::Node::new("output_height"));
+    let out_roughness = graph.add_node(mc_core::Node::new("output_roughness"));
+    let out_metallic = graph.add_node(mc_core::Node::new("output_metallic"));
+    let out_ao = graph.add_node(mc_core::Node::new("output_ambient_occlusion"));
+
+    graph
+        .connect(colorize, "output", out_base_color, "input")
+        .unwrap();
+    graph
+        .connect(normal, "output", out_normal, "input")
+        .unwrap();
+    graph.connect(grain, "output", out_height, "input").unwrap();
+    graph
+        .connect(roughness, "output", out_roughness, "input")
+        .unwrap();
+    graph
+        .connect(metallic, "output", out_metallic, "input")
+        .unwrap();
+    graph.connect(grain, "output", out_ao, "input").unwrap();
+
+    graph
+}
+
+/// Saves `graph` to `examples/graphs/{name}.mcgraph`, reloads it (the real
+/// file round trip, not just in-memory), evaluates it, and writes its
+/// Output: Base Color to `{out_dir}/{name}_base_color.png` — the common
+/// "example graph" lifecycle every graph after `bricks` follows (`bricks`
+/// keeps its own hand-written version above since it additionally exercises
+/// the full multi-channel export pipeline, not just a quick-look).
+fn save_evaluate_and_render_base_color(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    name: &str,
+    graph: mc_core::Graph,
+    out_dir: &str,
+) -> anyhow::Result<()> {
+    let graph_path = format!("examples/graphs/{name}.mcgraph");
+    graph.save_to_file(&graph_path)?;
+    let mut graph = mc_core::Graph::load_from_file(&graph_path)
+        .with_context(|| format!("failed to load {graph_path}"))?;
+    mc_nodes::registry::evaluate(gpu, pool, &mut graph)
+        .with_context(|| format!("failed to evaluate {name}"))?;
+
+    let resolution = graph.settings.resolution;
+    let node_id = graph
+        .nodes()
+        .find(|(_, node)| node.kind == "output_base_color")
+        .map(|(id, _)| id)
+        .with_context(|| format!("{name} graph has no output_base_color node"))?;
+    let key = mc_nodes::registry::resolve_texture_key(&graph, node_id)
+        .with_context(|| format!("{name}'s Output: Base Color input isn't connected"))?;
+    let texture = pool
+        .texture(&key)
+        .context("evaluated output texture missing from the pool")?;
+    let pixels = gpu.read_rgba8(texture, resolution);
+    let image = image::RgbaImage::from_raw(resolution, resolution, pixels)
+        .context("pixel buffer size didn't match the image dimensions")?;
+    let image_path = format!("{out_dir}/{name}_base_color.png");
+    image.save(&image_path)?;
+    println!("Wrote {image_path}");
+    println!("Wrote {graph_path}");
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let out_dir = "out";
     std::fs::create_dir_all(out_dir)?;
@@ -269,31 +676,22 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let demo_graph_path = "examples/graphs/glitch_dither_demo.mcgraph";
-    build_glitch_dither_demo_graph().save_to_file(demo_graph_path)?;
-    let mut demo_graph = mc_core::Graph::load_from_file(demo_graph_path)
-        .with_context(|| format!("failed to load {demo_graph_path}"))?;
-    mc_nodes::registry::evaluate(&mut gpu, &mut pool, &mut demo_graph)
-        .context("failed to evaluate glitch_dither_demo graph")?;
+    save_evaluate_and_render_base_color(
+        &mut gpu,
+        &mut pool,
+        "glitch_dither_demo",
+        build_glitch_dither_demo_graph(),
+        out_dir,
+    )?;
 
-    let demo_resolution = demo_graph.settings.resolution;
-    let demo_base_color_id = demo_graph
-        .nodes()
-        .find(|(_, node)| node.kind == "output_base_color")
-        .map(|(id, _)| id)
-        .context("glitch_dither_demo graph has no output_base_color node")?;
-    let demo_texture_key = mc_nodes::registry::resolve_texture_key(&demo_graph, demo_base_color_id)
-        .context("glitch_dither_demo's Output: Base Color input isn't connected")?;
-    let demo_texture = pool
-        .texture(&demo_texture_key)
-        .context("evaluated glitch_dither_demo texture missing from the pool")?;
-    let demo_pixels = gpu.read_rgba8(demo_texture, demo_resolution);
-    let demo_image = image::RgbaImage::from_raw(demo_resolution, demo_resolution, demo_pixels)
-        .context("pixel buffer size didn't match the image dimensions")?;
-    let demo_image_path = format!("{out_dir}/glitch_dither_demo_base_color.png");
-    demo_image.save(&demo_image_path)?;
-    println!("Wrote {demo_image_path}");
-    println!("Wrote {demo_graph_path}");
+    for (name, graph) in [
+        ("rock", build_rock_graph()),
+        ("brushed_metal", build_brushed_metal_graph()),
+        ("fabric", build_fabric_graph()),
+        ("wood", build_wood_graph()),
+    ] {
+        save_evaluate_and_render_base_color(&mut gpu, &mut pool, name, graph, out_dir)?;
+    }
 
     Ok(())
 }

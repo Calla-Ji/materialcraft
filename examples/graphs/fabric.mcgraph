@@ -1,0 +1,276 @@
+{
+  "format_version": 1,
+  "settings": {
+    "resolution": 512,
+    "seed": 0,
+    "normal_format": "OpenGl"
+  },
+  "nodes": {
+    "0": {
+      "kind": "tile_generator",
+      "params": {
+        "bevel": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "columns": {
+          "type": "Int",
+          "value": 48
+        },
+        "gap": {
+          "type": "Float",
+          "value": 0.12
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "rows": {
+          "type": "Int",
+          "value": 48
+        },
+        "seed": {
+          "type": "Seed",
+          "value": 31
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "1": {
+      "kind": "fractal_sum",
+      "params": {
+        "gain": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "octaves": {
+          "type": "Int",
+          "value": 4
+        },
+        "scale": {
+          "type": "Int",
+          "value": 32
+        },
+        "seed": {
+          "type": "Seed",
+          "value": 32
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "2": {
+      "kind": "blend",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": "Overlay"
+        },
+        "opacity": {
+          "type": "Float",
+          "value": 0.3
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "3": {
+      "kind": "gradient_map",
+      "params": {
+        "gradient": {
+          "type": "Gradient",
+          "value": [
+            {
+              "position": 0.0,
+              "color": [
+                0.1,
+                0.16,
+                0.3,
+                1.0
+              ]
+            },
+            {
+              "position": 1.0,
+              "color": [
+                0.22,
+                0.32,
+                0.52,
+                1.0
+              ]
+            }
+          ]
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "4": {
+      "kind": "height_to_normal",
+      "params": {
+        "intensity": {
+          "type": "Float",
+          "value": 0.8
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "5": {
+      "kind": "uniform_color",
+      "params": {
+        "color": {
+          "type": "Color",
+          "value": [
+            0.9,
+            0.9,
+            0.9,
+            1.0
+          ]
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "6": {
+      "kind": "uniform_color",
+      "params": {
+        "color": {
+          "type": "Color",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      },
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "7": {
+      "kind": "output_base_color",
+      "params": {},
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "8": {
+      "kind": "output_normal",
+      "params": {},
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "9": {
+      "kind": "output_height",
+      "params": {},
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "10": {
+      "kind": "output_roughness",
+      "params": {},
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "11": {
+      "kind": "output_metallic",
+      "params": {},
+      "position": [
+        0.0,
+        0.0
+      ]
+    },
+    "12": {
+      "kind": "output_ambient_occlusion",
+      "params": {},
+      "position": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "connections": [
+    {
+      "from_node": 0,
+      "from_port": "output",
+      "to_node": 2,
+      "to_port": "base"
+    },
+    {
+      "from_node": 1,
+      "from_port": "output",
+      "to_node": 2,
+      "to_port": "blend"
+    },
+    {
+      "from_node": 2,
+      "from_port": "output",
+      "to_node": 3,
+      "to_port": "input"
+    },
+    {
+      "from_node": 2,
+      "from_port": "output",
+      "to_node": 4,
+      "to_port": "input"
+    },
+    {
+      "from_node": 3,
+      "from_port": "output",
+      "to_node": 7,
+      "to_port": "input"
+    },
+    {
+      "from_node": 4,
+      "from_port": "output",
+      "to_node": 8,
+      "to_port": "input"
+    },
+    {
+      "from_node": 2,
+      "from_port": "output",
+      "to_node": 9,
+      "to_port": "input"
+    },
+    {
+      "from_node": 5,
+      "from_port": "output",
+      "to_node": 10,
+      "to_port": "input"
+    },
+    {
+      "from_node": 6,
+      "from_port": "output",
+      "to_node": 11,
+      "to_port": "input"
+    },
+    {
+      "from_node": 2,
+      "from_port": "output",
+      "to_node": 12,
+      "to_port": "input"
+    }
+  ]
+}
