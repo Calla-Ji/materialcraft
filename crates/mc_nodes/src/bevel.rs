@@ -5,15 +5,20 @@
 //! beveled-edge look."
 //!
 //! Implementation: a *box* blur (not the existing Blur node's Gaussian —
-//! see `bevel_box_blur.wgsl`'s doc comment for why) at `distance`, then
-//! reshape that ramp with a power curve driven by `convexity`
-//! (`bevel_remap.wgsl`). Blurring first — rather than computing a true
-//! distance-to-edge field — is a standard, cheap approximation: a thin
-//! feature naturally blurs down further than a thick one, which is the
-//! physically right behavior for a bevel anyway (a narrow ridge has less
-//! "flat top" to begin with), and far from any edge the blur hasn't
-//! reached, so the plateau on either side stays exactly put regardless of
-//! the remap curve.
+//! see `bevel_box_blur.wgsl`'s doc comment for why) at `distance`, then add
+//! back how much that blur changed each pixel, reshaped by a `convexity`-
+//! driven power curve (`bevel_remap.wgsl`'s doc comment has the full
+//! reasoning). Blurring first — rather than computing a true distance-to-
+//! edge field — is a standard, cheap approximation: a thin feature
+//! naturally blurs down further than a thick one, which is the physically
+//! right behavior for a bevel anyway (a narrow ridge has less "flat top" to
+//! begin with). Reshaping the blur's *delta* from the original, rather than
+//! the blurred value directly, guarantees `distance = 0` is an exact
+//! no-op and that any of the input's own existing shading away from an
+//! edge stays completely undisturbed, regardless of `convexity` — an
+//! earlier version reshaped the blurred value directly, which (confirmed
+//! live by the owner, see PROGRESS.md) read as "just a blur" and distorted
+//! an already-shaded input even at `distance = 0`.
 
 const BOX_BLUR_NODE_KIND: &str = "bevel_box_blur";
 const REMAP_NODE_KIND: &str = "bevel_remap";
@@ -155,7 +160,11 @@ pub fn dispatch(
     let radius_px = (params.distance * resolution as f32).max(0.0);
     box_blur(gpu, pool, input_key, &blurred_key, resolution, radius_px);
 
-    let input_view = pool
+    let original_view = pool
+        .view(input_key)
+        .unwrap_or_else(|| panic!("bevel: no texture at input key {input_key:?}"))
+        .clone();
+    let blurred_view = pool
         .view(&blurred_key)
         .unwrap_or_else(|| panic!("bevel: no blurred texture at key {blurred_key:?}"))
         .clone();
@@ -163,11 +172,17 @@ pub fn dispatch(
     let shader_source = crate::shaders::full_source("bevel_remap.wgsl");
     let pipeline = gpu.compute_pipeline(REMAP_NODE_KIND, &shader_source, "main");
 
-    // Convexity 0 -> exponent 1 (no change). Positive convexity -> exponent
-    // < 1 (rises quickly, flattens near 1 — convex/dome). Negative
-    // convexity -> exponent > 1 (stays low, rises sharply near 1 —
-    // concave/scoop).
-    let exponent = 2f32.powf(-params.convexity * 2.0);
+    // Convexity 0 -> exponent 1 (no change, the box blur's own linear
+    // ramp). We're shaping *delta* (how much the blur moved a pixel from
+    // its original value), not the raw blurred value, so the direction is
+    // the opposite of a naive pow-curve intuition: positive convexity ->
+    // exponent > 1, which suppresses small deltas and so keeps the
+    // plateau flat for longer with the whole transition compressed near
+    // the true edge — a dome, flat-topped with the curve at the rim.
+    // Negative convexity -> exponent < 1, which amplifies small deltas and
+    // spreads the transition out further from the edge — a shallow,
+    // concave scoop.
+    let exponent = 2f32.powf(params.convexity * 2.0);
 
     let mut param_bytes = [0u8; 16];
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
@@ -198,10 +213,14 @@ pub fn dispatch(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: wgpu::BindingResource::TextureView(&input_view),
+                resource: wgpu::BindingResource::TextureView(&original_view),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
+                resource: wgpu::BindingResource::TextureView(&blurred_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
                 resource: wgpu::BindingResource::TextureView(output_view),
             },
         ],
@@ -231,6 +250,7 @@ mod tests {
     use crate::checker::{dispatch as checker_dispatch, CheckerParams};
     use crate::shape::{dispatch as shape_dispatch, ShapeParams};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::tile_generator::{dispatch as tile_generator_dispatch, TileGeneratorParams};
 
     fn render(params: &BevelParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -354,5 +374,90 @@ mod tests {
             at(&convex),
             at(&concave)
         );
+    }
+
+    /// Distance = 0 must be a true no-op, not just an approximate one, even
+    /// on an input that already has its own non-binary shading baked in
+    /// (e.g. Pattern Generator's own per-tile edge fade) — the bug report
+    /// this fixed (see PROGRESS.md) was specifically about convexity
+    /// distorting such an input at distance = 0.
+    #[test]
+    fn distance_zero_is_an_exact_no_op_on_a_non_binary_input() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        tile_generator_dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            RESOLUTION,
+            &TileGeneratorParams::default(),
+        );
+        let input_pixels = gpu.read_rgba8(pool.texture("input").unwrap(), RESOLUTION);
+        for convexity in [-1.0, 0.0, 0.3, 1.0] {
+            dispatch(
+                &mut gpu,
+                &mut pool,
+                "input",
+                "output",
+                RESOLUTION,
+                &BevelParams {
+                    distance: 0.0,
+                    convexity,
+                },
+            );
+            let output_pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
+            assert_eq!(
+                input_pixels, output_pixels,
+                "distance = 0 changed the output at convexity {convexity}"
+            );
+        }
+    }
+
+    /// Away from any edge, a non-binary input's own pre-existing shading
+    /// (Pattern Generator's per-tile fade again) must survive untouched —
+    /// convexity should only reshape the bevel's own edge transition, never
+    /// repaint the plateau it started from.
+    #[test]
+    fn convexity_does_not_distort_non_binary_shading_away_from_the_edge() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let params = TileGeneratorParams {
+            rows: 2,
+            columns: 2,
+            offset: 0.0,
+            size_jitter: 0.0,
+            rotation_jitter: 0.0,
+            luminance_jitter: 0.0,
+            ..TileGeneratorParams::default()
+        };
+        tile_generator_dispatch(&mut gpu, &mut pool, "input", RESOLUTION, &params);
+        let input_pixels = gpu.read_rgba8(pool.texture("input").unwrap(), RESOLUTION);
+        // Tile centers, well inside the default small gap/edge-darkening
+        // margins and far from any gap, at a small bevel distance.
+        let sample_points = [
+            (RESOLUTION / 4, RESOLUTION / 4),
+            (3 * RESOLUTION / 4, RESOLUTION / 4),
+        ];
+        for convexity in [-1.0, 0.0, 1.0] {
+            dispatch(
+                &mut gpu,
+                &mut pool,
+                "input",
+                "output",
+                RESOLUTION,
+                &BevelParams {
+                    distance: 0.01,
+                    convexity,
+                },
+            );
+            let output_pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
+            for &(x, y) in &sample_points {
+                let idx = ((y * RESOLUTION + x) * 4) as usize;
+                assert_eq!(
+                    input_pixels[idx], output_pixels[idx],
+                    "tile-center shading changed at ({x}, {y}) with convexity {convexity}"
+                );
+            }
+        }
     }
 }
