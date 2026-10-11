@@ -161,6 +161,22 @@ fn show_inner(
                     }
                 });
             }
+            mc_nodes::defs::ParamSpecKind::Bool { default } => {
+                let mut value = current.and_then(|v| v.as_bool()).unwrap_or(*default);
+                if ui
+                    .checkbox(&mut value, param.display_name)
+                    .on_hover_text(param.tooltip)
+                    .changed()
+                {
+                    commit_once(
+                        graph,
+                        history,
+                        id,
+                        param.name,
+                        mc_core::ParamValue::Bool(value),
+                    );
+                }
+            }
             mc_nodes::defs::ParamSpecKind::Vec2 { min, max, default } => {
                 let mut value = current.and_then(|v| v.as_vec2()).unwrap_or(*default);
                 ui.horizontal(|ui| {

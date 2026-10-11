@@ -70,6 +70,13 @@ impl ParamValue {
         }
     }
 
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            ParamValue::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
+
     pub fn as_seed(&self) -> Option<u32> {
         match self {
             ParamValue::Seed(v) => Some(*v),

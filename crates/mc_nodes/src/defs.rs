@@ -45,6 +45,9 @@ pub enum ParamSpecKind {
     Color {
         default: [f32; 4],
     },
+    Bool {
+        default: bool,
+    },
     /// Gradient Map's color ramp — at most 8 stops (`gradient_map.wgsl`'s
     /// fixed-size uniform array), interpolated in position order.
     Gradient {
@@ -69,6 +72,7 @@ impl ParamSpec {
             ParamSpecKind::Seed { default } => ParamValue::Seed(default),
             ParamSpecKind::Enum { default, .. } => ParamValue::Enum(default.to_string()),
             ParamSpecKind::Color { default } => ParamValue::Color(default),
+            ParamSpecKind::Bool { default } => ParamValue::Bool(default),
             ParamSpecKind::Gradient { default } => ParamValue::Gradient(default.to_vec()),
             ParamSpecKind::Vec2 { default, .. } => ParamValue::Vec2(default),
         }
@@ -1135,6 +1139,18 @@ static NODE_DEFS: &[NodeDef] = &[
                     max: 4.0,
                     default: 1.0,
                 },
+            },
+            ParamSpec {
+                name: "flip_x",
+                display_name: "Flip Horizontal",
+                tooltip: "Mirrors the input left-to-right.",
+                kind: ParamSpecKind::Bool { default: false },
+            },
+            ParamSpec {
+                name: "flip_y",
+                display_name: "Flip Vertical",
+                tooltip: "Mirrors the input top-to-bottom.",
+                kind: ParamSpecKind::Bool { default: false },
             },
         ],
     },

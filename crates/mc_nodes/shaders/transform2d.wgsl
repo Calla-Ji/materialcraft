@@ -8,7 +8,8 @@
 //          same limitation every texture tool's Transform node has). Default
 //          params (identity transform) are always tileable.
 // Params:  offset_x, offset_y (-1..1), rotation (0..1, fraction of a turn),
-//          scale_x, scale_y (how many times smaller/larger).
+//          scale_x, scale_y (how many times smaller/larger), flip_x, flip_y
+//          (0/1 — mirror the input before offset/rotate/scale are applied).
 
 struct Transform2DParams {
     resolution: u32,
@@ -17,8 +18,8 @@ struct Transform2DParams {
     rotation: f32,
     scale_x: f32,
     scale_y: f32,
-    _pad0: f32,
-    _pad1: f32,
+    flip_x: u32,
+    flip_y: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Transform2DParams;
@@ -35,6 +36,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Backward-map: find where in the input this output pixel's content
     // comes from, by applying the inverse offset/rotate/scale to `uv`.
     var p = uv - vec2<f32>(0.5, 0.5);
+    if params.flip_x != 0u {
+        p.x = -p.x;
+    }
+    if params.flip_y != 0u {
+        p.y = -p.y;
+    }
     p = p - vec2<f32>(params.offset_x, params.offset_y);
     let angle = -params.rotation * 6.283185307;
     let cos_a = cos(angle);
