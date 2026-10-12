@@ -10,7 +10,7 @@
 struct CurvatureFromNormalParams {
     resolution: u32,
     intensity: f32,
-    _pad0: f32,
+    tiling_mode: u32,
     _pad1: f32,
 }
 
@@ -19,7 +19,14 @@ struct CurvatureFromNormalParams {
 @group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
 
 fn normal_xy_at(x: i32, y: i32, size: i32) -> vec2<f32> {
-    let c = textureLoad(input_tex, vec2<i32>(wrap_coord(x, size), wrap_coord(y, size)), 0);
+    let c = textureLoad(
+        input_tex,
+        vec2<i32>(
+            tile_coord(x, size, wraps_x(params.tiling_mode)),
+            tile_coord(y, size, wraps_y(params.tiling_mode)),
+        ),
+        0,
+    );
     return c.rg * 2.0 - 1.0;
 }
 
