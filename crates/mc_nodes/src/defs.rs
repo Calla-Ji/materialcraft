@@ -2115,6 +2115,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 tooltip: "Changes which bands jitter and by how much.",
                 kind: ParamSpecKind::Seed { default: 0 },
             },
+            tiling_mode_param(),
         ],
     },
     NodeDef {

@@ -26,7 +26,7 @@ struct ScanlineJitterParams {
     amount: f32,
     max_offset: f32,
     seed: u32,
-    _pad0: u32,
+    tiling_mode: u32,
     _pad1: u32,
 }
 
@@ -64,9 +64,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var sample_coord: vec2<i32>;
     if params.orientation == ORIENTATION_HORIZONTAL {
-        sample_coord = vec2<i32>(wrap_coord(coords.x - offset_px, size), coords.y);
+        sample_coord = vec2<i32>(
+            tile_coord(coords.x - offset_px, size, wraps_x(params.tiling_mode)),
+            coords.y,
+        );
     } else {
-        sample_coord = vec2<i32>(coords.x, wrap_coord(coords.y - offset_px, size));
+        sample_coord = vec2<i32>(
+            coords.x,
+            tile_coord(coords.y - offset_px, size, wraps_y(params.tiling_mode)),
+        );
     }
 
     let jittered = textureLoad(image_tex, sample_coord, 0);

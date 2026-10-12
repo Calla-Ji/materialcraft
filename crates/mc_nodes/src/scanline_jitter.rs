@@ -5,6 +5,7 @@
 //! vertical bands sideways — the classic 'bad video signal' glitch."
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "scanline_jitter";
 
@@ -39,6 +40,7 @@ pub struct ScanlineJitterParams {
     pub max_offset: f32,
     pub orientation: ScanlineOrientation,
     pub seed: u32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for ScanlineJitterParams {
@@ -49,6 +51,7 @@ impl Default for ScanlineJitterParams {
             max_offset: 0.05,
             orientation: ScanlineOrientation::Horizontal,
             seed: 0,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -81,6 +84,13 @@ impl ScanlineJitterParams {
                 .get("seed")
                 .and_then(mc_core::ParamValue::as_seed)
                 .unwrap_or(defaults.seed),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -93,6 +103,7 @@ fn pack_params(resolution: u32, params: &ScanlineJitterParams) -> [u8; 32] {
     bytes[12..16].copy_from_slice(&params.amount.to_le_bytes());
     bytes[16..20].copy_from_slice(&params.max_offset.to_le_bytes());
     bytes[20..24].copy_from_slice(&params.seed.to_le_bytes());
+    bytes[24..28].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     bytes
 }
 
@@ -188,6 +199,7 @@ pub fn dispatch(
 mod tests {
     use super::{dispatch, ScanlineJitterParams, ScanlineOrientation};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::tiling::TilingMode;
 
     fn render_from_noise(params: &ScanlineJitterParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -264,5 +276,76 @@ mod tests {
                 "{name} should parse back to a ScanlineOrientation"
             );
         }
+    }
+
+    #[test]
+    fn tiling_off_changes_a_jitter_that_would_have_wrapped() {
+        // A single band (lines=1) spanning the whole image, forced to
+        // jitter (amount=1.0) by the largest possible offset — guarantees
+        // every sample wraps/clamps, no seed-dependent luck needed. Input
+        // has a deliberate hard discontinuity so a wrapped vs clamped
+        // sample reads clearly different content.
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let r = RESOLUTION;
+        let mut pixels = vec![0u8; (r * r * 4) as usize];
+        for y in 0..r {
+            for x in 0..r {
+                let v = if x < r / 2 { 255 } else { 0 };
+                let i = ((y * r + x) * 4) as usize;
+                pixels[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        pool.get_or_create(&gpu.device, "image", r, wgpu::TextureFormat::Rgba8Unorm);
+        let texture = pool.texture("image").expect("just created above");
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(r * 4),
+                rows_per_image: Some(r),
+            },
+            wgpu::Extent3d {
+                width: r,
+                height: r,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let base = ScanlineJitterParams {
+            lines: 1,
+            amount: 1.0,
+            max_offset: 0.5,
+            orientation: ScanlineOrientation::Horizontal,
+            seed: 0,
+            tiling_mode: TilingMode::Both,
+        };
+        dispatch(
+            &mut gpu, &mut pool, "image", None, "wrapped", RESOLUTION, &base,
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "image",
+            None,
+            "clamped",
+            RESOLUTION,
+            &ScanlineJitterParams {
+                tiling_mode: TilingMode::Off,
+                ..base
+            },
+        );
+        let wrapped = gpu.read_rgba8(pool.texture("wrapped").unwrap(), RESOLUTION);
+        let clamped = gpu.read_rgba8(pool.texture("clamped").unwrap(), RESOLUTION);
+        assert_ne!(
+            wrapped, clamped,
+            "disabling tiling should change the result of a jitter that would have wrapped"
+        );
     }
 }
