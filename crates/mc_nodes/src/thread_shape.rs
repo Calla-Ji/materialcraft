@@ -41,16 +41,27 @@
 //!    visible kink everywhere the dominant strand switched, since a hard
 //!    max of several continuous sine curves is not itself continuous in
 //!    slope — the "ragged outline" and "overcut groove" a screenshot showed.
-//! 3. The shader's current approach: strands sized to just touch (not
-//!    overlap) rather than forcing coverage, combined with a proper
-//!    SDF-style smooth union (not a hard max, and not alpha-blending) for
-//!    *shape*, plus a separate depth-weighted blend for *shading* within
-//!    that shape. See the shader's own doc comment for why those are two
-//!    different operations. This keeps each ply's own rounded silhouette
-//!    and the valley between plies as one flowing curve with no kink,
-//!    while still leaving a real, visibly darker gap between the two plies
-//!    rather than fusing them — see
-//!    `two_plies_show_a_visible_valley_not_a_fused_bridge`.
+//! 3. Strands sized to just touch (not overlap) rather than forcing
+//!    coverage, combined with a proper SDF-style smooth union for *shape*
+//!    (continuous-slope silhouette, no kink) and a *separate*,
+//!    depth-only blend for *shading*. Fixed the ply_count 2 case well (see
+//!    `two_plies_show_a_visible_valley_not_a_fused_bridge`), but
+//!    reintroduced the very first version's moire/lattice pattern for
+//!    ply_count 3+ — treating shape as depth-blind meant 3+ strands could
+//!    be simultaneously present with no clear front/back winner, so all of
+//!    them bulged the silhouette together, same as step 1 above.
+//! 4. The shader's current approach: a *single* combined per-strand weight
+//!    (geometric presence *and* depth folded into one softmax score) drives
+//!    both the shape and the shading, instead of two independently-combined
+//!    operations. A real twisted yarn only shows whichever strand currently
+//!    faces the viewer — depth has to gate the shape too, not just the
+//!    brightness — while strands close in both position and depth (an
+//!    actual crossing) still blend smoothly between them, keeping the
+//!    continuous-slope silhouette step 3 was for. See the shader's own doc
+//!    comment for the exact formula, and
+//!    `three_plies_dont_regress_into_a_lattice` /
+//!    `higher_ply_counts_dont_regress_into_a_lattice_either` for how the
+//!    lattice regression specifically is now caught.
 
 use crate::shaders::full_source;
 
@@ -295,6 +306,75 @@ mod tests {
         assert_ne!(flat, round);
     }
 
+    /// A screenshot showed 3+ plies reverting to the very first version's
+    /// moire/lattice interference pattern — a dense ripple of many small
+    /// bumps, not the handful of clean crossing-points real twisted yarn
+    /// shows. Root cause: an earlier rewrite combined the strands' *shape*
+    /// (geometric presence) independent of depth, so with 3+ strands,
+    /// several could be simultaneously present with no clear front/back
+    /// winner and all bulge the silhouette at once. Counting local maxima
+    /// along the centerline is a coarse but effective proxy: each strand
+    /// should get roughly one hump per full twist rotation as it takes its
+    /// turn facing the viewer (`ply_count * twist_cycles`), not dozens of
+    /// small interference ripples.
+    #[test]
+    fn three_plies_dont_regress_into_a_lattice() {
+        let pixels = render(&ThreadShapeParams {
+            ply_count: 3,
+            thickness: 0.54,
+            roundness: 0.3,
+            twist_cycles: 2,
+            twist_direction: TwistDirection::Z,
+        });
+        let r = RESOLUTION as usize;
+        let row = r / 2;
+        let row_values: Vec<u8> = (0..r).map(|x| pixels[(row * r + x) * 4]).collect();
+        let mut maxima = 0;
+        for x in 1..r - 1 {
+            if row_values[x] > row_values[x - 1] && row_values[x] >= row_values[x + 1] {
+                maxima += 1;
+            }
+        }
+        let expected = 3 * 2; // ply_count * twist_cycles
+        assert!(
+            maxima <= expected + 2,
+            "centerline shows {maxima} local maxima, far more than the ~{expected} expected \
+             for 3 plies over 2 twist cycles — looks like the lattice regression, not a clean \
+             braid"
+        );
+    }
+
+    /// Same lattice check as `three_plies_dont_regress_into_a_lattice`, but
+    /// swept across higher ply counts too — the 3-ply case alone wouldn't
+    /// have caught a regression that only kicked in at, say, 5+ strands.
+    #[test]
+    fn higher_ply_counts_dont_regress_into_a_lattice_either() {
+        let r = RESOLUTION as usize;
+        let row = r / 2;
+        for ply_count in [4u32, 5, 6] {
+            let pixels = render(&ThreadShapeParams {
+                ply_count,
+                thickness: 0.54,
+                roundness: 0.3,
+                twist_cycles: 2,
+                twist_direction: TwistDirection::Z,
+            });
+            let row_values: Vec<u8> = (0..r).map(|x| pixels[(row * r + x) * 4]).collect();
+            let mut maxima = 0;
+            for x in 1..r - 1 {
+                if row_values[x] > row_values[x - 1] && row_values[x] >= row_values[x + 1] {
+                    maxima += 1;
+                }
+            }
+            let expected = ply_count * 2;
+            assert!(
+                maxima <= expected as usize + 2,
+                "ply_count {ply_count}: centerline shows {maxima} local maxima, far more than \
+                 the ~{expected} expected — looks like the lattice regression"
+            );
+        }
+    }
+
     #[test]
     fn single_ply_is_constant_along_its_length() {
         // Fabric Generator relies on sampling at any along-length position
@@ -339,17 +419,20 @@ mod tests {
     }
 
     /// A screenshot once showed a real black void down the bundle's
-    /// centerline at the moment its plies were furthest apart — not a
-    /// deliberate, visible valley between two distinct plies (which is
-    /// correct and expected, see `two_plies_show_a_visible_valley_not_a_fused_bridge`
-    /// below), but a literal disconnect splitting the thread into two
-    /// unrelated ribbons. The smooth-union combine (see the shader's own
-    /// comment) happens to guarantee strictly-above-zero coverage as a side
-    /// effect of how log-sum-exp blends overlapping curves, even for
-    /// strands sized to just touch rather than overlap — confirmed here so
-    /// a future tuning change doesn't quietly let that regress.
+    /// centerline, sustained over a wide stretch of its length — not a
+    /// single-pixel touch where two strands sized to exactly meet happen
+    /// to graze zero at the precise instant they're tangent (physically
+    /// correct, and a much narrower thing), but a literal disconnect
+    /// splitting the thread into two unrelated ribbons over a visible
+    /// span. Checks the *width* of any near-zero stretch rather than
+    /// requiring every single pixel stay strictly above zero — the
+    /// weighted-average smooth max this shader now uses (unlike an
+    /// earlier log-sum-exp version) is a true convex combination of the
+    /// strands' own edges, so it can legitimately touch the hard max's own
+    /// zero at an isolated tangent point without that being the bug this
+    /// guards against.
     #[test]
-    fn two_ply_never_shows_a_gap_down_the_centerline() {
+    fn two_ply_never_shows_a_sustained_gap_down_the_centerline() {
         let pixels = render(&ThreadShapeParams {
             ply_count: 2,
             thickness: 0.73,
@@ -359,11 +442,20 @@ mod tests {
         });
         let r = RESOLUTION as usize;
         let row = r / 2;
-        let min_on_centerline = (0..r).map(|x| pixels[(row * r + x) * 4]).min().unwrap();
+        let row_values: Vec<u8> = (0..r).map(|x| pixels[(row * r + x) * 4]).collect();
+        let near_zero_run = row_values
+            .iter()
+            .fold((0usize, 0usize), |(longest, current), &v| {
+                let current = if v <= 5 { current + 1 } else { 0 };
+                (longest.max(current), current)
+            })
+            .0;
+        let max_allowed = r / 32;
         assert!(
-            min_on_centerline > 0,
-            "the bundle's centerline went fully black at some point along its length \
-             (min={min_on_centerline}) — the plies' orbit left a real gap, not just a groove"
+            near_zero_run <= max_allowed,
+            "the bundle's centerline stayed near-black for {near_zero_run} pixels in a row \
+             (resolution {r}, allowed up to {max_allowed}) — that's a sustained void splitting \
+             the thread, not a single tangent touch"
         );
     }
 

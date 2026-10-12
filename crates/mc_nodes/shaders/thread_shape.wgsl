@@ -109,62 +109,55 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let angle_base = sign * f32(params.twist_cycles) * uv.x * 2.0 * PI;
 
-    // Two things combine the strands, and they're deliberately different
-    // operations:
+    // One combined weight per strand decides both how much it contributes
+    // to the *shape* (does thread cover this pixel, how much) and to the
+    // *shading* (how bright) — tried as two separate operations before
+    // (geometric presence alone for shape, depth alone for shading) and
+    // that was wrong: with 3+ strands, several can be geometrically present
+    // at the same pixel at once with no clear front/back winner, and a
+    // depth-blind shape union lets *all* of them bulge the silhouette at
+    // once — the exact moire/lattice interference pattern this node
+    // started with, now reappearing for ply_count 3+ even though the
+    // ply_count 2 case (where at most one strand is ever meaningfully
+    // ahead of the other) looked fine. A real twisted yarn doesn't show
+    // every strand's cross-section at every point — only the one currently
+    // facing the viewer does, with its neighbors tucked behind it — so
+    // depth has to gate the *shape* too, not just the brightness.
     //
-    // Shape (does thread cover this pixel at all, and how much): a true
-    // hard max() of each strand's own "how far inside am I" distance draws
-    // a kink everywhere the dominant strand switches — a sine curve has a
-    // continuous slope, but max() of several sine curves does not, so the
-    // combined outline's slope jumps at every handoff. That's the ragged,
-    // over-curvy silhouette a screenshot showed, not just an edge-alpha
-    // issue — softening each strand's own edge alone (a prior attempt)
-    // couldn't fix it, since the kink is in the *position* of the boundary,
-    // not its sharpness. A smooth maximum (the standard SDF smooth-union:
-    // log(sum(exp(x / softness))) * softness, which reduces to the regular
-    // max as softness -> 0) keeps every contributing curve's own continuous
-    // slope instead of switching between them, so the silhouette — both
-    // each ply's own rounded top and the valley between two plies — comes
-    // out as one flowing curve. Unlike inflating the strands to force
-    // coverage (a prior attempt, which fused the plies into what read as
-    // one connected tube with no visible separation), this only rounds the
-    // *shape* of the valley — it can still reach all the way down to a true
-    // gap between plies, which is the point.
-    //
-    // Shading (how bright is the winning strand): blended by relative
-    // depth, `cos` of each strand's own orbit angle standing in for toward/
-    // away-from-viewer depth (the other half of the sin/cos helix
-    // projection `sin` already provides for position) — a soft pick
-    // instead of a hard one, so the front/back handoff doesn't itself
-    // create a second seam on top of the shape one above.
+    // `priority = edge / softness + depth * occlusion_sharpness` folds
+    // "how geometrically present" and "how far forward" into one score per
+    // strand; the softmax-weighted average of the strands' own edges by
+    // that score is a smooth maximum biased toward whichever strand is
+    // both present and in front. Two strands with a similar edge value
+    // (an actual crossing) still blend smoothly between them — keeping the
+    // continuous-slope silhouette the smooth-union rewrite was for — but a
+    // strand that's merely geometrically nearby while *behind* a strand
+    // that's already dominant no longer gets an independent vote in the
+    // shape, which is what was missing.
     let softness = max(strand_half_width * 0.18, 0.0001);
-    var shape_sum_exp = 0.0;
-    var shade_weighted_sum = 0.0;
-    var shade_weight_total = 0.0;
     let occlusion_sharpness = 4.0;
+    var weight_sum = 0.0;
+    var edge_weighted_sum = 0.0;
+    var shade_weighted_sum = 0.0;
     for (var k = 0u; k < ply_count; k = k + 1u) {
         let phase = 2.0 * PI * f32(k) / n;
         let angle = angle_base + phase;
         let center = orbit_radius * sin(angle);
         let depth = cos(angle);
         let edge = strand_half_width - abs(local_y - center);
-
-        shape_sum_exp = shape_sum_exp + exp(edge / softness);
-
         let shade = mix(0.55, 1.0, depth * 0.5 + 0.5);
-        let presence_weight = exp(edge / softness);
-        let depth_weight = exp(depth * occlusion_sharpness);
-        let weight = presence_weight * depth_weight;
+
+        let priority = edge / softness + depth * occlusion_sharpness;
+        let weight = exp(priority);
+        weight_sum = weight_sum + weight;
+        edge_weighted_sum = edge_weighted_sum + weight * edge;
         shade_weighted_sum = shade_weighted_sum + weight * shade;
-        shade_weight_total = shade_weight_total + weight;
     }
-    let combined_edge = log(shape_sum_exp) * softness;
+    // `weight_sum` is a sum of `exp(...)` terms, so it's always strictly
+    // positive — no 0/0 risk the way a hard presence gate would have.
+    let combined_edge = edge_weighted_sum / weight_sum;
+    let blended_shade = shade_weighted_sum / weight_sum;
     let shape = shape_from_edge(combined_edge, strand_half_width, roundness);
-    // `shape` is already ~0 wherever every strand's edge weight underflowed
-    // toward 0 together (e.g. near the texture's own top/bottom border) —
-    // this floor just keeps that division finite instead of 0/0 = NaN; it
-    // never visibly affects a pixel where any strand actually contributes.
-    let blended_shade = shade_weighted_sum / max(shade_weight_total, 1e-20);
     let value = shape * blended_shade;
 
     textureStore(output, vec2<i32>(id.xy), vec4<f32>(value, value, value, 1.0));
