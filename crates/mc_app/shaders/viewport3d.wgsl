@@ -48,7 +48,16 @@ struct Uniforms {
     shading_mode: f32,
     // Multiplies linear color before tonemapping (lit mode only).
     exposure: f32,
+    // Multiplies just the environment's contribution (ambient fill +
+    // reflections) — independent of `exposure` above, so the HDRI can be
+    // dimmed/brightened without touching direct light.
+    environment_intensity: f32,
+    // 0 = sharp mirror reflection of the environment; 1 = heavily blurred.
+    // See `blurred_sky_color` below.
+    environment_blur: f32,
     _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
 }
 
 struct VertexInput {
@@ -119,6 +128,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 }
 
 const PI: f32 = 3.14159265358979;
+const BLUR_TAP_COUNT: i32 = 8;
 
 // Standard equirectangular (latitude/longitude) mapping: u wraps around the
 // horizon, v runs from the +Y pole (0) to the -Y pole (1).
@@ -131,6 +141,36 @@ fn equirect_uv(direction: vec3<f32>) -> vec2<f32> {
 
 fn sky_color(direction: vec3<f32>) -> vec3<f32> {
     return textureSample(environment_tex, tex_sampler, equirect_uv(direction)).rgb;
+}
+
+// `sky_color`, angularly softened by `blur` (0 = untouched, exact mirror; 1 =
+// heavily blurred) — an artist-facing alternative to the environment just
+// mirroring back exactly, for shiny/metallic materials where even a rough-
+// surface-dampened reflection (see `fs_main`'s `specular_strength`) still
+// reads as an obvious copy of the HDRI. A single 8-tap ring around
+// `direction`, in a tangent basis built from it, rather than a real
+// prefiltered mip chain — cheap, and this only ever runs once per shaded
+// pixel (there's no separate skybox pass to also blur; see this file's
+// module doc comment on the background being a flat clear color).
+fn blurred_sky_color(direction: vec3<f32>, blur: f32) -> vec3<f32> {
+    if blur <= 0.001 {
+        return sky_color(direction);
+    }
+    var up = vec3<f32>(0.0, 1.0, 0.0);
+    if abs(direction.y) > 0.99 {
+        up = vec3<f32>(1.0, 0.0, 0.0);
+    }
+    let tangent = normalize(cross(up, direction));
+    let bitangent = cross(direction, tangent);
+    let radius = blur * 0.8;
+
+    var sum = sky_color(direction);
+    for (var i = 0; i < BLUR_TAP_COUNT; i = i + 1) {
+        let angle = f32(i) / f32(BLUR_TAP_COUNT) * 2.0 * PI;
+        let offset = (tangent * cos(angle) + bitangent * sin(angle)) * radius;
+        sum = sum + sky_color(normalize(direction + offset));
+    }
+    return sum / f32(BLUR_TAP_COUNT + 1);
 }
 
 // The exact piecewise sRGB OETF (same curve `mc_export::linear_to_srgb_u8`
@@ -210,16 +250,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // of the sky onto every surface regardless of roughness — not what
     // diffuse/irradiance lighting looks like), plus a specular reflection of
     // the sky dampened by roughness below.
-    let ambient_diffuse = uniforms.ambient_color.rgb * base_color * (1.0 - metallic) * ao * 0.6;
+    let ambient_diffuse = uniforms.ambient_color.rgb * base_color * (1.0 - metallic) * ao * 0.6
+        * uniforms.environment_intensity;
     let reflection = reflect(-v, n);
-    // A single raw environment sample is mirror-sharp regardless of
-    // roughness (no mip chain to blur it — see the module doc comment's
-    // "known simplification" note), so even a "matte" rough surface showed
-    // a crisp reflection of the HDRI's bright softbox. Damp it toward zero
-    // as roughness increases: a cheap, non-physical stand-in for prefiltering
-    // that keeps smooth/metal surfaces mirror-like while rough ones go flat.
+    // Roughness still dampens reflection *strength* toward zero (a cheap,
+    // non-physical stand-in for prefiltering — see `blurred_sky_color`'s doc
+    // comment above for why that alone isn't enough at low roughness), and
+    // `environment_blur` separately softens the reflection's *content*
+    // regardless of roughness.
     let specular_strength = pow(1.0 - roughness, 3.0);
-    let ambient_specular = sky_color(reflection) * f * ao * specular_strength;
+    let ambient_specular = blurred_sky_color(reflection, uniforms.environment_blur)
+        * f * ao * specular_strength * uniforms.environment_intensity;
 
     let color = (direct + ambient_diffuse + ambient_specular) * uniforms.exposure;
 

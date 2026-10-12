@@ -28,6 +28,22 @@ use std::collections::HashMap;
 
 use canvas::CanvasState;
 
+/// 2D View's own pan/tiling-preview state — view-only, not part of the graph
+/// or any node's params.
+#[derive(Default)]
+struct TwoDViewState {
+    /// Screen-space drag offset, in points. Only has visible effect while
+    /// `tiling_preview` is on (the single-tile view always exactly fills its
+    /// square, so there's nothing to pan to otherwise) — kept regardless so
+    /// toggling tiling back on restores where you left off.
+    pan: egui::Vec2,
+    /// Shows the image tiled edge-to-edge across the whole panel (wrap-
+    /// addressed, via `preview_texture`'s Repeat sampler) instead of a
+    /// single centered copy, so a seam — or the lack of one — is visible at
+    /// a glance.
+    tiling_preview: bool,
+}
+
 /// Root application state for the eframe event loop.
 struct MaterialCreatorApp {
     gpu: mc_gpu::Context,
@@ -49,6 +65,7 @@ struct MaterialCreatorApp {
     dock: dock::DockLayout,
 
     preview_texture_id: Option<egui::TextureId>,
+    two_d_view: TwoDViewState,
 
     /// Where the current graph was last loaded from or saved to — `None`
     /// for a never-saved graph, in which case Save behaves like Save As.
@@ -211,6 +228,7 @@ impl eframe::App for MaterialCreatorApp {
             pool,
             render_state,
             toasts,
+            two_d_view,
             ..
         } = self;
 
@@ -230,11 +248,113 @@ impl eframe::App for MaterialCreatorApp {
                 }
                 dock::CrateId::TwoDView => match preview_texture_id {
                     Some(texture_id) => {
-                        let size = ui.available_height().min(ui.available_width());
-                        ui.image(egui::load::SizedTexture::new(
-                            texture_id,
-                            egui::Vec2::splat(size),
-                        ));
+                        const PADDING: f32 = 16.0;
+                        const ICON_SIZE: f32 = 28.0;
+
+                        let full_rect = ui.available_rect_before_wrap();
+                        let content_rect = full_rect.shrink(PADDING);
+
+                        // Drag-to-pan, under the tiling icon button below so
+                        // the button's own click still wins there.
+                        let drag_response = ui.interact(
+                            content_rect,
+                            ui.id().with("two_d_view_drag"),
+                            egui::Sense::click_and_drag(),
+                        );
+                        if drag_response.dragged() {
+                            two_d_view.pan += drag_response.drag_delta();
+                        }
+
+                        if two_d_view.tiling_preview {
+                            // Each tile is a third of the shorter side, so
+                            // the panel always shows a handful of full
+                            // repeats regardless of its own size/aspect —
+                            // "fills the window" rather than a fixed 2x2/3x3
+                            // count that could leave empty space in a large
+                            // or oddly-shaped panel.
+                            let tile_px =
+                                (content_rect.width().min(content_rect.height()) / 3.0).max(16.0);
+                            let uv_rect = egui::Rect::from_min_size(
+                                egui::pos2(
+                                    -two_d_view.pan.x / tile_px,
+                                    -two_d_view.pan.y / tile_px,
+                                ),
+                                egui::vec2(
+                                    content_rect.width() / tile_px,
+                                    content_rect.height() / tile_px,
+                                ),
+                            );
+                            ui.painter().image(
+                                texture_id,
+                                content_rect,
+                                uv_rect,
+                                egui::Color32::WHITE,
+                            );
+                        } else {
+                            let size = content_rect.width().min(content_rect.height());
+                            // Clamped so a drag can slide the tile around its
+                            // padded box but never off it entirely — `pan`
+                            // itself is left unclamped (not reassigned here)
+                            // so a wilder pan is still there, restored
+                            // automatically, if tiling is turned back on.
+                            let half_slack =
+                                ((content_rect.size() - egui::Vec2::splat(size)) * 0.5).abs();
+                            let pan = egui::vec2(
+                                two_d_view.pan.x.clamp(-half_slack.x, half_slack.x),
+                                two_d_view.pan.y.clamp(-half_slack.y, half_slack.y),
+                            );
+                            let image_rect = egui::Rect::from_center_size(
+                                content_rect.center() + pan,
+                                egui::Vec2::splat(size),
+                            );
+                            ui.painter().image(
+                                texture_id,
+                                image_rect,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(0.0, 0.0),
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                egui::Color32::WHITE,
+                            );
+                        }
+
+                        // Tiling toggle, top-right corner overlay — same
+                        // selectable-icon-button look as the 3D viewport's
+                        // toolbar (`viewport3d_panels::icon_button`), just a
+                        // plain on/off instead of a slide-out panel.
+                        let icon_rect = egui::Rect::from_min_size(
+                            egui::pos2(full_rect.right() - ICON_SIZE - 6.0, full_rect.top() + 6.0),
+                            egui::Vec2::splat(ICON_SIZE),
+                        );
+                        let icon_response = ui.interact(
+                            icon_rect,
+                            ui.id().with("two_d_view_tiling_toggle"),
+                            egui::Sense::click(),
+                        );
+                        let visuals = ui
+                            .style()
+                            .interact_selectable(&icon_response, two_d_view.tiling_preview);
+                        let painter = ui.painter();
+                        if two_d_view.tiling_preview || icon_response.hovered() {
+                            painter.rect_filled(icon_rect, 4.0, visuals.bg_fill);
+                        }
+                        painter.text(
+                            icon_rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            '\u{f015}'.to_string(), // grid_3x3
+                            egui::FontId::new(
+                                20.0,
+                                egui::FontFamily::Name("material_icons_round".into()),
+                            ),
+                            visuals.fg_stroke.color,
+                        );
+                        let icon_response = icon_response.on_hover_text(
+                            "Show the pattern tiled across the whole view, to check how it \
+                             seams.",
+                        );
+                        if icon_response.clicked() {
+                            two_d_view.tiling_preview = !two_d_view.tiling_preview;
+                        }
                     }
                     None => {
                         ui.add_space(8.0);
@@ -440,6 +560,29 @@ impl eframe::App for MaterialCreatorApp {
                                         }
                                     }
                                 }
+                                ui.separator();
+                                ui.spacing_mut().slider_width = 80.0;
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut viewport3d.environment_intensity,
+                                        0.0..=4.0,
+                                    )
+                                    .text("Brightness"),
+                                )
+                                .on_hover_text(
+                                    "Scales just the HDRI's contribution (background \
+                                     reflections and ambient fill) \u{2014} independent of the \
+                                     Material panel's overall Exposure.",
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut viewport3d.environment_blur, 0.0..=1.0)
+                                        .text("Blur"),
+                                )
+                                .on_hover_text(
+                                    "Softens the environment reflected in the material, for \
+                                     shiny/metallic surfaces that would otherwise mirror the \
+                                     HDRI back sharply.",
+                                );
                             }
                             viewport3d_panels::PanelKind::Camera => {}
                         }
@@ -683,25 +826,43 @@ impl MaterialCreatorApp {
         // `display_encode.rs`.
         let view = crate::display_encode::encode_for_display(&mut self.gpu, &mut self.pool, &key)?;
 
+        // Repeat (not egui's default ClampToEdge) addressing: identical to
+        // before for the normal single-tile view (UV never leaves [0, 1]
+        // there), but also lets the 2D View's tiling-preview toggle sample
+        // UVs past 1.0 and get the real wrapped texture back instead of a
+        // smeared repeat of the edge texel.
+        let sampler_descriptor = wgpu::SamplerDescriptor {
+            label: Some("preview_texture_sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        };
+
         Some(match self.preview_texture_id {
             Some(texture_id) => {
                 self.render_state
                     .renderer
                     .write()
-                    .update_egui_texture_from_wgpu_texture(
+                    .update_egui_texture_from_wgpu_texture_with_sampler_options(
                         &self.gpu.device,
                         &view,
-                        wgpu::FilterMode::Linear,
+                        sampler_descriptor,
                         texture_id,
                     );
                 texture_id
             }
             None => {
-                let texture_id = self.render_state.renderer.write().register_native_texture(
-                    &self.gpu.device,
-                    &view,
-                    wgpu::FilterMode::Linear,
-                );
+                let texture_id = self
+                    .render_state
+                    .renderer
+                    .write()
+                    .register_native_texture_with_sampler_options(
+                        &self.gpu.device,
+                        &view,
+                        sampler_descriptor,
+                    );
                 self.preview_texture_id = Some(texture_id);
                 texture_id
             }
@@ -918,6 +1079,7 @@ fn main() -> eframe::Result<()> {
                 viewport_panels: viewport3d_panels::ViewportPanels::default(),
                 dock: dock::DockLayout::default(),
                 preview_texture_id: None,
+                two_d_view: TwoDViewState::default(),
                 current_path: None,
                 toasts: toast::Toasts::default(),
                 last_eval_error: None,

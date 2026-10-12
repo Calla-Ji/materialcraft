@@ -105,10 +105,25 @@ pub struct Viewport3d {
     pub tessellation: f32,
     pub shading_mode: ShadingMode,
     pub exposure: f32,
+    /// Scales just the environment's contribution (sky reflection + ambient
+    /// fill), independent of `exposure` above — lets a too-bright HDRI be
+    /// dimmed without affecting direct light.
+    pub environment_intensity: f32,
+    /// 0 = exact mirror reflection of the environment; 1 = heavily blurred.
+    /// Independent of surface roughness (which already dampens reflection
+    /// *strength* — see `fs_main`'s `specular_strength`): a perfectly smooth
+    /// metal has roughness ~0 and so no damping at all, which is exactly the
+    /// case this is for — letting the artist soften that mirror without
+    /// having to fake it by raising roughness.
+    pub environment_blur: f32,
     pub texture_filter: TextureFilter,
     yaw: f32,
     pitch: f32,
     distance: f32,
+    /// World-space point the camera orbits around and looks at — shifted by
+    /// right-click-drag panning (`handle_input`); the mesh itself always
+    /// stays at the origin, only the camera moves.
+    target: Vec3,
 }
 
 /// "Smooth" is trilinear + 16x anisotropic — the normal case. "Pixel"
@@ -389,10 +404,13 @@ impl Viewport3d {
             tessellation: initial_tessellation,
             shading_mode: ShadingMode::default(),
             exposure: 1.0,
+            environment_intensity: 1.0,
+            environment_blur: 0.0,
             texture_filter: TextureFilter::default(),
             yaw: 0.6,
             pitch: 0.35,
             distance: 3.0,
+            target: Vec3::ZERO,
         }
     }
 
@@ -440,9 +458,26 @@ impl Viewport3d {
         self.environment_thumbnail_id
     }
 
-    /// Orbit (drag) and zoom (scroll, while hovered) camera controls.
+    /// Orbit (left-drag), pan (right-drag), and zoom (scroll, while hovered)
+    /// camera controls.
     pub fn handle_input(&mut self, ui: &egui::Ui, response: &egui::Response) {
-        if response.dragged() {
+        if response.dragged_by(egui::PointerButton::Secondary) {
+            let delta = response.drag_delta();
+            // Pan speed scales with distance so a dragged-screen-pixel keeps
+            // tracking roughly the same world-space point regardless of
+            // zoom level — fixed FOV means more world space fits in a pixel
+            // the farther the camera is.
+            let pan_speed = self.distance * 0.0015;
+            let forward = -self.orbit_offset().normalize_or_zero();
+            let right = forward.cross(Vec3::Y).normalize_or_zero();
+            let up = right.cross(forward).normalize_or_zero();
+            // Move the camera opposite the drag so the *content* tracks the
+            // cursor (the same "grab the canvas" convention `canvas.rs`'s 2D
+            // pan uses) — screen Y grows downward, world up doesn't, hence
+            // the sign flip on the vertical term.
+            self.target -= right * delta.x * pan_speed;
+            self.target += up * delta.y * pan_speed;
+        } else if response.dragged_by(egui::PointerButton::Primary) {
             let delta = response.drag_delta();
             self.yaw -= delta.x * 0.01;
             self.pitch = (self.pitch - delta.y * 0.01).clamp(-1.4, 1.4);
@@ -455,12 +490,19 @@ impl Viewport3d {
         }
     }
 
-    fn eye_position(&self) -> Vec3 {
+    /// The camera's offset from `target` — orbit radius/angles only, with no
+    /// pan applied. `eye_position` below is just this plus `target`; pan
+    /// (`handle_input`) only ever moves `target`, never this offset.
+    fn orbit_offset(&self) -> Vec3 {
         Vec3::new(
             self.distance * self.pitch.cos() * self.yaw.sin(),
             self.distance * self.pitch.sin(),
             self.distance * self.pitch.cos() * self.yaw.cos(),
         )
+    }
+
+    fn eye_position(&self) -> Vec3 {
+        self.target + self.orbit_offset()
     }
 
     fn recreate_targets(&mut self, device: &wgpu::Device, width: u32, height: u32) {
@@ -618,7 +660,7 @@ impl Viewport3d {
 
         let aspect = width as f32 / height as f32;
         let eye = self.eye_position();
-        let view = glam::camera::rh::view::look_at_mat4(eye, Vec3::ZERO, Vec3::Y);
+        let view = glam::camera::rh::view::look_at_mat4(eye, self.target, Vec3::Y);
         let proj =
             glam::camera::rh::proj::directx::perspective(60f32.to_radians(), aspect, 0.1, 100.0);
         let light_dir = Vec3::new(-0.4, -1.0, -0.3).normalize();
@@ -628,9 +670,13 @@ impl Viewport3d {
             eye,
             light_dir,
             self.environment_ambient_color,
-            self.height_scale,
-            self.shading_mode,
-            self.exposure,
+            RenderSettings {
+                height_scale: self.height_scale,
+                shading_mode: self.shading_mode,
+                exposure: self.exposure,
+                environment_intensity: self.environment_intensity,
+                environment_blur: self.environment_blur,
+            },
         );
         gpu.queue.write_buffer(&self.uniform_buffer, 0, &bytes);
 
@@ -842,18 +888,27 @@ fn upload_mesh(
 }
 
 /// `view_proj`(mat4) + `camera_pos`(vec4) + `light_dir`(vec4) +
-/// `ambient_color`(vec4) + 1 scalar + 3 padding floats = 128 bytes, matching
+/// `ambient_color`(vec4) + 5 scalars + 3 padding floats = 144 bytes, matching
 /// `Uniforms` in viewport3d.wgsl.
-const UNIFORM_SIZE: usize = 128;
+const UNIFORM_SIZE: usize = 144;
+
+/// The render-settings scalars that make up `uniform_bytes`' tail — grouped
+/// into one struct rather than 5 more positional args, which pushed that
+/// function over clippy's `too_many_arguments` threshold.
+struct RenderSettings {
+    height_scale: f32,
+    shading_mode: ShadingMode,
+    exposure: f32,
+    environment_intensity: f32,
+    environment_blur: f32,
+}
 
 fn uniform_bytes(
     view_proj: Mat4,
     camera_pos: Vec3,
     light_dir: Vec3,
     ambient_color: Vec3,
-    height_scale: f32,
-    shading_mode: ShadingMode,
-    exposure: f32,
+    settings: RenderSettings,
 ) -> [u8; UNIFORM_SIZE] {
     let mut bytes = [0u8; UNIFORM_SIZE];
     let mut offset = 0;
@@ -873,13 +928,17 @@ fn uniform_bytes(
     for component in [ambient_color.x, ambient_color.y, ambient_color.z, 0.0] {
         put(component, &mut bytes, &mut offset);
     }
-    put(height_scale, &mut bytes, &mut offset);
-    let shading_mode_value = match shading_mode {
+    put(settings.height_scale, &mut bytes, &mut offset);
+    let shading_mode_value = match settings.shading_mode {
         ShadingMode::Lit => 0.0,
         ShadingMode::UnlitBaseColor => 1.0,
     };
     put(shading_mode_value, &mut bytes, &mut offset);
-    put(exposure, &mut bytes, &mut offset);
+    put(settings.exposure, &mut bytes, &mut offset);
+    put(settings.environment_intensity, &mut bytes, &mut offset);
+    put(settings.environment_blur, &mut bytes, &mut offset);
+    put(0.0, &mut bytes, &mut offset);
+    put(0.0, &mut bytes, &mut offset);
     put(0.0, &mut bytes, &mut offset);
     bytes
 }
