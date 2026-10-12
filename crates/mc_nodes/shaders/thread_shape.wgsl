@@ -80,23 +80,55 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
+    // Pack `ply_count` strands evenly around a circle of `orbit_radius`,
+    // sized so neighboring strands just touch — with a small gap left over
+    // for the visible groove real plied yarn shows between its plies —
+    // rather than each strand being nearly as wide as the orbit itself.
+    // Overlapping, similarly-sized strands is what turned the first version
+    // of this into a moire lattice instead of distinct plies: for N
+    // strands spaced evenly around radius R, they just touch when
+    // strand_radius == R * sin(PI / N); orbit_radius + strand_half_width
+    // reaching exactly `half_w` keeps the whole bundle filling the
+    // thickness the slider promises.
+    let n = f32(ply_count);
+    let half_gap_angle = PI / n;
+    let gap_factor = 0.82;
+    let orbit_radius = half_w / (1.0 + gap_factor * sin(half_gap_angle));
+    let strand_half_width = orbit_radius * gap_factor * sin(half_gap_angle);
+
     // Each strand orbits the bundle's center as `uv.x` advances — an
     // integer number of full turns (`twist_cycles`) across this texture's
     // own width, so it stays exactly periodic. Direction just flips the
     // rotation's sign, mirroring the spiral.
-    let strand_half_width = half_w * 0.55;
-    let orbit_radius = half_w * 0.5;
     var sign = 1.0;
     if params.twist_direction == TWIST_Z {
         sign = -1.0;
     }
     let angle_base = sign * f32(params.twist_cycles) * uv.x * 2.0 * PI;
 
+    // A real twisted yarn's strands genuinely pass in front of and behind
+    // one another as they spiral, not just side by side — combining them
+    // with a plain `max()` of brightness only captures the sideways
+    // (sin) motion and produces an interference lattice, not a braid.
+    // `cos` of each strand's own orbit angle is the matching depth
+    // component of that same sin/cos helix projection: wherever two
+    // strands' profiles overlap, the one with greater depth (closer to the
+    // viewer) wins outright instead of blending, and every strand dims
+    // slightly the further back it sits — together, what actually reads as
+    // plies crossing over and under each other.
     var value = 0.0;
+    var winning_depth = -2.0;
     for (var k = 0u; k < ply_count; k = k + 1u) {
-        let phase = 2.0 * PI * f32(k) / f32(ply_count);
-        let center = orbit_radius * sin(angle_base + phase);
-        value = max(value, strand_profile(local_y, center, strand_half_width, roundness));
+        let phase = 2.0 * PI * f32(k) / n;
+        let angle = angle_base + phase;
+        let center = orbit_radius * sin(angle);
+        let depth = cos(angle);
+        let profile = strand_profile(local_y, center, strand_half_width, roundness);
+        if profile > 0.0001 && depth > winning_depth {
+            winning_depth = depth;
+            let shade = mix(0.55, 1.0, depth * 0.5 + 0.5);
+            value = profile * shade;
+        }
     }
 
     textureStore(output, vec2<i32>(id.xy), vec4<f32>(value, value, value, 1.0));

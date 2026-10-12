@@ -20,12 +20,22 @@
 //! the shader's own doc comment for the periodicity requirement this
 //! drives.
 //!
-//! Known limitation, found while testing rather than assumed: Twist
-//! Direction has no visible effect at exactly `ply_count` 2. Two strands
-//! 180° apart mirror onto *each other* under a direction flip, so the
-//! combined (max-of-both) height field is identical either way — there's
-//! no separate "which strand is on top" depth cue to break that symmetry.
-//! 3+ plies don't have that even symmetry, so direction is visible there.
+//! A first pass at twist (each strand just orbiting the center, combined
+//! with a plain `max()` of brightness) still didn't read as rope — it only
+//! captured the strands' sideways motion, which for similarly-sized,
+//! evenly-spaced strands produces a moire/lattice interference pattern
+//! instead of distinct plies (confirmed against a screenshot, not assumed).
+//! Fixed with two changes, both in the shader: strands are sized to just
+//! touch their neighbors around the orbit instead of mostly overlapping,
+//! and they're combined with depth-ordered occlusion (`cos` of each
+//! strand's own orbit angle standing in for toward/away-from-viewer depth,
+//! the other half of the same sin/cos helix projection `sin` already
+//! provided for the sideways position) rather than a flat `max()` — so a
+//! front strand fully hides a back one where they overlap, instead of the
+//! two blending together. That occlusion step also resolved an earlier,
+//! documented-and-now-stale limitation where Twist Direction had no visible
+//! effect at exactly `ply_count` 2 (confirmed by test, see
+//! `twist_direction_also_differs_at_two_ply_now_that_strands_occlude`).
 
 use crate::shaders::full_source;
 
@@ -319,14 +329,6 @@ mod tests {
         crate::test_support::assert_tiles_seamlessly(&pixels, RESOLUTION);
     }
 
-    /// 2-ply is a special case: with exactly 2 strands spaced 180° apart,
-    /// flipping twist direction just swaps which strand is which — the set
-    /// of occupied cross-section positions at any given point along the
-    /// length is identical either way, so a plain max-combined height field
-    /// (no separate "which strand is on top" depth cue) genuinely can't
-    /// show a difference. 3+ plies don't have that even-symmetry, so
-    /// direction is visible there — confirmed by this test actually
-    /// failing on 2-ply during development, not assumed.
     #[test]
     fn twist_direction_mirrors_the_spiral() {
         let s_twist = render(&ThreadShapeParams {
@@ -338,6 +340,34 @@ mod tests {
         });
         let z_twist = render(&ThreadShapeParams {
             ply_count: 3,
+            twist_cycles: 2,
+            twist_direction: TwistDirection::Z,
+            thickness: 0.6,
+            ..ThreadShapeParams::default()
+        });
+        assert_ne!(s_twist, z_twist);
+    }
+
+    /// The old plain-`max()` combine was symmetric at exactly 2 plies (see
+    /// the module doc comment's now-superseded note): flipping direction
+    /// just swapped which strand was which, with no "which one is on top"
+    /// cue to tell the difference. The depth-ordered occlusion added to fix
+    /// the moire-lattice bug happens to also resolve this — a strand's
+    /// depth (`cos` of its orbit angle) and its position (`sin` of the same
+    /// angle) don't swap together under a direction flip the way position
+    /// alone did, so which strand occludes which now differs too. Confirmed
+    /// here rather than assumed.
+    #[test]
+    fn twist_direction_also_differs_at_two_ply_now_that_strands_occlude() {
+        let s_twist = render(&ThreadShapeParams {
+            ply_count: 2,
+            twist_cycles: 2,
+            twist_direction: TwistDirection::S,
+            thickness: 0.6,
+            ..ThreadShapeParams::default()
+        });
+        let z_twist = render(&ThreadShapeParams {
+            ply_count: 2,
             twist_cycles: 2,
             twist_direction: TwistDirection::Z,
             thickness: 0.6,
