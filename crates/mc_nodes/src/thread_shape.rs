@@ -20,22 +20,37 @@
 //! the shader's own doc comment for the periodicity requirement this
 //! drives.
 //!
-//! A first pass at twist (each strand just orbiting the center, combined
-//! with a plain `max()` of brightness) still didn't read as rope — it only
-//! captured the strands' sideways motion, which for similarly-sized,
-//! evenly-spaced strands produces a moire/lattice interference pattern
-//! instead of distinct plies (confirmed against a screenshot, not assumed).
-//! Fixed with two changes, both in the shader: strands are sized to just
-//! touch their neighbors around the orbit instead of mostly overlapping,
-//! and they're combined with depth-ordered occlusion (`cos` of each
-//! strand's own orbit angle standing in for toward/away-from-viewer depth,
-//! the other half of the same sin/cos helix projection `sin` already
-//! provided for the sideways position) rather than a flat `max()` — so a
-//! front strand fully hides a back one where they overlap, instead of the
-//! two blending together. That occlusion step also resolved an earlier,
-//! documented-and-now-stale limitation where Twist Direction had no visible
-//! effect at exactly `ply_count` 2 (confirmed by test, see
-//! `twist_direction_also_differs_at_two_ply_now_that_strands_occlude`).
+//! Getting the twist to actually read as rope took several rounds, each
+//! confirmed (and the previous one's shortfall found) against the owner's
+//! own screenshots rather than assumed correct from the math alone:
+//!
+//! 1. Strands just orbiting the center, combined with a plain `max()` of
+//!    brightness, only captured their sideways motion — for similarly-sized,
+//!    evenly-spaced strands that produces a moire/lattice interference
+//!    pattern, not distinct plies.
+//! 2. Adding depth (`cos` of each strand's own orbit angle, the other half
+//!    of the same sin/cos helix projection `sin` already provided for
+//!    position) fixed that, and incidentally resolved an unrelated, now-
+//!    stale limitation where Twist Direction had no visible effect at
+//!    exactly `ply_count` 2 (see
+//!    `twist_direction_also_differs_at_two_ply_now_that_strands_occlude`).
+//!    But sizing strands to comfortably overlap (to guarantee the bundle's
+//!    centerline was never literally empty) fused the two plies into what
+//!    read as one continuous tube with no visible separation, and combining
+//!    overlapping strands with a hard `max()`/winner-take-all pick drew a
+//!    visible kink everywhere the dominant strand switched, since a hard
+//!    max of several continuous sine curves is not itself continuous in
+//!    slope — the "ragged outline" and "overcut groove" a screenshot showed.
+//! 3. The shader's current approach: strands sized to just touch (not
+//!    overlap) rather than forcing coverage, combined with a proper
+//!    SDF-style smooth union (not a hard max, and not alpha-blending) for
+//!    *shape*, plus a separate depth-weighted blend for *shading* within
+//!    that shape. See the shader's own doc comment for why those are two
+//!    different operations. This keeps each ply's own rounded silhouette
+//!    and the valley between plies as one flowing curve with no kink,
+//!    while still leaving a real, visibly darker gap between the two plies
+//!    rather than fusing them — see
+//!    `two_plies_show_a_visible_valley_not_a_fused_bridge`.
 
 use crate::shaders::full_source;
 
@@ -209,6 +224,34 @@ mod tests {
         assert_eq!(render(&params), render(&params));
     }
 
+    /// A screenshot showed the previous (overlap-guaranteed) version reading
+    /// as one continuous fused tube with no visible separation between the
+    /// two plies at all — the valley between them stayed too bright. The
+    /// smooth-union rewrite should still show a real, clearly darker dip
+    /// where the plies are furthest apart, not just a near-white bridge —
+    /// confirmed numerically, not just visually.
+    #[test]
+    fn two_plies_show_a_visible_valley_not_a_fused_bridge() {
+        let pixels = render(&ThreadShapeParams {
+            ply_count: 2,
+            ..ThreadShapeParams::default()
+        });
+        let r = RESOLUTION as usize;
+        let row = r / 2;
+        let row_values: Vec<u8> = (0..r).map(|x| pixels[(row * r + x) * 4]).collect();
+        let min = *row_values.iter().min().unwrap();
+        let max = *row_values.iter().max().unwrap();
+        assert!(
+            max > 200,
+            "the two plies' crossing point should read bright (max={max})"
+        );
+        assert!(
+            min < 100,
+            "the valley between plies should read clearly darker than the crossing \
+             point, not fused into one continuous bright bridge (min={min}, max={max})"
+        );
+    }
+
     #[test]
     fn centerline_is_brighter_than_the_edge() {
         let pixels = render(&ThreadShapeParams {
@@ -295,13 +338,16 @@ mod tests {
         );
     }
 
-    /// A screenshot showed the first overlap margin (since tightened)
-    /// leaving an actual black void down the bundle's centerline at the
-    /// moment its plies were furthest apart — not a subtle groove, a real
-    /// gap splitting the thread into two disconnected ribbons. 2 plies is
-    /// the worst case (see the shader's own comment on why), so that's
-    /// what this checks: the centerline should stay covered by *some*
-    /// strand at every point along the thread's length.
+    /// A screenshot once showed a real black void down the bundle's
+    /// centerline at the moment its plies were furthest apart — not a
+    /// deliberate, visible valley between two distinct plies (which is
+    /// correct and expected, see `two_plies_show_a_visible_valley_not_a_fused_bridge`
+    /// below), but a literal disconnect splitting the thread into two
+    /// unrelated ribbons. The smooth-union combine (see the shader's own
+    /// comment) happens to guarantee strictly-above-zero coverage as a side
+    /// effect of how log-sum-exp blends overlapping curves, even for
+    /// strands sized to just touch rather than overlap — confirmed here so
+    /// a future tuning change doesn't quietly let that regress.
     #[test]
     fn two_ply_never_shows_a_gap_down_the_centerline() {
         let pixels = render(&ThreadShapeParams {

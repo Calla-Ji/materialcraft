@@ -52,24 +52,19 @@ struct ThreadShapeParams {
 const TWIST_Z: u32 = 1u;
 const PI: f32 = 3.14159265358979;
 
-// One strand's own cross-section, centered at `center` rather than always 0.
-// Fades out over its outer 15% with a smoothstep instead of stopping dead
-// at `half_width` — a hard-edged circular strand swept along a curving
-// twist path draws a scalloped envelope with a visible cusp everywhere two
-// strands' circular boundaries meet (the geometric reason a first pass at
-// this read as "ragged" from a screenshot, not just an aesthetic guess);
-// tapering each strand's own edge softens that cusp into a flowing curve
-// without blurring away the strand structure itself.
-fn strand_profile(t: f32, center: f32, half_width: f32, roundness: f32) -> f32 {
+// Converts a signed "how far inside the strand" distance (positive inside,
+// 0 at the edge, negative outside) into the same flat-ribbon/round-fiber
+// brightness falloff every version of this node has used — kept as its own
+// function so both the single-ply path and the multi-ply smooth-union path
+// below can share it.
+fn shape_from_edge(edge: f32, half_width: f32, roundness: f32) -> f32 {
     if half_width <= 0.0001 {
         return 0.0;
     }
-    let d = clamp(abs(t - center) / half_width, 0.0, 1.0);
+    let d = clamp(1.0 - edge / half_width, 0.0, 1.0);
     let flat = 1.0 - d;
     let round_profile = sqrt(max(1.0 - d * d, 0.0));
-    let shape = mix(flat, round_profile, roundness);
-    let taper = 1.0 - smoothstep(0.85, 1.0, d);
-    return shape * taper;
+    return mix(flat, round_profile, roundness);
 }
 
 @compute @workgroup_size(8, 8)
@@ -84,35 +79,25 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let ply_count = max(params.ply_count, 1u);
 
     if ply_count == 1u {
-        let value = strand_profile(local_y, 0.0, half_w, roundness);
+        let edge = half_w - abs(local_y);
+        let value = shape_from_edge(edge, half_w, roundness);
         textureStore(output, vec2<i32>(id.xy), vec4<f32>(value, value, value, 1.0));
         return;
     }
 
     // Pack `ply_count` strands evenly around a circle of `orbit_radius`,
-    // sized so every strand's own circle overlaps its neighbors enough
-    // that the bundle's cross-section never shows bare space down its
-    // centerline — unlike the first version of this (each strand nearly as
-    // wide as the whole orbit), which read as a moire lattice, instead of
-    // sizing strands from a "just touching" baseline, which turned out to
-    // leave an actual gap: for N strands evenly spaced around radius R,
-    // the single strand closest to crossing dead center (local_y == 0) can
-    // be up to PI/N of orbit away from it at any moment — "just touching"
-    // sizes the strand to reach exactly that distance and no further,
-    // which is an exact knife-edge (reaches zero coverage, not a visible
-    // hole, only at the one instant every strand is simultaneously at its
-    // worst-case offset) that a screenshot showed reading as a real void,
-    // not a subtle groove. `overlap` pushes every strand comfortably past
-    // that minimum instead. `orbit_radius + strand_half_width` still
-    // reaches exactly `half_w`, so the bundle still fills the thickness
-    // the slider promises; the groove look between plies that real yarn
-    // has still comes through from each strand's own profile naturally
-    // falling off toward its edge, not from an artificial shortfall.
+    // sized so neighboring strands' circles just touch (a small deliberate
+    // gap, not an overlap — a "tiny gap is ok" per the owner) rather than
+    // each strand being nearly as wide as the whole orbit, which is what
+    // read as a moire lattice in the first version of this. For N strands
+    // evenly spaced around radius R, they touch when strand_radius ==
+    // R * sin(PI / N); `orbit_radius + strand_half_width` reaching exactly
+    // `half_w` keeps the whole bundle filling the thickness the slider
+    // promises.
     let n = f32(ply_count);
-    let worst_case_offset_angle = PI / n;
-    let overlap = 1.18;
-    let orbit_radius = half_w / (1.0 + overlap * sin(worst_case_offset_angle));
-    let strand_half_width = orbit_radius * overlap * sin(worst_case_offset_angle);
+    let touching_angle = PI / n;
+    let orbit_radius = half_w / (1.0 + sin(touching_angle));
+    let strand_half_width = orbit_radius * sin(touching_angle);
 
     // Each strand orbits the bundle's center as `uv.x` advances — an
     // integer number of full turns (`twist_cycles`) across this texture's
@@ -124,45 +109,63 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let angle_base = sign * f32(params.twist_cycles) * uv.x * 2.0 * PI;
 
-    // A real twisted yarn's strands genuinely pass in front of and behind
-    // one another as they spiral, not just side by side — combining them
-    // with a plain `max()` of brightness only captures the sideways
-    // (sin) motion and produces an interference lattice, not a braid.
-    // `cos` of each strand's own orbit angle is the matching depth
-    // component of that same sin/cos helix projection: the strand with
-    // greater depth (closer to the viewer) dominates, and every strand
-    // dims slightly the further back it sits.
+    // Two things combine the strands, and they're deliberately different
+    // operations:
     //
-    // Blended by relative depth (a softmax-style weighted average, not a
-    // hard winner-take-all pick) rather than letting the front strand cut
-    // off the back one outright: a hard switch put a visible crease right
-    // at the exact crossing point every time occlusion flipped from one
-    // strand to the other — the "overcut" groove a screenshot showed,
-    // looking like a carved notch rather than a soft valley. Away from a
-    // crossing, one strand's depth dominates so heavily (`exp` of the
-    // depth difference) the blend is indistinguishable from a hard pick —
-    // plies still read as genuinely crossing over and under each other,
-    // just without a seam at the handoff.
-    var weighted_sum = 0.0;
-    var weight_total = 0.0;
+    // Shape (does thread cover this pixel at all, and how much): a true
+    // hard max() of each strand's own "how far inside am I" distance draws
+    // a kink everywhere the dominant strand switches — a sine curve has a
+    // continuous slope, but max() of several sine curves does not, so the
+    // combined outline's slope jumps at every handoff. That's the ragged,
+    // over-curvy silhouette a screenshot showed, not just an edge-alpha
+    // issue — softening each strand's own edge alone (a prior attempt)
+    // couldn't fix it, since the kink is in the *position* of the boundary,
+    // not its sharpness. A smooth maximum (the standard SDF smooth-union:
+    // log(sum(exp(x / softness))) * softness, which reduces to the regular
+    // max as softness -> 0) keeps every contributing curve's own continuous
+    // slope instead of switching between them, so the silhouette — both
+    // each ply's own rounded top and the valley between two plies — comes
+    // out as one flowing curve. Unlike inflating the strands to force
+    // coverage (a prior attempt, which fused the plies into what read as
+    // one connected tube with no visible separation), this only rounds the
+    // *shape* of the valley — it can still reach all the way down to a true
+    // gap between plies, which is the point.
+    //
+    // Shading (how bright is the winning strand): blended by relative
+    // depth, `cos` of each strand's own orbit angle standing in for toward/
+    // away-from-viewer depth (the other half of the sin/cos helix
+    // projection `sin` already provides for position) — a soft pick
+    // instead of a hard one, so the front/back handoff doesn't itself
+    // create a second seam on top of the shape one above.
+    let softness = max(strand_half_width * 0.18, 0.0001);
+    var shape_sum_exp = 0.0;
+    var shade_weighted_sum = 0.0;
+    var shade_weight_total = 0.0;
     let occlusion_sharpness = 4.0;
     for (var k = 0u; k < ply_count; k = k + 1u) {
         let phase = 2.0 * PI * f32(k) / n;
         let angle = angle_base + phase;
         let center = orbit_radius * sin(angle);
         let depth = cos(angle);
-        let profile = strand_profile(local_y, center, strand_half_width, roundness);
-        if profile > 0.0005 {
-            let shade = mix(0.55, 1.0, depth * 0.5 + 0.5);
-            let weight = exp(depth * occlusion_sharpness);
-            weighted_sum = weighted_sum + weight * profile * shade;
-            weight_total = weight_total + weight;
-        }
+        let edge = strand_half_width - abs(local_y - center);
+
+        shape_sum_exp = shape_sum_exp + exp(edge / softness);
+
+        let shade = mix(0.55, 1.0, depth * 0.5 + 0.5);
+        let presence_weight = exp(edge / softness);
+        let depth_weight = exp(depth * occlusion_sharpness);
+        let weight = presence_weight * depth_weight;
+        shade_weighted_sum = shade_weighted_sum + weight * shade;
+        shade_weight_total = shade_weight_total + weight;
     }
-    var value = 0.0;
-    if weight_total > 0.0001 {
-        value = weighted_sum / weight_total;
-    }
+    let combined_edge = log(shape_sum_exp) * softness;
+    let shape = shape_from_edge(combined_edge, strand_half_width, roundness);
+    // `shape` is already ~0 wherever every strand's edge weight underflowed
+    // toward 0 together (e.g. near the texture's own top/bottom border) —
+    // this floor just keeps that division finite instead of 0/0 = NaN; it
+    // never visibly affects a pixel where any strand actually contributes.
+    let blended_shade = shade_weighted_sum / max(shade_weight_total, 1e-20);
+    let value = shape * blended_shade;
 
     textureStore(output, vec2<i32>(id.xy), vec4<f32>(value, value, value, 1.0));
 }
