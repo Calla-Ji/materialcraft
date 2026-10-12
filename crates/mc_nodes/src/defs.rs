@@ -874,9 +874,8 @@ static NODE_DEFS: &[NodeDef] = &[
                 name: "thread_width",
                 display_name: "Thread Width",
                 tooltip: "Stockinette: how much of each loop's own cell it fills. Every other \
-                          weave type: only used to render a fallback fiber shape when nothing's \
-                          wired into Fiber below \u{2014} connect a Thread node there instead for \
-                          full control over the actual thread shape.",
+                          weave type: the fallback fiber's width, shown only while nothing's \
+                          wired into Thread below.",
                 kind: ParamSpecKind::Float {
                     min: 0.1,
                     max: 1.0,
@@ -886,10 +885,9 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "thread_roundness",
                 display_name: "Thread Roundness",
-                tooltip: "Only used to render a fallback fiber shape when nothing's wired into \
-                          Fiber below (0 a flat ribbon, 1 round) \u{2014} connect a Thread node \
-                          there instead for full control. Has no effect on Stockinette, which \
-                          doesn't use a thread cross-section at all.",
+                tooltip: "The fallback fiber's roundness (0 a flat ribbon, 1 round), shown \
+                          only while nothing's wired into Thread below. Never shown for \
+                          Stockinette, which doesn't use a thread cross-section at all.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,

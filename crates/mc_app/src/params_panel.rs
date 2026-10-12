@@ -132,11 +132,41 @@ fn show_inner(
         }
     }
 
+    // Fabric Generator: "Thread Width"/"Thread Roundness" only ever affect
+    // the built-in fallback fiber this node renders when nothing's wired
+    // into Thread — once a Thread node *is* connected, dragging them did
+    // nothing, which read exactly like "the connection isn't working" (a
+    // real bug report — the sliders were right there, visibly draggable,
+    // producing zero visible change). Stockinette is the one exception:
+    // it never samples Thread at all (see fabric_generator.wgsl's own doc
+    // comment), so Thread Width keeps governing its loop width regardless
+    // of whether something's connected; Thread Roundness is never used by
+    // Stockinette either way.
+    let fabric_thread_connected =
+        node_kind == "fabric_generator" && graph.upstream(id, "fiber").is_some();
+    let fabric_weave_type = current_params
+        .get("weave_type")
+        .and_then(|v| match v {
+            mc_core::ParamValue::Enum(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .unwrap_or("Plain Weave");
+    let fabric_is_stockinette = fabric_weave_type == "Stockinette";
+    let hide_thread_width = fabric_thread_connected && !fabric_is_stockinette;
+    let hide_thread_roundness =
+        node_kind == "fabric_generator" && (fabric_thread_connected || fabric_is_stockinette);
+
     for param in def.params {
         if shape_connected && matches!(param.name, "rows" | "columns" | "gap" | "bevel") {
             continue;
         }
         if !shape_connected && param.name == "shape_size" {
+            continue;
+        }
+        if hide_thread_width && param.name == "thread_width" {
+            continue;
+        }
+        if hide_thread_roundness && param.name == "thread_roundness" {
             continue;
         }
         if !mc_nodes::defs::param_is_relevant(&node_kind, param.name, &current_params) {

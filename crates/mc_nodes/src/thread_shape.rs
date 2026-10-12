@@ -16,24 +16,34 @@ const NODE_KIND: &str = "thread_shape";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FiberType {
-    /// A round (or, at `roundness` 0, flat-ribbon) cross-section — the only
-    /// fiber type today; more can be added the same way Shape grew its own
-    /// kinds over time.
+    /// A round (or, at `roundness` 0, flat-ribbon) cross-section.
     Tube,
+    /// Three overlapping strand-sized Tubes side by side — the scalloped
+    /// silhouette a 3-strand twisted rope has end-on. Not a literal twist
+    /// running along the thread's length — see `rope_profile`'s own doc
+    /// comment in the shader for why this is the closest fit within
+    /// Thread's "one cross-section, constant along its length" shape.
+    Rope,
+    // More kinds that fit this same "one cross-section" shape can go here
+    // the way Shape grew its own kinds over time. Loop/knit-stitch shapes
+    // don't fit it at all (they're not a straight thread's cross-section),
+    // and are planned as their own, separate node instead.
 }
 
 impl FiberType {
-    pub const NAMES: [&'static str; 1] = ["Tube"];
+    pub const NAMES: [&'static str; 2] = ["Tube", "Rope"];
 
     fn as_u32(self) -> u32 {
         match self {
             FiberType::Tube => 0,
+            FiberType::Rope => 1,
         }
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "Tube" => Some(FiberType::Tube),
+            "Rope" => Some(FiberType::Rope),
             _ => None,
         }
     }
@@ -233,5 +243,56 @@ mod tests {
             );
         }
         assert!(FiberType::from_name("Nonsense").is_none());
+    }
+
+    #[test]
+    fn rope_looks_different_from_tube() {
+        let tube = render(&ThreadShapeParams {
+            fiber_type: FiberType::Tube,
+            ..ThreadShapeParams::default()
+        });
+        let rope = render(&ThreadShapeParams {
+            fiber_type: FiberType::Rope,
+            ..ThreadShapeParams::default()
+        });
+        assert_ne!(tube, rope);
+    }
+
+    #[test]
+    fn rope_is_constant_across_the_horizontal_axis() {
+        // Same requirement as Tube — Fabric Generator samples at a single
+        // fixed x regardless of fiber type.
+        let pixels = render(&ThreadShapeParams {
+            fiber_type: FiberType::Rope,
+            ..ThreadShapeParams::default()
+        });
+        let r = RESOLUTION as usize;
+        let row = r / 2;
+        let left = pixels[(row * r) * 4];
+        let right = pixels[(row * r + r - 1) * 4];
+        assert_eq!(left, right);
+    }
+
+    /// A rope's 3 strands should show up as 3 separate bright bands with a
+    /// visible dip between them near the fiber's center, not one smooth
+    /// bump the way Tube reads.
+    #[test]
+    fn rope_has_a_dip_between_strands() {
+        let pixels = render(&ThreadShapeParams {
+            fiber_type: FiberType::Rope,
+            thickness: 1.0,
+            roundness: 1.0,
+            ..ThreadShapeParams::default()
+        });
+        let r = RESOLUTION as usize;
+        let col = r / 2;
+        let center = pixels[(r / 2 * r + col) * 4] as i32;
+        let between_strands = pixels[((r / 2 + r / 8) * r + col) * 4] as i32;
+        let strand_peak = pixels[((r / 2 + r / 4) * r + col) * 4] as i32;
+        assert!(
+            between_strands < center.min(strand_peak),
+            "expected a dip between strands (center={center}, between={between_strands}, \
+             strand_peak={strand_peak})"
+        );
     }
 }
