@@ -5,6 +5,7 @@
 //! scattered set of points, good for rock, stone, and cracked patterns."
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "voronoi";
 
@@ -44,6 +45,7 @@ pub struct VoronoiParams {
     pub jitter: f32,
     pub seed: u32,
     pub mode: VoronoiMode,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for VoronoiParams {
@@ -53,6 +55,7 @@ impl Default for VoronoiParams {
             jitter: 1.0,
             seed: 0,
             mode: VoronoiMode::F1,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -81,6 +84,13 @@ impl VoronoiParams {
                     _ => None,
                 })
                 .unwrap_or(defaults.mode),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -152,13 +162,17 @@ fn pack_params(resolution: u32, params: &VoronoiParams) -> [u8; 32] {
     bytes[8..12].copy_from_slice(&params.mode.as_u32().to_le_bytes());
     bytes[12..16].copy_from_slice(&params.seed.to_le_bytes());
     bytes[16..20].copy_from_slice(&params.jitter.to_le_bytes());
+    bytes[20..24].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     bytes
 }
 
 #[cfg(test)]
 mod tests {
     use super::{dispatch, VoronoiMode, VoronoiParams};
-    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::test_support::{
+        assert_tiles_seamlessly, tiles_seamlessly as check_tiles_seamlessly, RESOLUTION,
+    };
+    use crate::tiling::TilingMode;
 
     fn render(params: &VoronoiParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -224,5 +238,30 @@ mod tests {
             );
         }
         assert!(VoronoiMode::from_name("Nonsense").is_none());
+    }
+
+    #[test]
+    fn tiling_off_is_no_longer_seamless() {
+        let params = VoronoiParams {
+            tiling_mode: TilingMode::Off,
+            ..VoronoiParams::default()
+        };
+        assert!(
+            check_tiles_seamlessly(&render(&params), RESOLUTION).is_err(),
+            "disabling tiling should break the forced seamless cell wrap"
+        );
+    }
+
+    #[test]
+    fn horizontal_only_still_wraps_vertically_but_not_horizontally() {
+        let both = render(&VoronoiParams::default());
+        let horizontal_only = render(&VoronoiParams {
+            tiling_mode: TilingMode::HorizontalOnly,
+            ..VoronoiParams::default()
+        });
+        assert_ne!(
+            both, horizontal_only,
+            "turning off the vertical axis alone should change the output"
+        );
     }
 }

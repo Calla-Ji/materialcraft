@@ -18,7 +18,7 @@ struct VoronoiParams {
     mode: u32,
     seed: u32,
     jitter: f32,
-    _pad0: f32,
+    tiling_mode: u32,
     _pad1: f32,
     _pad2: f32,
 }
@@ -32,7 +32,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let uv = (vec2<f32>(id.xy) + 0.5) / f32(params.resolution);
-    let fs = voronoi_f1f2(uv, i32(params.scale), params.jitter, params.seed);
+    let fs = voronoi_f1f2(
+        uv,
+        i32(params.scale),
+        params.jitter,
+        params.seed,
+        wraps_x(params.tiling_mode),
+        wraps_y(params.tiling_mode),
+    );
 
     var value = fs.x;
     switch params.mode {

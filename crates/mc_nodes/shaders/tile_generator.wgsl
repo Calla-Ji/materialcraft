@@ -22,6 +22,13 @@
 //                        physically-fitted brick edge)
 //   luminance_jitter   — per-tile random brightness variation, 0..1
 //   seed               — changes the per-tile randomness
+//   tiling_mode        — only its horizontal bit matters here: it controls
+//                        whether a staggered row's column index wraps back
+//                        around for its per-tile hash, or just keeps
+//                        counting past the edge (breaking the seam there).
+//                        There's no vertical wraparound to toggle (row index
+//                        never leaves its valid range), so the vertical bit
+//                        is unused.
 
 struct TileGeneratorParams {
     resolution: u32,
@@ -34,7 +41,7 @@ struct TileGeneratorParams {
     size_jitter: f32,
     rotation_jitter: f32,
     luminance_jitter: f32,
-    _pad0: f32,
+    tiling_mode: u32,
     _pad1: f32,
 }
 
@@ -59,8 +66,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let local_y = fract(uv.y * f32(params.rows)) - 0.5;
 
     let columns_i = i32(params.columns);
-    let wrapped_col = wrap_coord(i32(col), columns_i);
-    let cell = vec2<i32>(wrapped_col, i32(row));
+    var col_i = i32(col);
+    if wraps_x(params.tiling_mode) {
+        col_i = wrap_coord(col_i, columns_i);
+    }
+    let cell = vec2<i32>(col_i, i32(row));
 
     let h = hash2(cell, params.seed);
     let h2 = hash2(cell, params.seed + 101u);

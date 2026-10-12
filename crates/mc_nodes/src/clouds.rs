@@ -11,6 +11,7 @@
 //! so it gets its own shader rather than forwarding into Fractal Sum's.
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "clouds";
 
@@ -20,6 +21,7 @@ pub struct CloudsParams {
     /// persistence (see `persistence`), not exposed directly.
     pub softness: f32,
     pub seed: u32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for CloudsParams {
@@ -28,6 +30,7 @@ impl Default for CloudsParams {
             scale: 4,
             softness: 0.5,
             seed: 0,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -49,6 +52,13 @@ impl CloudsParams {
                 .get("seed")
                 .and_then(mc_core::ParamValue::as_seed)
                 .unwrap_or(defaults.seed),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 
@@ -67,11 +77,12 @@ pub fn dispatch(
     let shader_source = full_source("clouds.wgsl");
     let pipeline = gpu.compute_pipeline(NODE_KIND, &shader_source, "main");
 
-    let mut param_bytes = [0u8; 16];
+    let mut param_bytes = [0u8; 32];
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     param_bytes[4..8].copy_from_slice(&params.scale.to_le_bytes());
     param_bytes[8..12].copy_from_slice(&params.seed.to_le_bytes());
     param_bytes[12..16].copy_from_slice(&params.persistence().to_le_bytes());
+    param_bytes[16..20].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("clouds_params"),
         size: param_bytes.len() as u64,
@@ -124,7 +135,10 @@ pub fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::{dispatch, CloudsParams};
-    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::test_support::{
+        assert_tiles_seamlessly, tiles_seamlessly as check_tiles_seamlessly, RESOLUTION,
+    };
+    use crate::tiling::TilingMode;
 
     fn render(params: &CloudsParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -172,5 +186,17 @@ mod tests {
             ..CloudsParams::default()
         });
         assert_ne!(a, b, "different softness produced identical pixels");
+    }
+
+    #[test]
+    fn tiling_off_is_no_longer_seamless() {
+        let params = CloudsParams {
+            tiling_mode: TilingMode::Off,
+            ..CloudsParams::default()
+        };
+        assert!(
+            check_tiles_seamlessly(&render(&params), RESOLUTION).is_err(),
+            "disabling tiling should break the forced seamless lattice wrap"
+        );
     }
 }

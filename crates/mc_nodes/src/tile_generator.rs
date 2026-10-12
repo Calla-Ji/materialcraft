@@ -8,6 +8,7 @@
 //! be even — see the shader's doc comment.
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "tile_generator";
 
@@ -24,6 +25,7 @@ pub struct TileGeneratorParams {
     pub size_jitter: f32,
     pub rotation_jitter: f32,
     pub luminance_jitter: f32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for TileGeneratorParams {
@@ -38,6 +40,7 @@ impl Default for TileGeneratorParams {
             size_jitter: 0.08,
             rotation_jitter: 0.0,
             luminance_jitter: 0.15,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -72,6 +75,13 @@ impl TileGeneratorParams {
             size_jitter: float("size_jitter", defaults.size_jitter),
             rotation_jitter: float("rotation_jitter", defaults.rotation_jitter),
             luminance_jitter: float("luminance_jitter", defaults.luminance_jitter),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -148,6 +158,7 @@ fn pack_params(resolution: u32, params: &TileGeneratorParams) -> [u8; 48] {
     bytes[28..32].copy_from_slice(&params.size_jitter.to_le_bytes());
     bytes[32..36].copy_from_slice(&params.rotation_jitter.to_le_bytes());
     bytes[36..40].copy_from_slice(&params.luminance_jitter.to_le_bytes());
+    bytes[40..44].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     bytes
 }
 
@@ -155,6 +166,7 @@ fn pack_params(resolution: u32, params: &TileGeneratorParams) -> [u8; 48] {
 mod tests {
     use super::{dispatch, TileGeneratorParams};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::tiling::TilingMode;
 
     fn render(params: &TileGeneratorParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -204,5 +216,25 @@ mod tests {
             ..TileGeneratorParams::default()
         });
         assert_ne!(a, b, "different seeds produced identical pixels");
+    }
+
+    /// Default params already stagger (offset=0.5), which is exactly the
+    /// case that pushes a row's column index past `columns - 1` and needs
+    /// wrapping for its per-tile hash — so disabling horizontal tiling here
+    /// should change that tile's randomized size/rotation/luminance.
+    #[test]
+    fn tiling_off_changes_the_staggered_edge_tile() {
+        let wrapped = render(&TileGeneratorParams {
+            tiling_mode: TilingMode::Both,
+            ..TileGeneratorParams::default()
+        });
+        let clamped = render(&TileGeneratorParams {
+            tiling_mode: TilingMode::Off,
+            ..TileGeneratorParams::default()
+        });
+        assert_ne!(
+            wrapped, clamped,
+            "disabling tiling should change the staggered row's wrapped-edge tile"
+        );
     }
 }

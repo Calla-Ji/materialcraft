@@ -5,6 +5,7 @@
 //! summed (fBm) — more control than Perlin Noise's built-in octaves."
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "fractal_sum";
 
@@ -40,6 +41,7 @@ pub struct FractalSumParams {
     pub lacunarity: f32,
     pub gain: f32,
     pub seed: u32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for FractalSumParams {
@@ -51,6 +53,7 @@ impl Default for FractalSumParams {
             lacunarity: 2.0,
             gain: 0.5,
             seed: 0,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -88,6 +91,13 @@ impl FractalSumParams {
                 .get("seed")
                 .and_then(mc_core::ParamValue::as_seed)
                 .unwrap_or(defaults.seed),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -161,13 +171,17 @@ fn pack_params(resolution: u32, params: &FractalSumParams) -> [u8; 32] {
     bytes[16..20].copy_from_slice(&params.lacunarity.to_le_bytes());
     bytes[20..24].copy_from_slice(&params.gain.to_le_bytes());
     bytes[24..28].copy_from_slice(&params.seed.to_le_bytes());
+    bytes[28..32].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     bytes
 }
 
 #[cfg(test)]
 mod tests {
     use super::{dispatch, FractalBase, FractalSumParams};
-    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::test_support::{
+        assert_tiles_seamlessly, tiles_seamlessly as check_tiles_seamlessly, RESOLUTION,
+    };
+    use crate::tiling::TilingMode;
 
     fn render(params: &FractalSumParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -228,5 +242,31 @@ mod tests {
                 "{name:?} should parse"
             );
         }
+    }
+
+    #[test]
+    fn tiling_off_is_no_longer_seamless_with_perlin_base() {
+        let params = FractalSumParams {
+            base: FractalBase::Perlin,
+            tiling_mode: TilingMode::Off,
+            ..FractalSumParams::default()
+        };
+        assert!(
+            check_tiles_seamlessly(&render(&params), RESOLUTION).is_err(),
+            "disabling tiling should break the forced seamless lattice wrap"
+        );
+    }
+
+    #[test]
+    fn tiling_off_is_no_longer_seamless_with_voronoi_base() {
+        let params = FractalSumParams {
+            base: FractalBase::Voronoi,
+            tiling_mode: TilingMode::Off,
+            ..FractalSumParams::default()
+        };
+        assert!(
+            check_tiles_seamlessly(&render(&params), RESOLUTION).is_err(),
+            "disabling tiling should break the forced seamless cell wrap"
+        );
     }
 }
