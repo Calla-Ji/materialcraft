@@ -86,6 +86,24 @@ fn assert_matches_golden(pixels: &[u8], resolution: u32, golden_path: &str) {
         .map(|(a, b)| a.abs_diff(*b))
         .max()
         .unwrap_or(0);
+    if max_diff > TOLERANCE {
+        // One-time diagnostic dump (not committed, not read by anything else)
+        // so a cross-platform CI failure's actual render can be pulled down
+        // and looked at, instead of guessing at a tolerance bump blind.
+        if let Some(dir) = std::env::var_os("MC_GOLDEN_FAILURE_DIR") {
+            let dir = Path::new(&dir);
+            let _ = std::fs::create_dir_all(dir);
+            let name = Path::new(golden_path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "unknown.png".to_string());
+            if let Some(actual) =
+                image::RgbaImage::from_raw(resolution, resolution, pixels.to_vec())
+            {
+                let _ = actual.save(dir.join(format!("actual_{name}")));
+            }
+        }
+    }
     assert!(
         max_diff <= TOLERANCE,
         "{golden_path}: rendered output differs from the golden image by up to {max_diff} \

@@ -41,6 +41,20 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+        env:
+          MC_GOLDEN_FAILURE_DIR: ${{ runner.temp }}/golden-failures
+
+      # Only runs if a golden-image test actually failed above — lets a
+      # cross-platform mismatch be downloaded and looked at directly,
+      # instead of guessing at a tolerance number blind.
+      - name: Upload golden-image failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-failures-${{ matrix.os }}
+          path: ${{ runner.temp }}/golden-failures
+          if-no-files-found: ignore
+          retention-days: 7
 
   build:
     strategy:
