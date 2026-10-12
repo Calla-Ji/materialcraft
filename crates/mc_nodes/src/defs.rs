@@ -772,6 +772,18 @@ static NODE_DEFS: &[NodeDef] = &[
                 },
             },
             ParamSpec {
+                name: "shape_size",
+                display_name: "Shape Size",
+                tooltip: "How much of each cell a connected Shape fills \u{2014} 1 is its own \
+                          native size, less shrinks it with empty padding around it, more \
+                          enlarges it. Only shown once something's wired into Shape below.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 3.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
                 name: "size_jitter",
                 display_name: "Size Jitter",
                 tooltip: "Per-tile random shrink.",
@@ -950,7 +962,7 @@ static NODE_DEFS: &[NodeDef] = &[
         kind: "thread_shape",
         display_name: "Thread",
         category: "Generators/Patterns",
-        tooltip: "A single fiber cross-section \u{2014} wire into Fabric Generator's Fiber \
+        tooltip: "A single fiber cross-section \u{2014} wire into Fabric Generator's Thread \
                   input to control what its threads look like.",
         inputs: &[],
         outputs: &[PortSpec {
@@ -975,7 +987,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
-                    default: 0.85,
+                    default: 0.5,
                 },
             },
             ParamSpec {
@@ -985,7 +997,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
-                    default: 0.6,
+                    default: 0.3,
                 },
             },
         ],

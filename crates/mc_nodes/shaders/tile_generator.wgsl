@@ -38,6 +38,11 @@
 //                        There's no vertical wraparound to toggle (row index
 //                        never leaves its valid range), so the vertical bit
 //                        is unused.
+//   shape_size         — only used when `shape_tex` is connected: how much
+//                        of each cell the stamped shape fills (1 = its own
+//                        native size, less shrinks it with empty padding
+//                        around it, more enlarges/crops it). Built-in shape
+//                        uses `gap` for this instead.
 
 struct TileGeneratorParams {
     resolution: u32,
@@ -52,6 +57,10 @@ struct TileGeneratorParams {
     luminance_jitter: f32,
     tiling_mode: u32,
     has_shape: u32,
+    shape_size: f32,
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: TileGeneratorParams;
@@ -100,8 +109,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var value = 0.0;
     if params.has_shape != 0u {
         let size = i32(params.resolution);
+        let effective_scale = max(size_scale * max(params.shape_size, 0.0001), 0.0001);
         let sample_pos = clamp(
-            rotated / max(size_scale, 0.0001) + vec2<f32>(0.5, 0.5),
+            rotated / effective_scale + vec2<f32>(0.5, 0.5),
             vec2<f32>(0.0, 0.0),
             vec2<f32>(1.0, 1.0),
         );

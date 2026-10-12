@@ -49,8 +49,16 @@ impl Default for ThreadShapeParams {
     fn default() -> Self {
         Self {
             fiber_type: FiberType::Tube,
-            thickness: 0.85,
-            roundness: 0.6,
+            // Deliberately *not* the same as Fabric Generator's own fallback
+            // defaults (0.85/0.6) — a freshly-connected Thread at its
+            // defaults used to look pixel-identical to not connecting one at
+            // all, which read as "the connection isn't doing anything" even
+            // though it genuinely was (confirmed via a diagnostic test).
+            // Thinner and flatter here makes the very first connection
+            // visibly different without the artist needing to tweak a
+            // slider first just to confirm the wiring works.
+            thickness: 0.5,
+            roundness: 0.3,
         }
     }
 }

@@ -76,11 +76,14 @@ fn show_inner(
         if !mc_nodes::defs::input_is_optional(&node_kind, port.name) {
             continue;
         }
+        // Plain ASCII, not a Unicode check mark/circle glyph — the proportional
+        // font (Geist) doesn't cover those, which rendered as a tofu box
+        // instead of a status symbol.
         let status = if graph.upstream(id, port.name).is_some() {
-            format!("\u{2713} {}: connected", port.display_name)
+            format!("[x] {}: connected", port.display_name)
         } else {
             format!(
-                "\u{25cb} {}: not connected \u{2014} using the built-in default below",
+                "[ ] {}: not connected \u{2014} using the built-in default below",
                 port.display_name
             )
         };
@@ -93,10 +96,14 @@ fn show_inner(
     // independent ones below — a custom shape stamped into an uneven grid
     // would read as visibly stretched, unlike the built-in brick/grid shape
     // (which *wants* independent Rows/Columns, e.g. the classic 6x4 brick
-    // layout). Only this one node/case; not a generic ParamSpecKind, since
-    // nothing else in the app needs two params kept in lockstep like this.
-    let linked_tile_count = node_kind == "tile_generator" && graph.upstream(id, "shape").is_some();
-    if linked_tile_count {
+    // layout). Gap/Edge Darkening only ever affected the built-in shape, so
+    // they're hidden too once Shape is connected, replaced by Shape Size
+    // (which conversely has no effect on the built-in shape, so it's hidden
+    // the rest of the time). Only this one node/case; not a generic
+    // ParamSpecKind or `param_is_relevant` rule, since both of those work
+    // off param *values*, not port connection state.
+    let shape_connected = node_kind == "tile_generator" && graph.upstream(id, "shape").is_some();
+    if shape_connected {
         let rows = current_params
             .get("rows")
             .and_then(mc_core::ParamValue::as_int)
@@ -126,7 +133,10 @@ fn show_inner(
     }
 
     for param in def.params {
-        if linked_tile_count && (param.name == "rows" || param.name == "columns") {
+        if shape_connected && matches!(param.name, "rows" | "columns" | "gap" | "bevel") {
+            continue;
+        }
+        if !shape_connected && param.name == "shape_size" {
             continue;
         }
         if !mc_nodes::defs::param_is_relevant(&node_kind, param.name, &current_params) {

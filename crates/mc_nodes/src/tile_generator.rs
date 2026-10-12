@@ -26,6 +26,8 @@ pub struct TileGeneratorParams {
     pub rotation_jitter: f32,
     pub luminance_jitter: f32,
     pub tiling_mode: TilingMode,
+    /// Only used when a Shape is connected — see the shader's doc comment.
+    pub shape_size: f32,
 }
 
 impl Default for TileGeneratorParams {
@@ -41,6 +43,7 @@ impl Default for TileGeneratorParams {
             rotation_jitter: 0.0,
             luminance_jitter: 0.15,
             tiling_mode: TilingMode::default(),
+            shape_size: 1.0,
         }
     }
 }
@@ -82,6 +85,7 @@ impl TileGeneratorParams {
                     _ => None,
                 })
                 .unwrap_or(defaults.tiling_mode),
+            shape_size: float("shape_size", defaults.shape_size),
         }
     }
 }
@@ -166,8 +170,8 @@ pub fn dispatch(
     gpu.queue.submit(Some(encoder.finish()));
 }
 
-fn pack_params(resolution: u32, params: &TileGeneratorParams, has_shape: bool) -> [u8; 48] {
-    let mut bytes = [0u8; 48];
+fn pack_params(resolution: u32, params: &TileGeneratorParams, has_shape: bool) -> [u8; 64] {
+    let mut bytes = [0u8; 64];
     bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     bytes[4..8].copy_from_slice(&params.rows.to_le_bytes());
     bytes[8..12].copy_from_slice(&params.columns.to_le_bytes());
@@ -180,6 +184,7 @@ fn pack_params(resolution: u32, params: &TileGeneratorParams, has_shape: bool) -
     bytes[36..40].copy_from_slice(&params.luminance_jitter.to_le_bytes());
     bytes[40..44].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     bytes[44..48].copy_from_slice(&(has_shape as u32).to_le_bytes());
+    bytes[48..52].copy_from_slice(&params.shape_size.to_le_bytes());
     bytes
 }
 
@@ -291,6 +296,49 @@ mod tests {
         assert_ne!(
             built_in, with_shape,
             "wiring in a custom shape should change Pattern Generator's output"
+        );
+    }
+
+    #[test]
+    fn shape_size_changes_how_much_of_the_cell_a_connected_shape_fills() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+
+        crate::shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "disc",
+            RESOLUTION,
+            &crate::shape::ShapeParams::default(),
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("disc"),
+            "small",
+            RESOLUTION,
+            &TileGeneratorParams {
+                shape_size: 0.3,
+                ..TileGeneratorParams::default()
+            },
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("disc"),
+            "large",
+            RESOLUTION,
+            &TileGeneratorParams {
+                shape_size: 2.0,
+                ..TileGeneratorParams::default()
+            },
+        );
+        let small = gpu.read_rgba8(pool.texture("small").unwrap(), RESOLUTION);
+        let large = gpu.read_rgba8(pool.texture("large").unwrap(), RESOLUTION);
+
+        assert_ne!(
+            small, large,
+            "different shape_size values should produce different output"
         );
     }
 }
