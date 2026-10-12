@@ -5,6 +5,7 @@
 //! own offset, for chromatic-aberration/glitch looks."
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "channel_split";
 
@@ -13,6 +14,7 @@ pub struct ChannelSplitParams {
     pub offset_g: [f32; 2],
     pub offset_b: [f32; 2],
     pub strength: f32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for ChannelSplitParams {
@@ -22,6 +24,7 @@ impl Default for ChannelSplitParams {
             offset_g: [0.0, 0.0],
             offset_b: [-0.01, 0.0],
             strength: 1.0,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -46,12 +49,19 @@ impl ChannelSplitParams {
                 .get("strength")
                 .and_then(mc_core::ParamValue::as_float)
                 .unwrap_or(defaults.strength),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
 
-fn pack_params(resolution: u32, params: &ChannelSplitParams) -> [u8; 32] {
-    let mut bytes = [0u8; 32];
+fn pack_params(resolution: u32, params: &ChannelSplitParams) -> [u8; 48] {
+    let mut bytes = [0u8; 48];
     bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     bytes[4..8].copy_from_slice(&params.strength.to_le_bytes());
     bytes[8..12].copy_from_slice(&params.offset_r[0].to_le_bytes());
@@ -60,6 +70,7 @@ fn pack_params(resolution: u32, params: &ChannelSplitParams) -> [u8; 32] {
     bytes[20..24].copy_from_slice(&params.offset_g[1].to_le_bytes());
     bytes[24..28].copy_from_slice(&params.offset_b[0].to_le_bytes());
     bytes[28..32].copy_from_slice(&params.offset_b[1].to_le_bytes());
+    bytes[32..36].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     bytes
 }
 
@@ -155,6 +166,7 @@ pub fn dispatch(
 mod tests {
     use super::{dispatch, ChannelSplitParams};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::tiling::TilingMode;
 
     fn render_from_noise(params: &ChannelSplitParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -194,6 +206,7 @@ mod tests {
             offset_g: [0.0, 0.0],
             offset_b: [0.0, 0.0],
             strength: 1.0,
+            tiling_mode: TilingMode::Both,
         };
         let split = render_from_noise(&params);
 
@@ -246,8 +259,77 @@ mod tests {
             offset_g: [0.0, 0.0],
             offset_b: [0.0, 0.0],
             strength: 1.0,
+            tiling_mode: TilingMode::Both,
         });
         let split = render_from_noise(&ChannelSplitParams::default());
         assert_ne!(unsplit, split);
+    }
+
+    #[test]
+    fn tiling_off_changes_an_offset_that_would_have_wrapped() {
+        // A big enough R-channel offset to pull from well outside [0, size)
+        // near the edges, against a hard left/right discontinuity so a
+        // wrapped vs clamped sample reads clearly different content.
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let r = RESOLUTION;
+        let mut pixels = vec![0u8; (r * r * 4) as usize];
+        for y in 0..r {
+            for x in 0..r {
+                let v = if x < r / 2 { 255 } else { 0 };
+                let i = ((y * r + x) * 4) as usize;
+                pixels[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        pool.get_or_create(&gpu.device, "image", r, wgpu::TextureFormat::Rgba8Unorm);
+        let texture = pool.texture("image").expect("just created above");
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(r * 4),
+                rows_per_image: Some(r),
+            },
+            wgpu::Extent3d {
+                width: r,
+                height: r,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let base = ChannelSplitParams {
+            offset_r: [0.4, 0.0],
+            offset_g: [0.0, 0.0],
+            offset_b: [0.0, 0.0],
+            strength: 1.0,
+            tiling_mode: TilingMode::Both,
+        };
+        dispatch(
+            &mut gpu, &mut pool, "image", None, "wrapped", RESOLUTION, &base,
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "image",
+            None,
+            "clamped",
+            RESOLUTION,
+            &ChannelSplitParams {
+                tiling_mode: TilingMode::Off,
+                ..base
+            },
+        );
+        let wrapped = gpu.read_rgba8(pool.texture("wrapped").unwrap(), RESOLUTION);
+        let clamped = gpu.read_rgba8(pool.texture("clamped").unwrap(), RESOLUTION);
+        assert_ne!(
+            wrapped, clamped,
+            "disabling tiling should change the result of an offset that would have wrapped"
+        );
     }
 }

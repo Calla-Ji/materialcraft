@@ -1961,6 +1961,7 @@ static NODE_DEFS: &[NodeDef] = &[
                     default: 1.0,
                 },
             },
+            tiling_mode_param(),
         ],
     },
     NodeDef {

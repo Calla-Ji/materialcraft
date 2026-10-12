@@ -17,6 +17,10 @@ struct ChannelSplitParams {
     offset_r: vec2<f32>,
     offset_g: vec2<f32>,
     offset_b: vec2<f32>,
+    tiling_mode: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: ChannelSplitParams;
@@ -27,8 +31,8 @@ struct ChannelSplitParams {
 fn sample_channel(coords: vec2<i32>, offset_uv: vec2<f32>, size: i32, channel: u32) -> f32 {
     let offset_px = vec2<i32>(round(offset_uv * f32(size)));
     let sample_coord = vec2<i32>(
-        wrap_coord(coords.x + offset_px.x, size),
-        wrap_coord(coords.y + offset_px.y, size),
+        tile_coord(coords.x + offset_px.x, size, wraps_x(params.tiling_mode)),
+        tile_coord(coords.y + offset_px.y, size, wraps_y(params.tiling_mode)),
     );
     let texel = textureLoad(image_tex, sample_coord, 0);
     switch channel {
