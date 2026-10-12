@@ -66,6 +66,26 @@ fn show_inner(
 
     ui.heading(def.display_name);
     ui.weak(def.tooltip);
+
+    // A connected-vs-fallback status line for inputs where that's genuinely
+    // ambiguous from the rendered result alone (e.g. a connected Fiber using
+    // default params that happen to match the built-in fallback's own
+    // defaults looks identical either way) — see
+    // `mc_nodes::defs::input_is_optional`'s doc comment.
+    for port in def.inputs {
+        if !mc_nodes::defs::input_is_optional(&node_kind, port.name) {
+            continue;
+        }
+        let status = if graph.upstream(id, port.name).is_some() {
+            format!("\u{2713} {}: connected", port.display_name)
+        } else {
+            format!(
+                "\u{25cb} {}: not connected \u{2014} using the built-in default below",
+                port.display_name
+            )
+        };
+        ui.weak(status);
+    }
     ui.separator();
 
     for param in def.params {

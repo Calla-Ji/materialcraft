@@ -21,6 +21,10 @@ use base64::Engine;
 #[derive(Default)]
 pub struct ImageImportParams {
     pub image: mc_core::ImageRef,
+    /// Also drives this node's *effective output type* (Gray instead of
+    /// Color) in `mc_nodes::defs::effective_output_type` — keep any change
+    /// to the meaning of this field in sync with that.
+    pub grayscale: bool,
 }
 
 impl ImageImportParams {
@@ -31,6 +35,10 @@ impl ImageImportParams {
                 .and_then(mc_core::ParamValue::as_image)
                 .cloned()
                 .unwrap_or_default(),
+            grayscale: params
+                .get("grayscale")
+                .and_then(mc_core::ParamValue::as_bool)
+                .unwrap_or(false),
         }
     }
 }
@@ -64,12 +72,17 @@ fn source_bytes(image_ref: &mc_core::ImageRef) -> Option<Vec<u8>> {
     None
 }
 
+/// Rec. 709 luminance weights — same ones `grayscale_conversion.wgsl` and
+/// `viewport3d.wgsl` already use, so a grayscale-converted import reads the
+/// same as the dedicated Grayscale Conversion node would produce.
+const LUMINANCE_WEIGHTS: [f32; 3] = [0.2126, 0.7152, 0.0722];
+
 /// Decodes and resizes the loaded image to `resolution x resolution` RGBA8,
 /// already sRGB-to-linear converted — or a flat neutral gray (mid-gray,
 /// opaque) if nothing's loaded yet or it failed to decode, the same
 /// "sensible default" convention every other node's optional input falls
 /// back to (CLAUDE.md §5).
-fn load_pixels(image_ref: &mc_core::ImageRef, resolution: u32) -> Vec<u8> {
+fn load_pixels(image_ref: &mc_core::ImageRef, resolution: u32, grayscale: bool) -> Vec<u8> {
     let decoded = source_bytes(image_ref).and_then(|bytes| {
         ::image::load_from_memory(&bytes)
             .inspect_err(|err| log::warn!("image_import: couldn't decode image data: {err}"))
@@ -90,6 +103,15 @@ fn load_pixels(image_ref: &mc_core::ImageRef, resolution: u32) -> Vec<u8> {
                 pixel[0] = srgb_to_linear_u8(pixel[0]);
                 pixel[1] = srgb_to_linear_u8(pixel[1]);
                 pixel[2] = srgb_to_linear_u8(pixel[2]);
+                if grayscale {
+                    let luminance = (pixel[0] as f32 * LUMINANCE_WEIGHTS[0]
+                        + pixel[1] as f32 * LUMINANCE_WEIGHTS[1]
+                        + pixel[2] as f32 * LUMINANCE_WEIGHTS[2])
+                        .round() as u8;
+                    pixel[0] = luminance;
+                    pixel[1] = luminance;
+                    pixel[2] = luminance;
+                }
             }
             pixels
         }
@@ -104,7 +126,7 @@ pub fn dispatch(
     resolution: u32,
     params: &ImageImportParams,
 ) {
-    let pixels = load_pixels(&params.image, resolution);
+    let pixels = load_pixels(&params.image, resolution, params.grayscale);
 
     pool.get_or_create(
         &gpu.device,
@@ -187,6 +209,7 @@ mod tests {
                 path: Some("sample.png".to_string()),
                 embedded_base64: Some(encoded),
             },
+            grayscale: false,
         };
         let pixels = render(&params);
         let r = RESOLUTION as usize;
@@ -207,6 +230,7 @@ mod tests {
                 path: Some("/nonexistent/path/that/should/not/exist.png".to_string()),
                 embedded_base64: None,
             },
+            grayscale: false,
         };
         let pixels = render(&params);
         assert!(pixels.chunks_exact(4).all(|p| p == [128, 128, 128, 255]));
@@ -223,11 +247,38 @@ mod tests {
                 path: Some("/nonexistent/path.png".to_string()),
                 embedded_base64: Some(encoded),
             },
+            grayscale: false,
         };
         let pixels = render(&params);
         assert!(
             !pixels.chunks_exact(4).all(|p| p == [128, 128, 128, 255]),
             "embedded data should be used even though the path is bogus"
+        );
+    }
+
+    #[test]
+    fn grayscale_toggle_makes_every_pixel_a_neutral_rgb() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(sample_png_bytes());
+        let params = ImageImportParams {
+            image: mc_core::ImageRef {
+                path: Some("sample.png".to_string()),
+                embedded_base64: Some(encoded),
+            },
+            grayscale: true,
+        };
+        let pixels = render(&params);
+        assert!(
+            pixels.chunks_exact(4).all(|p| p[0] == p[1] && p[1] == p[2]),
+            "grayscale output should have R == G == B on every pixel"
+        );
+        // The red and blue halves of the source image should no longer read
+        // as pure red/blue — proof this is a real luminance conversion, not
+        // just relabeling the port type.
+        let r = RESOLUTION as usize;
+        let left = &pixels[(r / 2 * r + r / 4) * 4..][..4];
+        assert!(
+            left[0] < 200,
+            "the red half should no longer read near-255 after grayscale conversion"
         );
     }
 }

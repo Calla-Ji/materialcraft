@@ -237,6 +237,17 @@ fn effective_output_type_bounded(
     let Some(depth) = depth.checked_sub(1) else {
         return declared;
     };
+    if node_kind == "image_import" {
+        // Depends on its own "Convert to Grayscale" param, not an upstream
+        // connection (it has no inputs at all) — unlike every other case
+        // here, which all follow what's wired in.
+        let grayscale = graph
+            .node(node_id)
+            .and_then(|n| n.params.get("grayscale"))
+            .and_then(mc_core::ParamValue::as_bool)
+            .unwrap_or(false);
+        return if grayscale { PortType::Gray } else { declared };
+    }
     if node_kind == "blend" {
         // Color wins over Gray: blending in *any* real color content can
         // produce non-gray output, so Color is the only type-safe result
@@ -287,6 +298,23 @@ fn resolve_upstream_type(
         upstream_output.port_type,
         depth,
     ))
+}
+
+/// Whether `port_name` on a node of `kind` is an optional input with a
+/// meaningful built-in fallback when nothing's connected (Fabric
+/// Generator's Fiber, Pattern Generator's Shape) — as opposed to an
+/// ordinary required filter input, where "not connected" just means the
+/// node can't evaluate yet and isn't worth a status line. Lets the
+/// parameter panel show a "connected / using the built-in default" line
+/// for exactly the inputs where that's genuinely ambiguous enough to
+/// confuse an artist (reported: a connected Fiber using default params
+/// that happen to match the fallback's own defaults looked indistinguishable
+/// from not being connected at all).
+pub fn input_is_optional(kind: &str, port_name: &str) -> bool {
+    matches!(
+        (kind, port_name),
+        ("fabric_generator", "fiber") | ("tile_generator", "shape")
+    )
 }
 
 /// Whether `param_name` currently means anything for a node of `node_kind`
@@ -789,7 +817,7 @@ static NODE_DEFS: &[NodeDef] = &[
         tooltip: "Woven and knit base shapes for building fabric materials from scratch.",
         inputs: &[PortSpec {
             name: "fiber",
-            display_name: "Fiber",
+            display_name: "Thread",
             port_type: PortType::Gray,
         }],
         outputs: &[PortSpec {
@@ -1179,6 +1207,14 @@ static NODE_DEFS: &[NodeDef] = &[
                           larger file. Only affects the next time you click Load Image \u{2014} \
                           toggling it afterward doesn't retroactively re-embed or drop what's \
                           already loaded.",
+                kind: ParamSpecKind::Bool { default: false },
+            },
+            ParamSpec {
+                name: "grayscale",
+                display_name: "Convert to Grayscale",
+                tooltip: "Converts the loaded image to grayscale and switches this node's \
+                          output to Gray, so it can be wired into a Gray-only input (e.g. \
+                          Pattern Generator's Shape).",
                 kind: ParamSpecKind::Bool { default: false },
             },
         ],
@@ -2860,5 +2896,32 @@ mod tests {
         for param in ["thread_group_size", "twill_count", "rib_width"] {
             assert!(!param_is_relevant("fabric_generator", param, &params));
         }
+    }
+
+    /// Image Import's effective output type follows its own "grayscale"
+    /// param, not an upstream connection (it has no inputs at all) — the
+    /// one case `effective_output_type` resolves from a node's own params
+    /// instead of what's wired into it.
+    #[test]
+    fn image_import_effective_type_follows_its_own_grayscale_param() {
+        use super::effective_output_type;
+        use mc_core::ParamValue;
+
+        let mut graph = Graph::new();
+        let node = graph.add_node(Node::new("image_import"));
+        assert_eq!(
+            effective_output_type(&graph, node, "image_import", PortType::Color),
+            PortType::Color,
+            "grayscale off by default should stay Color"
+        );
+
+        graph
+            .set_param(node, "grayscale", ParamValue::Bool(true))
+            .unwrap();
+        assert_eq!(
+            effective_output_type(&graph, node, "image_import", PortType::Color),
+            PortType::Gray,
+            "toggling grayscale on should switch the effective output type to Gray"
+        );
     }
 }
