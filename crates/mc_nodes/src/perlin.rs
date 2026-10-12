@@ -9,6 +9,7 @@
 //! PNG export without a separate conversion step.
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "perlin_noise";
 
@@ -22,6 +23,7 @@ pub struct PerlinParams {
     pub persistence: f32,
     /// Changes the random pattern without changing its statistical character.
     pub seed: u32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for PerlinParams {
@@ -31,6 +33,7 @@ impl Default for PerlinParams {
             octaves: 4,
             persistence: 0.5,
             seed: 0,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -59,6 +62,13 @@ impl PerlinParams {
                 .get("seed")
                 .and_then(mc_core::ParamValue::as_seed)
                 .unwrap_or(defaults.seed),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -136,13 +146,17 @@ fn pack_params(resolution: u32, params: &PerlinParams) -> [u8; 32] {
     bytes[8..12].copy_from_slice(&params.octaves.to_le_bytes());
     bytes[12..16].copy_from_slice(&params.seed.to_le_bytes());
     bytes[16..20].copy_from_slice(&params.persistence.to_le_bytes());
+    bytes[20..24].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     bytes
 }
 
 #[cfg(test)]
 mod tests {
     use super::{dispatch, PerlinParams};
-    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::test_support::{
+        assert_tiles_seamlessly, tiles_seamlessly as check_tiles_seamlessly, RESOLUTION,
+    };
+    use crate::tiling::TilingMode;
 
     fn render(params: &PerlinParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -185,5 +199,30 @@ mod tests {
             ..PerlinParams::default()
         });
         assert_ne!(a, b, "different seeds produced identical pixels");
+    }
+
+    #[test]
+    fn tiling_off_is_no_longer_seamless() {
+        let params = PerlinParams {
+            tiling_mode: TilingMode::Off,
+            ..PerlinParams::default()
+        };
+        assert!(
+            check_tiles_seamlessly(&render(&params), RESOLUTION).is_err(),
+            "disabling tiling should break the forced seamless lattice wrap"
+        );
+    }
+
+    #[test]
+    fn horizontal_only_still_wraps_vertically_but_not_horizontally() {
+        let both = render(&PerlinParams::default());
+        let horizontal_only = render(&PerlinParams {
+            tiling_mode: TilingMode::HorizontalOnly,
+            ..PerlinParams::default()
+        });
+        assert_ne!(
+            both, horizontal_only,
+            "turning off the vertical axis alone should change the output"
+        );
     }
 }

@@ -408,6 +408,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 tooltip: "Changes the pattern without changing its character.",
                 kind: ParamSpecKind::Seed { default: 0 },
             },
+            tiling_mode_param(),
         ],
     },
     NodeDef {
@@ -1600,6 +1601,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 tooltip: "Changes the pattern without changing its character.",
                 kind: ParamSpecKind::Seed { default: 0 },
             },
+            tiling_mode_param(),
         ],
     },
     NodeDef {

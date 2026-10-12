@@ -19,14 +19,22 @@ fn hash2(cell: vec2<i32>, seed: u32) -> f32 {
 }
 
 // A pseudo-random unit gradient vector for a lattice point, wrapped to
-// `period` so the gradient field repeats exactly every `period` cells —
-// this is what makes Perlin noise below tile.
-fn gradient(cell: vec2<i32>, period: i32, seed: u32) -> vec2<f32> {
-    let wrapped = vec2<i32>(
-        ((cell.x % period) + period) % period,
-        ((cell.y % period) + period) % period,
-    );
-    let angle = hash2(wrapped, seed) * 6.28318530718;
+// `period` on each axis where that axis's `wrap_*` is true — this is what
+// makes Perlin noise below tile on that axis. When an axis's wrap is false,
+// its coordinate is hashed raw instead of modulo `period`: the lattice just
+// keeps extending past the texture's edge (like cropping a window out of an
+// infinite noise field) rather than forcing the far edge's gradient to match
+// the near edge's, which is what breaks the forced seam on that axis.
+fn gradient(cell: vec2<i32>, period: i32, seed: u32, wrap_x: bool, wrap_y: bool) -> vec2<f32> {
+    var cx = cell.x;
+    var cy = cell.y;
+    if wrap_x {
+        cx = ((cx % period) + period) % period;
+    }
+    if wrap_y {
+        cy = ((cy % period) + period) % period;
+    }
+    let angle = hash2(vec2<i32>(cx, cy), seed) * 6.28318530718;
     return vec2<f32>(cos(angle), sin(angle));
 }
 
@@ -37,16 +45,17 @@ fn fade(t: f32) -> f32 {
 
 // Tileable 2D Perlin (gradient) noise. `uv` is in [0, 1); `period` is how
 // many noise cells fit across the texture (so the gradient lattice wraps
-// exactly at the texture edges). Returns a value in roughly [-1, 1].
-fn perlin_2d(uv: vec2<f32>, period: i32, seed: u32) -> f32 {
+// exactly at the texture edges, on whichever axes `wrap_x`/`wrap_y` enable —
+// see `gradient` above). Returns a value in roughly [-1, 1].
+fn perlin_2d(uv: vec2<f32>, period: i32, seed: u32, wrap_x: bool, wrap_y: bool) -> f32 {
     let p = uv * f32(period);
     let cell = vec2<i32>(floor(p));
     let local = fract(p);
 
-    let g00 = gradient(cell + vec2<i32>(0, 0), period, seed);
-    let g10 = gradient(cell + vec2<i32>(1, 0), period, seed);
-    let g01 = gradient(cell + vec2<i32>(0, 1), period, seed);
-    let g11 = gradient(cell + vec2<i32>(1, 1), period, seed);
+    let g00 = gradient(cell + vec2<i32>(0, 0), period, seed, wrap_x, wrap_y);
+    let g10 = gradient(cell + vec2<i32>(1, 0), period, seed, wrap_x, wrap_y);
+    let g01 = gradient(cell + vec2<i32>(0, 1), period, seed, wrap_x, wrap_y);
+    let g11 = gradient(cell + vec2<i32>(1, 1), period, seed, wrap_x, wrap_y);
 
     let d00 = local - vec2<f32>(0.0, 0.0);
     let d10 = local - vec2<f32>(1.0, 0.0);
@@ -80,7 +89,7 @@ fn perlin_2d(uv: vec2<f32>, period: i32, seed: u32) -> f32 {
 // triangle boundaries themselves drift relative to the gradient period).
 // Confirmed by testing, not assumed: `simplex_2d` alone fails the tiling
 // test by a real, visible margin, not a rounding-level one.
-fn simplex_2d(uv: vec2<f32>, period: i32, seed: u32) -> f32 {
+fn simplex_2d(uv: vec2<f32>, period: i32, seed: u32, wrap_x: bool, wrap_y: bool) -> f32 {
     let skew = 0.36602540378; // (sqrt(3) - 1) / 2
     let unskew = 0.21132486541; // (3 - sqrt(3)) / 6
 
@@ -102,9 +111,9 @@ fn simplex_2d(uv: vec2<f32>, period: i32, seed: u32) -> f32 {
     let d2 = d0 - vec2<f32>(1.0, 1.0) + vec2<f32>(2.0 * unskew, 2.0 * unskew);
 
     let cell = vec2<i32>(cell_f);
-    let g0 = gradient(cell, period, seed);
-    let g1 = gradient(cell + vec2<i32>(i1, j1), period, seed);
-    let g2 = gradient(cell + vec2<i32>(1, 1), period, seed);
+    let g0 = gradient(cell, period, seed, wrap_x, wrap_y);
+    let g1 = gradient(cell + vec2<i32>(i1, j1), period, seed, wrap_x, wrap_y);
+    let g2 = gradient(cell + vec2<i32>(1, 1), period, seed, wrap_x, wrap_y);
 
     var n0 = 0.0;
     var t0 = 0.5 - dot(d0, d0);
@@ -145,13 +154,34 @@ fn simplex_2d(uv: vec2<f32>, period: i32, seed: u32) -> f32 {
 // texel never lands exactly on uv.x/y = 0 or 1 (samples are at pixel
 // centers), so the match is extremely close rather than bit-exact, same as
 // every other tileable noise here.
-fn tileable_simplex_2d(uv: vec2<f32>, period: i32, seed: u32) -> f32 {
+//
+// `wrap_x`/`wrap_y` control which axes get this blended treatment at all —
+// an axis with wrap off skips its blend term entirely (and tells the
+// underlying `simplex_2d`/`gradient` calls not to wrap that axis's lattice
+// either), so it shows the raw, non-repeating noise field on that axis
+// instead of a forced seamless blend.
+fn tileable_simplex_2d(uv: vec2<f32>, period: i32, seed: u32, wrap_x: bool, wrap_y: bool) -> f32 {
+    if !wrap_x && !wrap_y {
+        return simplex_2d(uv, period, seed, false, false);
+    }
+    if wrap_x && !wrap_y {
+        let wx = 1.0 - uv.x;
+        let n0 = simplex_2d(uv, period, seed, true, false);
+        let n1 = simplex_2d(vec2<f32>(uv.x - 1.0, uv.y), period, seed, true, false);
+        return n0 * wx + n1 * (1.0 - wx);
+    }
+    if wrap_y && !wrap_x {
+        let wy = 1.0 - uv.y;
+        let n0 = simplex_2d(uv, period, seed, false, true);
+        let n1 = simplex_2d(vec2<f32>(uv.x, uv.y - 1.0), period, seed, false, true);
+        return n0 * wy + n1 * (1.0 - wy);
+    }
     let wx = 1.0 - uv.x;
     let wy = 1.0 - uv.y;
-    let n00 = simplex_2d(uv, period, seed);
-    let n10 = simplex_2d(vec2<f32>(uv.x - 1.0, uv.y), period, seed);
-    let n01 = simplex_2d(vec2<f32>(uv.x, uv.y - 1.0), period, seed);
-    let n11 = simplex_2d(vec2<f32>(uv.x - 1.0, uv.y - 1.0), period, seed);
+    let n00 = simplex_2d(uv, period, seed, true, true);
+    let n10 = simplex_2d(vec2<f32>(uv.x - 1.0, uv.y), period, seed, true, true);
+    let n01 = simplex_2d(vec2<f32>(uv.x, uv.y - 1.0), period, seed, true, true);
+    let n11 = simplex_2d(vec2<f32>(uv.x - 1.0, uv.y - 1.0), period, seed, true, true);
     return n00 * wx * wy + n10 * (1.0 - wx) * wy + n01 * wx * (1.0 - wy)
         + n11 * (1.0 - wx) * (1.0 - wy);
 }
@@ -201,9 +231,19 @@ fn tile_uv(p: f32, wrap: bool) -> f32 {
 
 // Tileable 2D Voronoi/Worley "cells": returns (F1, F2), the distances to the
 // nearest and second-nearest jittered points. Each cell gets one point,
-// placed randomly inside it and wrapped to `period` the same way `gradient`
-// above wraps its lattice, so cells tile exactly.
-fn voronoi_f1f2(uv: vec2<f32>, period: i32, jitter: f32, seed: u32) -> vec2<f32> {
+// placed randomly inside it and wrapped to `period` on each axis where that
+// axis's `wrap_*` is true, the same way `gradient` above wraps its lattice —
+// an axis with wrap off hashes its neighbor coordinate raw instead, so the
+// point placement just keeps extending past that edge rather than forcing a
+// seam there.
+fn voronoi_f1f2(
+    uv: vec2<f32>,
+    period: i32,
+    jitter: f32,
+    seed: u32,
+    wrap_x: bool,
+    wrap_y: bool,
+) -> vec2<f32> {
     let p = uv * f32(period);
     let cell = vec2<i32>(floor(p));
     let local = fract(p);
@@ -213,10 +253,15 @@ fn voronoi_f1f2(uv: vec2<f32>, period: i32, jitter: f32, seed: u32) -> vec2<f32>
     for (var dy = -1; dy <= 1; dy = dy + 1) {
         for (var dx = -1; dx <= 1; dx = dx + 1) {
             let neighbor = cell + vec2<i32>(dx, dy);
-            let wrapped = vec2<i32>(
-                wrap_coord(neighbor.x, period),
-                wrap_coord(neighbor.y, period),
-            );
+            var nx = neighbor.x;
+            var ny = neighbor.y;
+            if wrap_x {
+                nx = wrap_coord(neighbor.x, period);
+            }
+            if wrap_y {
+                ny = wrap_coord(neighbor.y, period);
+            }
+            let wrapped = vec2<i32>(nx, ny);
             let rand = vec2<f32>(hash2(wrapped, seed), hash2(wrapped, seed + 7919u));
             let point_pos = vec2<f32>(f32(dx), f32(dy)) + 0.5 + (rand - 0.5) * jitter;
             let dist = length(point_pos - local);

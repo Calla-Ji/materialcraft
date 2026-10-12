@@ -5,6 +5,7 @@
 //! lattice — fewer directional artifacts than Perlin at a similar cost."
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "simplex_noise";
 
@@ -13,6 +14,7 @@ pub struct SimplexParams {
     pub octaves: u32,
     pub persistence: f32,
     pub seed: u32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for SimplexParams {
@@ -22,6 +24,7 @@ impl Default for SimplexParams {
             octaves: 4,
             persistence: 0.5,
             seed: 0,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -48,6 +51,13 @@ impl SimplexParams {
                 .get("seed")
                 .and_then(mc_core::ParamValue::as_seed)
                 .unwrap_or(defaults.seed),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -121,13 +131,17 @@ fn pack_params(resolution: u32, params: &SimplexParams) -> [u8; 32] {
     bytes[8..12].copy_from_slice(&params.octaves.to_le_bytes());
     bytes[12..16].copy_from_slice(&params.seed.to_le_bytes());
     bytes[16..20].copy_from_slice(&params.persistence.to_le_bytes());
+    bytes[20..24].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
     bytes
 }
 
 #[cfg(test)]
 mod tests {
     use super::{dispatch, SimplexParams};
-    use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::test_support::{
+        assert_tiles_seamlessly, tiles_seamlessly as check_tiles_seamlessly, RESOLUTION,
+    };
+    use crate::tiling::TilingMode;
 
     fn render(params: &SimplexParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -166,6 +180,31 @@ mod tests {
             ..SimplexParams::default()
         });
         assert_ne!(a, b, "different seeds produced identical pixels");
+    }
+
+    #[test]
+    fn tiling_off_is_no_longer_seamless() {
+        let params = SimplexParams {
+            tiling_mode: TilingMode::Off,
+            ..SimplexParams::default()
+        };
+        assert!(
+            check_tiles_seamlessly(&render(&params), RESOLUTION).is_err(),
+            "disabling tiling should break the forced seamless lattice wrap"
+        );
+    }
+
+    #[test]
+    fn horizontal_only_still_wraps_vertically_but_not_horizontally() {
+        let both = render(&SimplexParams::default());
+        let horizontal_only = render(&SimplexParams {
+            tiling_mode: TilingMode::HorizontalOnly,
+            ..SimplexParams::default()
+        });
+        assert_ne!(
+            both, horizontal_only,
+            "turning off the vertical axis alone should change the output"
+        );
     }
 
     /// Simplex and Perlin are different algorithms (triangular vs. square
