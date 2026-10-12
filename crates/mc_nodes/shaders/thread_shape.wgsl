@@ -53,6 +53,13 @@ const TWIST_Z: u32 = 1u;
 const PI: f32 = 3.14159265358979;
 
 // One strand's own cross-section, centered at `center` rather than always 0.
+// Fades out over its outer 15% with a smoothstep instead of stopping dead
+// at `half_width` — a hard-edged circular strand swept along a curving
+// twist path draws a scalloped envelope with a visible cusp everywhere two
+// strands' circular boundaries meet (the geometric reason a first pass at
+// this read as "ragged" from a screenshot, not just an aesthetic guess);
+// tapering each strand's own edge softens that cusp into a flowing curve
+// without blurring away the strand structure itself.
 fn strand_profile(t: f32, center: f32, half_width: f32, roundness: f32) -> f32 {
     if half_width <= 0.0001 {
         return 0.0;
@@ -60,7 +67,9 @@ fn strand_profile(t: f32, center: f32, half_width: f32, roundness: f32) -> f32 {
     let d = clamp(abs(t - center) / half_width, 0.0, 1.0);
     let flat = 1.0 - d;
     let round_profile = sqrt(max(1.0 - d * d, 0.0));
-    return mix(flat, round_profile, roundness);
+    let shape = mix(flat, round_profile, roundness);
+    let taper = 1.0 - smoothstep(0.85, 1.0, d);
+    return shape * taper;
 }
 
 @compute @workgroup_size(8, 8)
@@ -120,24 +129,39 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // with a plain `max()` of brightness only captures the sideways
     // (sin) motion and produces an interference lattice, not a braid.
     // `cos` of each strand's own orbit angle is the matching depth
-    // component of that same sin/cos helix projection: wherever two
-    // strands' profiles overlap, the one with greater depth (closer to the
-    // viewer) wins outright instead of blending, and every strand dims
-    // slightly the further back it sits — together, what actually reads as
-    // plies crossing over and under each other.
-    var value = 0.0;
-    var winning_depth = -2.0;
+    // component of that same sin/cos helix projection: the strand with
+    // greater depth (closer to the viewer) dominates, and every strand
+    // dims slightly the further back it sits.
+    //
+    // Blended by relative depth (a softmax-style weighted average, not a
+    // hard winner-take-all pick) rather than letting the front strand cut
+    // off the back one outright: a hard switch put a visible crease right
+    // at the exact crossing point every time occlusion flipped from one
+    // strand to the other — the "overcut" groove a screenshot showed,
+    // looking like a carved notch rather than a soft valley. Away from a
+    // crossing, one strand's depth dominates so heavily (`exp` of the
+    // depth difference) the blend is indistinguishable from a hard pick —
+    // plies still read as genuinely crossing over and under each other,
+    // just without a seam at the handoff.
+    var weighted_sum = 0.0;
+    var weight_total = 0.0;
+    let occlusion_sharpness = 4.0;
     for (var k = 0u; k < ply_count; k = k + 1u) {
         let phase = 2.0 * PI * f32(k) / n;
         let angle = angle_base + phase;
         let center = orbit_radius * sin(angle);
         let depth = cos(angle);
         let profile = strand_profile(local_y, center, strand_half_width, roundness);
-        if profile > 0.0001 && depth > winning_depth {
-            winning_depth = depth;
+        if profile > 0.0005 {
             let shade = mix(0.55, 1.0, depth * 0.5 + 0.5);
-            value = profile * shade;
+            let weight = exp(depth * occlusion_sharpness);
+            weighted_sum = weighted_sum + weight * profile * shade;
+            weight_total = weight_total + weight;
         }
+    }
+    var value = 0.0;
+    if weight_total > 0.0001 {
+        value = weighted_sum / weight_total;
     }
 
     textureStore(output, vec2<i32>(id.xy), vec4<f32>(value, value, value, 1.0));
