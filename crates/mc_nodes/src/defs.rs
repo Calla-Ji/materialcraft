@@ -665,7 +665,11 @@ static NODE_DEFS: &[NodeDef] = &[
         display_name: "Pattern Generator",
         category: "Generators/Patterns",
         tooltip: "A brick or grid pattern — Offset 0.5 for a classic running-bond brick layout.",
-        inputs: &[],
+        inputs: &[PortSpec {
+            name: "shape",
+            display_name: "Shape",
+            port_type: PortType::Gray,
+        }],
         outputs: &[PortSpec {
             name: "output",
             display_name: "Output",
@@ -705,7 +709,8 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "gap",
                 display_name: "Gap",
-                tooltip: "Mortar gap width.",
+                tooltip: "Mortar gap width. Only affects the built-in tile shape \u{2014} no \
+                          effect once something's wired into Shape below.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 0.4,
@@ -725,7 +730,8 @@ static NODE_DEFS: &[NodeDef] = &[
                 name: "bevel",
                 display_name: "Edge Darkening",
                 tooltip: "How much each tile's edge darkens toward the gap — a flat shading \
-                          fade, not a height change.",
+                          fade, not a height change. Only affects the built-in tile shape \u{2014} \
+                          no effect once something's wired into Shape below.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 0.4,

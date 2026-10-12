@@ -89,14 +89,30 @@ impl TileGeneratorParams {
 pub fn dispatch(
     gpu: &mut mc_gpu::Context,
     pool: &mut mc_gpu::TexturePool,
-    key: &str,
+    shape_key: Option<&str>,
+    output_key: &str,
     resolution: u32,
     params: &TileGeneratorParams,
 ) {
+    // No custom Shape wired in: bind a throwaway 1x1 texture that the
+    // shader never actually reads (`has_shape` is 0, so it stays on the
+    // built-in rounded-rect path) — wgpu still needs *something* bound at
+    // that slot regardless.
+    let placeholder_key = format!("{output_key}__unused_shape_placeholder");
+    let has_shape = shape_key.is_some();
+    let shape_key = shape_key.unwrap_or_else(|| {
+        gpu.fill_rgba8(pool, &placeholder_key, 1, [0, 0, 0, 255]);
+        &placeholder_key
+    });
+    let shape_view = pool
+        .view(shape_key)
+        .unwrap_or_else(|| panic!("tile_generator: no texture at shape key {shape_key:?}"))
+        .clone();
+
     let shader_source = full_source("tile_generator.wgsl");
     let pipeline = gpu.compute_pipeline(NODE_KIND, &shader_source, "main");
 
-    let param_bytes = pack_params(resolution, params);
+    let param_bytes = pack_params(resolution, params, has_shape);
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("tile_generator_params"),
         size: param_bytes.len() as u64,
@@ -107,7 +123,7 @@ pub fn dispatch(
 
     let view = pool.get_or_create(
         &gpu.device,
-        key,
+        output_key,
         resolution,
         wgpu::TextureFormat::Rgba8Unorm,
     );
@@ -123,6 +139,10 @@ pub fn dispatch(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
+                resource: wgpu::BindingResource::TextureView(&shape_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
                 resource: wgpu::BindingResource::TextureView(view),
             },
         ],
@@ -146,7 +166,7 @@ pub fn dispatch(
     gpu.queue.submit(Some(encoder.finish()));
 }
 
-fn pack_params(resolution: u32, params: &TileGeneratorParams) -> [u8; 48] {
+fn pack_params(resolution: u32, params: &TileGeneratorParams, has_shape: bool) -> [u8; 48] {
     let mut bytes = [0u8; 48];
     bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     bytes[4..8].copy_from_slice(&params.rows.to_le_bytes());
@@ -159,6 +179,7 @@ fn pack_params(resolution: u32, params: &TileGeneratorParams) -> [u8; 48] {
     bytes[32..36].copy_from_slice(&params.rotation_jitter.to_le_bytes());
     bytes[36..40].copy_from_slice(&params.luminance_jitter.to_le_bytes());
     bytes[40..44].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
+    bytes[44..48].copy_from_slice(&(has_shape as u32).to_le_bytes());
     bytes
 }
 
@@ -171,7 +192,7 @@ mod tests {
     fn render(params: &TileGeneratorParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
         let mut pool = mc_gpu::TexturePool::default();
-        dispatch(&mut gpu, &mut pool, "test", RESOLUTION, params);
+        dispatch(&mut gpu, &mut pool, None, "test", RESOLUTION, params);
         let texture = pool.texture("test").expect("tile_generator texture");
         gpu.read_rgba8(texture, RESOLUTION)
     }
@@ -235,6 +256,41 @@ mod tests {
         assert_ne!(
             wrapped, clamped,
             "disabling tiling should change the staggered row's wrapped-edge tile"
+        );
+    }
+
+    /// A connected Shape input should actually change the output (stamped
+    /// in instead of the built-in rounded rect), not just be plumbing
+    /// that's never read.
+    #[test]
+    fn a_connected_shape_changes_the_output() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let params = TileGeneratorParams::default();
+
+        dispatch(&mut gpu, &mut pool, None, "built_in", RESOLUTION, &params);
+        let built_in = gpu.read_rgba8(pool.texture("built_in").unwrap(), RESOLUTION);
+
+        crate::shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "disc",
+            RESOLUTION,
+            &crate::shape::ShapeParams::default(),
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("disc"),
+            "with_shape",
+            RESOLUTION,
+            &params,
+        );
+        let with_shape = gpu.read_rgba8(pool.texture("with_shape").unwrap(), RESOLUTION);
+
+        assert_ne!(
+            built_in, with_shape,
+            "wiring in a custom shape should change Pattern Generator's output"
         );
     }
 }

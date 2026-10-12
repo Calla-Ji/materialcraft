@@ -133,8 +133,16 @@ pub fn evaluate(
                     fractal_sum::dispatch(gpu, pool, &key, resolution, &params);
                 }
                 "tile_generator" => {
+                    let shape_key = resolve_optional_input("shape").map(texture_key);
                     let params = tile_generator::TileGeneratorParams::from_graph(&node.params);
-                    tile_generator::dispatch(gpu, pool, &key, resolution, &params);
+                    tile_generator::dispatch(
+                        gpu,
+                        pool,
+                        shape_key.as_deref(),
+                        &key,
+                        resolution,
+                        &params,
+                    );
                 }
                 "fabric_generator" => {
                     let fiber_key = resolve_optional_input("fiber").map(texture_key);
