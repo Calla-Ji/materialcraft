@@ -8,6 +8,24 @@
 /// frame (CLAUDE.md §9).
 pub type DragState = Option<(mc_core::NodeId, String, mc_core::ParamValue)>;
 
+/// A new seed for the dice button — previously just `value.wrapping_add(1)`,
+/// which isn't random at all (confirmed bug report: it "just adds one more
+/// number"). Mixes the current wall-clock time through a SplitMix64-style
+/// finalizer for a well-distributed, visually "random" result each click, no
+/// `rand` dependency needed for a UI convenience button that isn't
+/// security-sensitive.
+fn random_seed() -> u32 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or_default();
+    let mut z = nanos.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    (z ^ (z >> 31)) as u32
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     graph: &mut mc_core::Graph,
@@ -113,7 +131,7 @@ fn show_inner(
                             history,
                             id,
                             param.name,
-                            mc_core::ParamValue::Seed(value.wrapping_add(1)),
+                            mc_core::ParamValue::Seed(random_seed()),
                         );
                     }
                 });
