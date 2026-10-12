@@ -440,63 +440,77 @@ impl eframe::App for MaterialCreatorApp {
                         let mut drawer_ui =
                             ui.new_child(egui::UiBuilder::new().max_rect(inner_rect));
                         drawer_ui.set_clip_rect(inner_rect);
-                        let ui = &mut drawer_ui;
 
-                        let kind = viewport_panels.visible_kind();
-                        ui.heading(kind.title());
-                        ui.weak(kind.description());
-                        ui.separator();
-                        match kind {
-                            viewport3d_panels::PanelKind::Mesh => {
-                                egui::ComboBox::from_label("Shape")
-                                    .selected_text(viewport3d.mesh_kind.label())
-                                    .show_ui(ui, |ui| {
-                                        for mesh_kind in viewport3d::MeshKind::ALL {
-                                            ui.selectable_value(
-                                                &mut viewport3d.mesh_kind,
-                                                mesh_kind,
-                                                mesh_kind.label(),
-                                            );
-                                        }
-                                    });
-                            }
-                            viewport3d_panels::PanelKind::Material => {
-                                ui.spacing_mut().slider_width = 80.0;
-                                ui.add(
-                                    egui::Slider::new(&mut viewport3d.height_scale, 0.0..=0.5)
-                                        .text("Height Scale"),
-                                );
-                                ui.add(
-                                    egui::Slider::new(&mut viewport3d.tessellation, 0.0..=1.0)
-                                        .text("Tessellation Density"),
-                                );
+                        // A short 3D View panel (e.g. squeezed by the Node
+                        // Graph dock cell below it) can leave less room than
+                        // a panel's content needs — scrollable so every
+                        // control stays reachable instead of just clipping
+                        // off the bottom with no way back to it.
+                        egui::ScrollArea::vertical()
+                            .id_salt("viewport3d_drawer_scroll")
+                            .auto_shrink([false, false])
+                            .show(&mut drawer_ui, |ui| {
+                                let kind = viewport_panels.visible_kind();
+                                ui.heading(kind.title());
+                                ui.weak(kind.description());
                                 ui.separator();
-                                let mut unlit = viewport3d.shading_mode
-                                    == viewport3d::ShadingMode::UnlitBaseColor;
-                                if ui
-                                    .checkbox(&mut unlit, "Unlit Base Color")
-                                    .on_hover_text(
-                                        "Shows Base Color directly, with no lighting, \
+                                match kind {
+                                    viewport3d_panels::PanelKind::Mesh => {
+                                        egui::ComboBox::from_label("Shape")
+                                            .selected_text(viewport3d.mesh_kind.label())
+                                            .show_ui(ui, |ui| {
+                                                for mesh_kind in viewport3d::MeshKind::ALL {
+                                                    ui.selectable_value(
+                                                        &mut viewport3d.mesh_kind,
+                                                        mesh_kind,
+                                                        mesh_kind.label(),
+                                                    );
+                                                }
+                                            });
+                                    }
+                                    viewport3d_panels::PanelKind::Material => {
+                                        ui.spacing_mut().slider_width = 80.0;
+                                        ui.add(
+                                            egui::Slider::new(
+                                                &mut viewport3d.height_scale,
+                                                0.0..=0.5,
+                                            )
+                                            .text("Height Scale"),
+                                        );
+                                        ui.add(
+                                            egui::Slider::new(
+                                                &mut viewport3d.tessellation,
+                                                0.0..=1.0,
+                                            )
+                                            .text("Tessellation Density"),
+                                        );
+                                        ui.separator();
+                                        let mut unlit = viewport3d.shading_mode
+                                            == viewport3d::ShadingMode::UnlitBaseColor;
+                                        if ui
+                                            .checkbox(&mut unlit, "Unlit Base Color")
+                                            .on_hover_text(
+                                                "Shows Base Color directly, with no lighting, \
                                          exposure, or tonemapping \u{2014} for checking it \
                                          matches the 2D View and an exported PNG exactly.",
-                                    )
-                                    .changed()
-                                {
-                                    viewport3d.shading_mode = if unlit {
-                                        viewport3d::ShadingMode::UnlitBaseColor
-                                    } else {
-                                        viewport3d::ShadingMode::Lit
-                                    };
-                                }
-                                ui.add_enabled(
-                                    !unlit,
-                                    egui::Slider::new(&mut viewport3d.exposure, 0.1..=4.0)
-                                        .text("Exposure"),
-                                );
-                                ui.separator();
-                                let mut pixel_filter =
-                                    viewport3d.texture_filter == viewport3d::TextureFilter::Pixel;
-                                if ui
+                                            )
+                                            .changed()
+                                        {
+                                            viewport3d.shading_mode = if unlit {
+                                                viewport3d::ShadingMode::UnlitBaseColor
+                                            } else {
+                                                viewport3d::ShadingMode::Lit
+                                            };
+                                        }
+                                        ui.add_enabled(
+                                            !unlit,
+                                            egui::Slider::new(&mut viewport3d.exposure, 0.1..=4.0)
+                                                .text("Exposure"),
+                                        );
+                                        ui.separator();
+                                        let mut pixel_filter = viewport3d.texture_filter
+                                            == viewport3d::TextureFilter::Pixel;
+                                        if ui
                                     .checkbox(&mut pixel_filter, "Pixel / Nearest Filtering")
                                     .on_hover_text(
                                         "Disables all texture smoothing (texel and mip) \u{2014} \
@@ -511,70 +525,81 @@ impl eframe::App for MaterialCreatorApp {
                                         viewport3d::TextureFilter::Smooth
                                     };
                                 }
-                            }
-                            viewport3d_panels::PanelKind::Environment => {
-                                let selected_label = match &viewport3d.environment_source {
-                                    viewport3d::EnvironmentSource::Preset(preset) => preset.label(),
-                                    viewport3d::EnvironmentSource::Custom(name) => name.as_str(),
-                                };
-                                egui::ComboBox::from_label("HDRI")
-                                    .selected_text(selected_label)
-                                    .show_ui(ui, |ui| {
-                                        for preset in hdri::HdriPreset::ALL {
-                                            let is_selected = viewport3d.environment_source
-                                                == viewport3d::EnvironmentSource::Preset(preset);
-                                            if ui
-                                                .selectable_label(is_selected, preset.label())
-                                                .clicked()
-                                                && !is_selected
+                                    }
+                                    viewport3d_panels::PanelKind::Environment => {
+                                        let selected_label = match &viewport3d.environment_source {
+                                            viewport3d::EnvironmentSource::Preset(preset) => {
+                                                preset.label()
+                                            }
+                                            viewport3d::EnvironmentSource::Custom(name) => {
+                                                name.as_str()
+                                            }
+                                        };
+                                        egui::ComboBox::from_label("HDRI")
+                                            .selected_text(selected_label)
+                                            .show_ui(ui, |ui| {
+                                                for preset in hdri::HdriPreset::ALL {
+                                                    let is_selected = viewport3d.environment_source
+                                                        == viewport3d::EnvironmentSource::Preset(
+                                                            preset,
+                                                        );
+                                                    if ui
+                                                        .selectable_label(
+                                                            is_selected,
+                                                            preset.label(),
+                                                        )
+                                                        .clicked()
+                                                        && !is_selected
+                                                    {
+                                                        viewport3d
+                                                            .set_environment_preset(gpu, preset);
+                                                    }
+                                                }
+                                            });
+                                        if let Some(texture_id) = viewport3d.environment_thumbnail()
+                                        {
+                                            ui.add_space(4.0);
+                                            let width = ui.available_width();
+                                            ui.image(egui::load::SizedTexture::new(
+                                                texture_id,
+                                                egui::vec2(width, width * 0.5),
+                                            ));
+                                            ui.add_space(4.0);
+                                        }
+                                        if ui.button("Load custom HDRI\u{2026}").clicked() {
+                                            if let Some(path) = rfd::FileDialog::new()
+                                                .add_filter("HDRI", &["hdr", "exr"])
+                                                .pick_file()
                                             {
-                                                viewport3d.set_environment_preset(gpu, preset);
+                                                if let Err(err) =
+                                                    viewport3d.set_environment_custom(gpu, &path)
+                                                {
+                                                    log::warn!(
+                                                        "failed to load HDRI {}: {err}",
+                                                        path.display()
+                                                    );
+                                                    toasts.error(format!(
+                                                        "Couldn't load {}: {err}",
+                                                        path.display()
+                                                    ));
+                                                }
                                             }
                                         }
-                                    });
-                                if let Some(texture_id) = viewport3d.environment_thumbnail() {
-                                    ui.add_space(4.0);
-                                    let width = ui.available_width();
-                                    ui.image(egui::load::SizedTexture::new(
-                                        texture_id,
-                                        egui::vec2(width, width * 0.5),
-                                    ));
-                                    ui.add_space(4.0);
-                                }
-                                if ui.button("Load custom HDRI\u{2026}").clicked() {
-                                    if let Some(path) = rfd::FileDialog::new()
-                                        .add_filter("HDRI", &["hdr", "exr"])
-                                        .pick_file()
-                                    {
-                                        if let Err(err) =
-                                            viewport3d.set_environment_custom(gpu, &path)
-                                        {
-                                            log::warn!(
-                                                "failed to load HDRI {}: {err}",
-                                                path.display()
-                                            );
-                                            toasts.error(format!(
-                                                "Couldn't load {}: {err}",
-                                                path.display()
-                                            ));
-                                        }
-                                    }
-                                }
-                                ui.separator();
-                                ui.spacing_mut().slider_width = 80.0;
-                                ui.add(
-                                    egui::Slider::new(
-                                        &mut viewport3d.environment_intensity,
-                                        0.0..=4.0,
-                                    )
-                                    .text("Brightness"),
-                                )
-                                .on_hover_text(
-                                    "Scales just the HDRI's contribution (background \
+                                        ui.separator();
+                                        ui.spacing_mut().slider_width = 80.0;
+                                        ui.add(
+                                            egui::Slider::new(
+                                                &mut viewport3d.environment_intensity,
+                                                0.0..=4.0,
+                                            )
+                                            .text("Brightness"),
+                                        )
+                                        .on_hover_text(
+                                            "Scales just the HDRI's contribution (background \
                                      reflections and ambient fill) \u{2014} independent of the \
                                      Material panel's overall Exposure.",
-                                );
-                                ui.add(
+                                        );
+                                        ui.add(
                                     egui::Slider::new(&mut viewport3d.environment_blur, 0.0..=1.0)
                                         .text("Blur"),
                                 )
@@ -583,9 +608,10 @@ impl eframe::App for MaterialCreatorApp {
                                      shiny/metallic surfaces that would otherwise mirror the \
                                      HDRI back sharply.",
                                 );
-                            }
-                            viewport3d_panels::PanelKind::Camera => {}
-                        }
+                                    }
+                                    viewport3d_panels::PanelKind::Camera => {}
+                                }
+                            });
                     }
                 }
                 dock::CrateId::NodeGraph => {
