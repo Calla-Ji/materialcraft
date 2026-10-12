@@ -134,8 +134,24 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // strand that's merely geometrically nearby while *behind* a strand
     // that's already dominant no longer gets an independent vote in the
     // shape, which is what was missing.
-    let softness = max(strand_half_width * 0.18, 0.0001);
-    let occlusion_sharpness = 4.0;
+    let softness = max(strand_half_width * 0.08, 0.0001);
+    // 2 plies is a genuinely simpler case than 3+: with only two strands,
+    // "whoever's in front" is always a straight binary comparison, so a
+    // gentle transition never risks a third (or fourth, or fifth) strand
+    // getting caught in the middle of it — confirmed by sampling the
+    // actual silhouette boundary pixel-by-pixel, not just reasoned about:
+    // at 2 plies, a sharpness around 3 traces a continuously-varying
+    // curve with no visible seam, while 6+ jumps by dozens of pixels in a
+    // single step (too sharp once alpha-quantized into a real image). At
+    // 3+ plies, several strands can be close in depth *simultaneously* —
+    // the lattice regression the tests below catch — and avoiding that
+    // needs a much sharper cutoff, well past where 2 plies would start
+    // showing a seam. Picking the two regimes separately beat chasing a
+    // single formula that could satisfy both at once.
+    var occlusion_sharpness = 8.0 * n;
+    if ply_count == 2u {
+        occlusion_sharpness = 3.0;
+    }
     var weight_sum = 0.0;
     var edge_weighted_sum = 0.0;
     var shade_weighted_sum = 0.0;

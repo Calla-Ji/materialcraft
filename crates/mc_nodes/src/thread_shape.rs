@@ -62,6 +62,22 @@
 //!    `three_plies_dont_regress_into_a_lattice` /
 //!    `higher_ply_counts_dont_regress_into_a_lattice_either` for how the
 //!    lattice regression specifically is now caught.
+//! 5. Step 4 fixed the lattice, but with the owner's own hand-drawn
+//!    annotation over a screenshot confirming the actual complaint — each
+//!    ply's own visible lobe should be a longer, pointed lens shape, not a
+//!    short rounded bump — a fixed depth transition sharpness turned out
+//!    to alias into a literal multi-pixel jump at 2 plies, not just a
+//!    sharp-looking but technically smooth curve (confirmed by tracing the
+//!    silhouette boundary pixel by pixel at a higher resolution than the
+//!    other tests here use, not assumed from the math alone — see
+//!    `two_ply_silhouette_boundary_has_no_single_column_jump`). But 2
+//!    plies and 3+ plies need genuinely different transition sharpness,
+//!    not just different constants on the same formula: with only 2
+//!    strands, "who's in front" is always a binary comparison, so a gentle
+//!    transition is safe; with 3+, several strands can be close in depth
+//!    *simultaneously*, and the same gentle transition reopens the lattice
+//!    from step 3. The shader now picks the two regimes separately rather
+//!    than chasing one formula that satisfies both.
 
 use crate::shaders::full_source;
 
@@ -233,6 +249,51 @@ mod tests {
     fn is_deterministic() {
         let params = ThreadShapeParams::default();
         assert_eq!(render(&params), render(&params));
+    }
+
+    /// The "ragged outline" complaint turned out, when traced pixel by
+    /// pixel at a higher resolution than the other tests here use, to be a
+    /// real discontinuity: the silhouette's own top/bottom boundary jumped
+    /// by dozens of pixels between *adjacent* columns right at the
+    /// crossing handoff, not a gradual curve. A smooth function can still
+    /// alias into a visible seam if its transition is narrower than a
+    /// pixel — this checks the boundary's actual column-to-column movement
+    /// stays small, which a purely analytic "is it C1 continuous" argument
+    /// wouldn't have caught.
+    #[test]
+    fn two_ply_silhouette_boundary_has_no_single_column_jump() {
+        let hi_res = 256u32;
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "probe",
+            hi_res,
+            &ThreadShapeParams {
+                ply_count: 2,
+                thickness: 0.5,
+                roundness: 0.3,
+                twist_cycles: 2,
+                twist_direction: TwistDirection::Z,
+            },
+        );
+        let pixels = gpu.read_rgba8(pool.texture("probe").unwrap(), hi_res);
+        let r = hi_res as usize;
+        let tops: Vec<Option<usize>> = (0..r)
+            .map(|x| (0..r).find(|&y| pixels[(y * r + x) * 4] > 128))
+            .collect();
+        let mut max_jump = 0usize;
+        for pair in tops.windows(2) {
+            if let [Some(a), Some(b)] = pair {
+                max_jump = max_jump.max(a.abs_diff(*b));
+            }
+        }
+        assert!(
+            max_jump < 10,
+            "the silhouette's top boundary jumped {max_jump} pixels between adjacent columns \
+             (resolution {r}) — that reads as a visible seam, not a smooth curve"
+        );
     }
 
     /// A screenshot showed the previous (overlap-guaranteed) version reading
