@@ -25,7 +25,7 @@ struct BlockShiftParams {
     amount: f32,
     max_offset: f32,
     seed: u32,
-    _pad0: u32,
+    tiling_mode: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: BlockShiftParams;
@@ -63,8 +63,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let offset_px = vec2<i32>(round(offset_uv * f32(params.resolution)));
     let sample_coord = vec2<i32>(
-        wrap_coord(coords.x - offset_px.x, size),
-        wrap_coord(coords.y - offset_px.y, size),
+        tile_coord(coords.x - offset_px.x, size, wraps_x(params.tiling_mode)),
+        tile_coord(coords.y - offset_px.y, size, wraps_y(params.tiling_mode)),
     );
     let shifted = textureLoad(image_tex, sample_coord, 0);
     let original = textureLoad(image_tex, coords, 0);

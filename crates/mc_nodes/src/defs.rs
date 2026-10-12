@@ -2042,6 +2042,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 tooltip: "Changes which blocks shift and by how much.",
                 kind: ParamSpecKind::Seed { default: 0 },
             },
+            tiling_mode_param(),
         ],
     },
     NodeDef {
