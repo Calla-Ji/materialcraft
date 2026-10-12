@@ -47,6 +47,7 @@ pub mod simplex_noise;
 pub mod slope_blur;
 #[cfg(test)]
 mod test_support;
+pub mod thread_shape;
 pub mod threshold;
 pub mod tile_generator;
 pub mod tiling;

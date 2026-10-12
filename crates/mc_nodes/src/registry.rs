@@ -14,7 +14,8 @@ use crate::{
     fabric_generator, fractal_sum, gradient_linear, gradient_map, gradient_radial,
     grayscale_conversion, height_to_ao, height_to_normal, histogram_scan, hsl_adjust, invert,
     levels, ordered_dither, palette_dither, perlin, scanline_jitter, shape, simplex_noise,
-    slope_blur, threshold, tile_generator, transform2d, uniform_color, voronoi, warp, white_noise,
+    slope_blur, thread_shape, threshold, tile_generator, transform2d, uniform_color, voronoi, warp,
+    white_noise,
 };
 
 /// The texture pool key a node's own output is stored under.
@@ -138,6 +139,10 @@ pub fn evaluate(
                 "fabric_generator" => {
                     let params = fabric_generator::FabricGeneratorParams::from_graph(&node.params);
                     fabric_generator::dispatch(gpu, pool, &key, resolution, &params);
+                }
+                "thread_shape" => {
+                    let params = thread_shape::ThreadShapeParams::from_graph(&node.params);
+                    thread_shape::dispatch(gpu, pool, &key, resolution, &params);
                 }
                 "shape" => {
                     let params = shape::ShapeParams::from_graph(&node.params);

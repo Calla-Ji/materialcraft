@@ -887,6 +887,50 @@ static NODE_DEFS: &[NodeDef] = &[
         ],
     },
     NodeDef {
+        kind: "thread_shape",
+        display_name: "Thread",
+        category: "Generators/Patterns",
+        tooltip: "A single fiber cross-section \u{2014} wire into Fabric Generator's Fiber \
+                  input to control what its threads look like.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "fiber_type",
+                display_name: "Fiber Type",
+                tooltip: "Which fiber cross-section to generate.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::thread_shape::FiberType::NAMES,
+                    default: "Tube",
+                },
+            },
+            ParamSpec {
+                name: "thickness",
+                display_name: "Thickness",
+                tooltip: "How much of the tile's height the fiber fills.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.85,
+                },
+            },
+            ParamSpec {
+                name: "roundness",
+                display_name: "Roundness",
+                tooltip: "0 is a flat ribbon, 1 is a round thread cross-section.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.6,
+                },
+            },
+        ],
+    },
+    NodeDef {
         kind: "shape",
         display_name: "Shape",
         category: "Generators/Patterns",
