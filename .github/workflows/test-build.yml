@@ -10,7 +10,38 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same windowing headers the build job needs, plus mesa-vulkan-drivers
+      # for its Lavapipe software Vulkan ICD — GitHub's ubuntu-latest
+      # runners have no real GPU, and every test that touches the GPU
+      # (`mc_gpu::Context::new_headless`, which is most of the test suite)
+      # needs *some* Vulkan adapter to request, even a software one.
+      - name: Install Linux test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libx11-dev libwayland-dev mesa-vulkan-drivers
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --workspace
+
   build:
     strategy:
       fail-fast: false

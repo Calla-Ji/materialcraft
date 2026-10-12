@@ -22,6 +22,16 @@ use crate::param::ParamValue;
 /// — never break loading of existing example graphs.
 pub const FORMAT_VERSION: u32 = 1;
 
+/// The working resolution range CLAUDE.md documents (256 up to the optional
+/// 8192 "if VRAM allows" tier) — `from_json` clamps a loaded file's
+/// resolution into this range rather than trusting it outright. There's no
+/// UI control for this field today (only the export dialog's own, separate
+/// 256-4096 list is user-facing), so the only way it ever takes an extreme
+/// value is a hand-edited or corrupted `.mcgraph` — an unclamped absurd
+/// value (e.g. 100000) would ask the GPU to allocate a texture it can't.
+pub const MIN_RESOLUTION: u32 = 256;
+pub const MAX_RESOLUTION: u32 = 8192;
+
 /// Normal map convention: Blender expects OpenGL (Y+), Unreal expects
 /// DirectX (Y-). A graph-wide default, overridable at export (CLAUDE.md §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +79,11 @@ pub enum LoadError {
     Io(#[from] std::io::Error),
     #[error("failed to parse graph JSON: {0}")]
     Json(#[from] serde_json::Error),
+    #[error(
+        "this file was saved by a newer version of MaterialCreator (format {found}, this build \
+         only supports up to {supported}) \u{2014} update the app to open it"
+    )]
+    UnsupportedFormatVersion { found: u32, supported: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,10 +357,25 @@ impl Graph {
 
     /// `next_id` is deliberately not persisted — it's derived from the
     /// loaded nodes' ids here, rather than trusted from the file, so a
-    /// hand-edited `.mcgraph` can't desync it from reality.
-    pub fn from_json(json: &str) -> serde_json::Result<Self> {
+    /// hand-edited `.mcgraph` can't desync it from reality. Likewise,
+    /// `format_version` and `settings.resolution` aren't trusted outright
+    /// either: a file from a newer app build is refused outright (its shape
+    /// may not even match what this build expects), and resolution is
+    /// clamped into `MIN_RESOLUTION..=MAX_RESOLUTION` rather than handed
+    /// straight to the GPU.
+    pub fn from_json(json: &str) -> Result<Self, LoadError> {
         let mut graph: Graph = serde_json::from_str(json)?;
+        if graph.format_version > FORMAT_VERSION {
+            return Err(LoadError::UnsupportedFormatVersion {
+                found: graph.format_version,
+                supported: FORMAT_VERSION,
+            });
+        }
         graph.next_id = graph.nodes.keys().map(|id| id.0 + 1).max().unwrap_or(0);
+        graph.settings.resolution = graph
+            .settings
+            .resolution
+            .clamp(MIN_RESOLUTION, MAX_RESOLUTION);
         Ok(graph)
     }
 
@@ -358,7 +388,7 @@ impl Graph {
 
     pub fn load_from_file(path: impl AsRef<std::path::Path>) -> Result<Self, LoadError> {
         let text = std::fs::read_to_string(path)?;
-        Ok(Self::from_json(&text)?)
+        Self::from_json(&text)
     }
 }
 
@@ -499,5 +529,59 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         assert_eq!(loaded.nodes().count(), graph.nodes().count());
+    }
+
+    #[test]
+    fn from_json_clamps_an_absurdly_high_resolution() {
+        let mut graph = Graph::new();
+        graph.settings.resolution = 100_000;
+        let json = graph.to_json().unwrap();
+
+        let loaded = Graph::from_json(&json).unwrap();
+        assert_eq!(loaded.settings.resolution, MAX_RESOLUTION);
+    }
+
+    #[test]
+    fn from_json_clamps_a_zero_resolution() {
+        let mut graph = Graph::new();
+        graph.settings.resolution = 0;
+        let json = graph.to_json().unwrap();
+
+        let loaded = Graph::from_json(&json).unwrap();
+        assert_eq!(loaded.settings.resolution, MIN_RESOLUTION);
+    }
+
+    #[test]
+    fn from_json_leaves_an_in_range_resolution_untouched() {
+        let mut graph = Graph::new();
+        graph.settings.resolution = 2048;
+        let json = graph.to_json().unwrap();
+
+        let loaded = Graph::from_json(&json).unwrap();
+        assert_eq!(loaded.settings.resolution, 2048);
+    }
+
+    #[test]
+    fn from_json_refuses_a_newer_format_version() {
+        let mut graph = Graph::new();
+        graph.format_version = FORMAT_VERSION + 1;
+        let json = graph.to_json().unwrap();
+
+        let err = Graph::from_json(&json).unwrap_err();
+        match err {
+            LoadError::UnsupportedFormatVersion { found, supported } => {
+                assert_eq!(found, FORMAT_VERSION + 1);
+                assert_eq!(supported, FORMAT_VERSION);
+            }
+            other => panic!("expected UnsupportedFormatVersion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_json_accepts_an_older_or_equal_format_version() {
+        let mut graph = Graph::new();
+        graph.format_version = FORMAT_VERSION;
+        let json = graph.to_json().unwrap();
+        assert!(Graph::from_json(&json).is_ok());
     }
 }

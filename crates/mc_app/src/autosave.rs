@@ -14,9 +14,15 @@ const INTERVAL: Duration = Duration::from_secs(30);
 
 /// A fixed location outside the user's own files — recovery, not a real
 /// save, so it doesn't belong in whatever folder they're organizing actual
-/// graphs in.
+/// graphs in. The per-user app data directory (`dirs::data_dir()`:
+/// `~/Library/Application Support` on macOS, `%APPDATA%` on Windows,
+/// `$XDG_DATA_HOME`/`~/.local/share` on Linux), not a shared temp
+/// directory — `std::env::temp_dir()` resolves to a single fixed, world-
+/// shared path like `/tmp` on Linux, which any other user on the same
+/// machine could read, overwrite, or race against.
 pub fn recovery_path() -> PathBuf {
-    std::env::temp_dir().join("materialcreator_autosave.mcgraph")
+    let base = dirs::data_dir().unwrap_or_else(std::env::temp_dir);
+    base.join("MaterialCreator").join("autosave.mcgraph")
 }
 
 pub struct Autosave {
@@ -34,15 +40,25 @@ impl Default for Autosave {
 impl Autosave {
     /// Snapshots `graph` to the recovery path if `INTERVAL` has passed since
     /// the last snapshot. Best-effort: a failed write here (e.g. a full
-    /// temp directory) isn't worth interrupting the artist over — the worst
-    /// case is just a missed safety snapshot, not lost work relative to
-    /// today's session.
+    /// disk, or no permission to create the app data directory) isn't worth
+    /// interrupting the artist over — the worst case is just a missed
+    /// safety snapshot, not lost work relative to today's session.
     pub fn maybe_save(&mut self, graph: &mc_core::Graph) {
         if self.last_saved_at.elapsed() < INTERVAL {
             return;
         }
         self.last_saved_at = Instant::now();
-        if let Err(err) = graph.save_to_file(recovery_path()) {
+        let path = recovery_path();
+        if let Some(parent) = path.parent() {
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                log::warn!(
+                    "autosave failed: couldn't create {}: {err}",
+                    parent.display()
+                );
+                return;
+            }
+        }
+        if let Err(err) = graph.save_to_file(path) {
             log::warn!("autosave failed: {err}");
         }
     }
