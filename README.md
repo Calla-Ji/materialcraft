@@ -6,9 +6,8 @@ Connect nodes — noises, patterns, filters, blends — into a graph that output
 tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready for
 **Blender** and **Unreal Engine**.
 
-> Status: early development (v0.1, pre-release). See [PROGRESS.md](PROGRESS.md) for the
-> current state and [CLAUDE.md](CLAUDE.md) for the full project scope and roadmap. New to the
-> workspace? See the navigation/shortcuts reference for your OS:
+> Status: early development (v0.1, pre-release). New to the workspace? See the
+> navigation/shortcuts reference for your OS:
 > [macOS](NAVIGATION-macOS.md) · [Windows](NAVIGATION-Windows.md) · [Linux](NAVIGATION-Linux.md).
 
 ## Features
@@ -146,7 +145,7 @@ Vulkan/Metal/DX12 driver (`wgpu`'s supported backends — no OpenGL fallback).
 
 ```sh
 cargo run -p mc_app   # launch the desktop app
-cargo run -p mc_cli   # headless renderer (see CLAUDE.md §8 for usage)
+cargo run -p mc_cli   # headless: regenerates the bundled example graphs and exports into ./out
 ```
 
 ## Contributing
@@ -175,9 +174,6 @@ other tool in this space.
 Its broader motivation — that ambitious, professional-grade creative software is worth
 building in the open, for artists — takes a cue from [ArtCraft](https://github.com/storytold/artcraft),
 an open-source creative tool for artists and filmmakers.
-
-See [INDEPENDENCE.md](INDEPENDENCE.md) for the project's working checklist on staying clearly
-independent as it grows.
 
 ---
 

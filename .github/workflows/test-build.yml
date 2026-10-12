@@ -4,7 +4,7 @@ name: Test Build
 # GitHub Release. This exists so Windows/Linux testers (neither OS the
 # maintainer runs herself) can download a real prebuilt binary from this
 # run's Actions page and try it, before an actual versioned release is
-# cut. See PROGRESS.md.
+# cut.
 on:
   push:
     branches: [main]

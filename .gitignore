@@ -3,3 +3,10 @@
 .DS_Store
 /out
 *.mov
+
+# Agent working notes — symlinked locally from the private
+# materialcreator-notes repo (github.com/Calla-Ji/materialcreator-notes),
+# not tracked here. See that repo's README for why.
+/CLAUDE.md
+/PROGRESS.md
+/INDEPENDENCE.md

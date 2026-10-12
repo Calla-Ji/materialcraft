@@ -4,8 +4,7 @@ Thanks for your interest in MaterialCreator. A few ground rules before you open 
 
 ## Independence from Adobe Substance
 
-This project is independent and stays that way — see [INDEPENDENCE.md](INDEPENDENCE.md) for
-the full reasoning. Concretely, for any contribution:
+This project is independent and stays that way. Concretely, for any contribution:
 
 - **Don't submit code, text, icons, or assets derived from Adobe Substance 3D Designer, the
   Substance Automation Toolkit, any Substance SDK, or Adobe's documentation.** That includes
@@ -28,12 +27,23 @@ the right to submit it under this project's license. Use `git commit -s`, which 
 Signed-off-by: Your Name <your.email@example.com>
 ```
 
+## Project layout
+
+A Cargo workspace: `mc_core` (graph model, no GPU/UI dependency), `mc_gpu` (wgpu device/pipeline
+plumbing), `mc_nodes` (one `.rs` + one `.wgsl` compute shader per node, under `crates/mc_nodes/`),
+`mc_export` (PNG/EXR writing), `mc_app` (the eframe desktop UI), `mc_cli` (headless rendering,
+used by tests). Shared WGSL helpers (hashing, gradients, tiling) live in
+`crates/mc_nodes/shaders/common.wgsl` — reuse them rather than duplicating noise/hash code in a
+new node's shader.
+
 ## Before opening a PR
 
-- Read [CLAUDE.md](CLAUDE.md) for the project's scope, architecture, and working rules.
+- Every generator must be periodic over the texture domain, and every filter must sample with
+  wrap/repeat addressing — texture tiling is non-negotiable here. New nodes need their own
+  tiling and determinism test (same graph + seed = bit-identical output); bug fixes need a
+  regression test where practical.
 - `cargo fmt --all` and `cargo clippy --workspace -- -D warnings` must pass clean.
-- `cargo test --workspace` must pass. New nodes need their own tiling and determinism tests
-  (CLAUDE.md §6.7); bug fixes need a regression test where practical.
+- `cargo test --workspace` must pass.
 - Keep commits conventional (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`) and scoped to one
   logical change each.
 

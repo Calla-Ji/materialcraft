@@ -2,8 +2,8 @@
 
 Every node in MaterialCreator is implemented from scratch in Rust/WGSL against the general,
 published technique it's named after — never against another tool's code, documentation, or
-internal file formats (see [INDEPENDENCE.md](INDEPENDENCE.md)). This file records which
-published technique each node builds on, as the paper trail for that.
+internal file formats. This file records which published technique each node builds on, as the
+paper trail for that.
 
 ## Noise & patterns
 
@@ -42,7 +42,7 @@ published technique each node builds on, as the paper trail for that.
   no-op on any input. The box blur itself is computed with a sliding-window running sum (one
   thread per row/column, add the texel entering the window and subtract the one leaving it) —
   a standard, well-known box-filter technique, chosen here over a fixed-stride subsample after
-  the latter produced a visible staircase artifact on hard edges (see PROGRESS.md).
+  the latter produced a visible staircase artifact on hard edges.
 
 ## Stylize & glitch
 
