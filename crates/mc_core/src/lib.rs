@@ -19,5 +19,5 @@ pub use connection::Connection;
 pub use graph::{Graph, GraphError, GraphSettings, LoadError, NormalFormat, FORMAT_VERSION};
 pub use id::NodeId;
 pub use node::Node;
-pub use param::{GradientStop, ParamValue};
+pub use param::{GradientStop, ImageRef, ParamValue};
 pub use port::PortType;

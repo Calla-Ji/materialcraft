@@ -34,6 +34,7 @@ pub mod height_to_ao;
 pub mod height_to_normal;
 pub mod histogram_scan;
 pub mod hsl_adjust;
+pub mod image_import;
 pub mod invert;
 pub mod levels;
 pub mod ordered_dither;

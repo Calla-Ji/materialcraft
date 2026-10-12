@@ -63,6 +63,10 @@ pub enum ParamSpecKind {
         max: f32,
         default: [f32; 2],
     },
+    /// Image Import's "Load Image…" button + embed-or-reference toggle —
+    /// unlike every other kind, there's no meaningful static default beyond
+    /// "nothing loaded yet" (`ImageRef::default()`).
+    ImagePath,
 }
 
 impl ParamSpec {
@@ -76,6 +80,7 @@ impl ParamSpec {
             ParamSpecKind::Bool { default } => ParamValue::Bool(default),
             ParamSpecKind::Gradient { default } => ParamValue::Gradient(default.to_vec()),
             ParamSpecKind::Vec2 { default, .. } => ParamValue::Vec2(default),
+            ParamSpecKind::ImagePath => ParamValue::Image(mc_core::ImageRef::default()),
         }
     }
 }
@@ -1142,6 +1147,41 @@ static NODE_DEFS: &[NodeDef] = &[
                 default: [0.5, 0.5, 0.5, 1.0],
             },
         }],
+    },
+    NodeDef {
+        kind: "image_import",
+        display_name: "Image Import",
+        category: "Generators/Patterns",
+        tooltip: "Load your own color or grayscale image to use as a texture or pattern \
+                  source.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[
+            ParamSpec {
+                name: "image",
+                display_name: "Image",
+                tooltip: "Stretches to fill the tile (not tiled/repeated). Treated as a \
+                          standard sRGB-encoded color image \u{2014} most photos and textures \
+                          are.",
+                kind: ParamSpecKind::ImagePath,
+            },
+            ParamSpec {
+                name: "embed_in_graph",
+                display_name: "Embed in Graph File",
+                tooltip: "Off: the saved .mcgraph just remembers this file's path \u{2014} \
+                          small file, but breaks if you move/rename the image or share the \
+                          graph without it. On: the image's data is copied directly into the \
+                          .mcgraph, making it fully self-contained to share, at the cost of a \
+                          larger file. Only affects the next time you click Load Image \u{2014} \
+                          toggling it afterward doesn't retroactively re-embed or drop what's \
+                          already loaded.",
+                kind: ParamSpecKind::Bool { default: false },
+            },
+        ],
     },
     NodeDef {
         kind: "invert",

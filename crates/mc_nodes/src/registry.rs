@@ -12,8 +12,8 @@ use crate::{
     bevel, blend, block_shift, blur, channel_split, checker, clamp, clouds, curvature_from_normal,
     curve, data_corrupt, directional_blur, directional_warp, dither_pattern, edge_detect,
     fabric_generator, fractal_sum, gradient_linear, gradient_map, gradient_radial,
-    grayscale_conversion, height_to_ao, height_to_normal, histogram_scan, hsl_adjust, invert,
-    levels, ordered_dither, palette_dither, perlin, scanline_jitter, shape, simplex_noise,
+    grayscale_conversion, height_to_ao, height_to_normal, histogram_scan, hsl_adjust, image_import,
+    invert, levels, ordered_dither, palette_dither, perlin, scanline_jitter, shape, simplex_noise,
     slope_blur, thread_shape, threshold, tile_generator, transform2d, uniform_color, voronoi, warp,
     white_noise,
 };
@@ -175,6 +175,10 @@ pub fn evaluate(
                 "uniform_color" => {
                     let params = uniform_color::UniformColorParams::from_graph(&node.params);
                     uniform_color::dispatch(gpu, pool, &key, resolution, &params);
+                }
+                "image_import" => {
+                    let params = image_import::ImageImportParams::from_graph(&node.params);
+                    image_import::dispatch(gpu, pool, &key, resolution, &params);
                 }
                 "invert" => {
                     let input_key = texture_key(resolve_input("input")?);

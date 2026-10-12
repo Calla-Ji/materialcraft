@@ -23,6 +23,25 @@ impl std::hash::Hash for GradientStop {
     }
 }
 
+/// An image loaded into an Image Import node — either a reference to an
+/// external file (`path` only), or self-contained in the graph file itself
+/// (`embedded_base64` set, from the "Embed in graph file" option). Both
+/// exist because they're genuinely different trade-offs an artist might
+/// want depending on what they're building: linked files stay small and
+/// easy to re-point if the source changes, embedded files stay portable
+/// when sharing a `.mcgraph` with someone else. `path` is kept even when
+/// embedded, purely as a human-readable label ("loaded from sunset.jpg") —
+/// it's never read from disk again once embedded.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ImageRef {
+    pub path: Option<String>,
+    /// The original file's bytes, base64-encoded (not re-encoded into any
+    /// other format) — a plain `String` field needs no custom (de)serialize
+    /// impl, unlike a raw `Vec<u8>`, which `serde_json` would otherwise
+    /// write out as a very bloated array of per-byte numbers.
+    pub embedded_base64: Option<String>,
+}
+
 /// A single parameter's value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value")]
@@ -35,6 +54,7 @@ pub enum ParamValue {
     Vec2([f32; 2]),
     Seed(u32),
     Gradient(Vec<GradientStop>),
+    Image(ImageRef),
 }
 
 impl std::hash::Hash for ParamValue {
@@ -52,6 +72,10 @@ impl std::hash::Hash for ParamValue {
             ParamValue::Vec2(v) => v.iter().for_each(|c| c.to_bits().hash(state)),
             ParamValue::Seed(v) => v.hash(state),
             ParamValue::Gradient(stops) => stops.hash(state),
+            ParamValue::Image(image) => {
+                image.path.hash(state);
+                image.embedded_base64.hash(state);
+            }
         }
     }
 }
@@ -88,6 +112,13 @@ impl ParamValue {
     pub fn as_vec2(&self) -> Option<[f32; 2]> {
         match self {
             ParamValue::Vec2(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    pub fn as_image(&self) -> Option<&ImageRef> {
+        match self {
+            ParamValue::Image(v) => Some(v),
             _ => None,
         }
     }

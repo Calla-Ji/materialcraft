@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+base64 = "0.23.1"
+image = "0.25.10"
 log = "0.4.34"
 mc_core = { version = "0.1.0", path = "../mc_core" }
 mc_export = { version = "0.1.0", path = "../mc_export" }

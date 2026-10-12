@@ -18,6 +18,7 @@ pub fn icon_for_kind(kind: &str) -> char {
         "tile_generator" => '\u{e9b0}',           // grid_view
         "fabric_generator" => '\u{f19e}',         // checkroom
         "thread_shape" => '\u{e91a}',             // line_weight
+        "image_import" => '\u{e43e}',             // add_photo_alternate
         "shape" => '\u{e574}',                    // category
         "gradient_linear" => '\u{e3e9}',          // gradient
         "gradient_radial" => '\u{e3a2}',          // blur_circular

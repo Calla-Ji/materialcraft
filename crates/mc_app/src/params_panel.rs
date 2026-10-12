@@ -282,6 +282,71 @@ fn show_inner(
                     );
                 }
             }
+            mc_nodes::defs::ParamSpecKind::ImagePath => {
+                let image_ref = current
+                    .as_ref()
+                    .and_then(mc_core::ParamValue::as_image)
+                    .cloned()
+                    .unwrap_or_default();
+                // Whether the *next* load embeds the file's bytes into the
+                // graph or just remembers its path — read from the sibling
+                // "embed_in_graph" Bool param (its own checkbox renders via
+                // the ordinary Bool case above, same loop).
+                let embed_next_load = current_params
+                    .get("embed_in_graph")
+                    .and_then(mc_core::ParamValue::as_bool)
+                    .unwrap_or(false);
+
+                ui.horizontal(|ui| {
+                    ui.label(param.display_name);
+                    if ui.button("Load Image\u{2026}").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter(
+                                "Image",
+                                &["png", "jpg", "jpeg", "bmp", "tga", "gif", "webp"],
+                            )
+                            .pick_file()
+                        {
+                            let path_string = path.display().to_string();
+                            let embedded_base64 = embed_next_load
+                                .then(|| std::fs::read(&path).ok())
+                                .flatten()
+                                .map(|bytes| {
+                                    use base64::Engine;
+                                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                                });
+                            commit_once(
+                                graph,
+                                history,
+                                id,
+                                param.name,
+                                mc_core::ParamValue::Image(mc_core::ImageRef {
+                                    path: Some(path_string),
+                                    embedded_base64,
+                                }),
+                            );
+                        }
+                    }
+                });
+                let status = match (&image_ref.path, image_ref.embedded_base64.is_some()) {
+                    (Some(path), true) => format!(
+                        "Embedded: {}",
+                        std::path::Path::new(path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(path)
+                    ),
+                    (Some(path), false) => format!(
+                        "Linked: {}",
+                        std::path::Path::new(path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(path)
+                    ),
+                    (None, _) => "(none loaded)".to_string(),
+                };
+                ui.weak(status).on_hover_text(param.tooltip);
+            }
         }
     }
 }
