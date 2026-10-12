@@ -24,6 +24,7 @@ mod dither_common;
 pub mod dither_pattern;
 pub mod edge_detect;
 pub mod export;
+pub mod fabric_generator;
 pub mod fractal_sum;
 pub mod gradient_linear;
 pub mod gradient_map;

@@ -760,6 +760,133 @@ static NODE_DEFS: &[NodeDef] = &[
         ],
     },
     NodeDef {
+        kind: "fabric_generator",
+        display_name: "Fabric Generator",
+        category: "Generators/Patterns",
+        tooltip: "Woven and knit base shapes for building fabric materials from scratch.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "weave_type",
+                display_name: "Weave Type",
+                tooltip: "Which thread/stitch structure to generate. Each type only uses some \
+                          of the params below \u{2014} see their own tooltips.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::fabric_generator::WeaveType::NAMES,
+                    default: "Plain Weave",
+                },
+            },
+            ParamSpec {
+                name: "rows",
+                display_name: "Rows",
+                tooltip: "Thread/stitch density, top to bottom. Keep even for seamless tiling.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 24,
+                },
+            },
+            ParamSpec {
+                name: "columns",
+                display_name: "Columns",
+                tooltip: "Thread/stitch density, left to right. Keep even for seamless tiling \
+                          (and a multiple of Twill Count / Rib Width \u{d7} 2 for those weave \
+                          types).",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 24,
+                },
+            },
+            ParamSpec {
+                name: "thread_width",
+                display_name: "Thread Width",
+                tooltip: "How much of each thread's own cell it fills \u{2014} higher means \
+                          less gap between threads.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 1.0,
+                    default: 0.85,
+                },
+            },
+            ParamSpec {
+                name: "thread_roundness",
+                display_name: "Thread Roundness",
+                tooltip: "0 is a flat ribbon, 1 is a round thread cross-section.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.6,
+                },
+            },
+            ParamSpec {
+                name: "thread_group_size",
+                display_name: "Thread Group Size",
+                tooltip: "Plain Weave only: threads per group acting as one woven unit. 1 is a \
+                          classic plain weave; 2 or more groups threads into blocks, the \
+                          Basket Weave look.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 6,
+                    default: 1,
+                },
+            },
+            ParamSpec {
+                name: "twill_count",
+                display_name: "Twill Count",
+                tooltip: "Twill only: the diagonal weave stripe's repeat period \u{2014} \
+                          lower is a steeper, tighter diagonal.",
+                kind: ParamSpecKind::Int {
+                    min: 2,
+                    max: 8,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "rib_width",
+                display_name: "Rib Width",
+                tooltip: "Rib Knit only: how many columns wide each rib stripe is.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 6,
+                    default: 1,
+                },
+            },
+            ParamSpec {
+                name: "size_jitter",
+                display_name: "Size Jitter",
+                tooltip: "Per-thread/stitch random width variation, for a less mechanically \
+                          perfect look.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.06,
+                },
+            },
+            ParamSpec {
+                name: "luminance_jitter",
+                display_name: "Luminance Jitter",
+                tooltip: "Per-thread/stitch random brightness variation.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.1,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the per-thread/stitch randomness.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+        ],
+    },
+    NodeDef {
         kind: "shape",
         display_name: "Shape",
         category: "Generators/Patterns",
