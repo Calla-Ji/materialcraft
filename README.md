@@ -27,8 +27,10 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
   Color debug mode, an Exposure slider, and a Pixel/Nearest filtering toggle for inspecting
   dither/pixel-art materials crisply. The Alpha output channel drives real transparency in the
   preview, not just an exported mask.
-- **Seamless tiling, guaranteed.** Every generator is periodic and every filter samples with
-  wrap-around addressing; each node ships with its own automated tiling test.
+- **Seamless tiling, guaranteed — with an escape hatch.** Every generator is periodic and every
+  filter samples with wrap-around addressing by default; each node ships with its own automated
+  tiling test. Nodes that read past a tile's edge (an offset, a blur, a noise lattice, ...)
+  also expose a per-axis Tiling Mode, for the times you want that edge to clip instead of wrap.
   Resolution-independent by design — a graph looks the same at 512px and 4096px, detail
   aside.
 - **Deterministic.** Same graph, same seed, same pixels — every time, on the same GPU.
