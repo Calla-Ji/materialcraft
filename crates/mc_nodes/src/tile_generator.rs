@@ -341,4 +341,37 @@ mod tests {
             "different shape_size values should produce different output"
         );
     }
+
+    /// A twisted Thread is a valid Shape input too (any Gray-output node
+    /// is) — checks the owner's own reported scenario of wiring Thread
+    /// straight into Pattern Generator, not just into Fabric Generator.
+    #[test]
+    fn a_twisted_thread_used_as_a_shape_still_tiles_seamlessly() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+
+        crate::thread_shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "thread",
+            RESOLUTION,
+            &crate::thread_shape::ThreadShapeParams {
+                ply_count: 2,
+                thickness: 0.73,
+                roundness: 0.32,
+                twist_cycles: 2,
+                twist_direction: crate::thread_shape::TwistDirection::Z,
+            },
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("thread"),
+            "with_thread",
+            RESOLUTION,
+            &TileGeneratorParams::default(),
+        );
+        let pixels = gpu.read_rgba8(pool.texture("with_thread").unwrap(), RESOLUTION);
+        assert_tiles_seamlessly(&pixels, RESOLUTION);
+    }
 }

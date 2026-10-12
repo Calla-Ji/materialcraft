@@ -295,6 +295,32 @@ mod tests {
         );
     }
 
+    /// A screenshot showed the first overlap margin (since tightened)
+    /// leaving an actual black void down the bundle's centerline at the
+    /// moment its plies were furthest apart — not a subtle groove, a real
+    /// gap splitting the thread into two disconnected ribbons. 2 plies is
+    /// the worst case (see the shader's own comment on why), so that's
+    /// what this checks: the centerline should stay covered by *some*
+    /// strand at every point along the thread's length.
+    #[test]
+    fn two_ply_never_shows_a_gap_down_the_centerline() {
+        let pixels = render(&ThreadShapeParams {
+            ply_count: 2,
+            thickness: 0.73,
+            roundness: 0.32,
+            twist_cycles: 2,
+            twist_direction: TwistDirection::Z,
+        });
+        let r = RESOLUTION as usize;
+        let row = r / 2;
+        let min_on_centerline = (0..r).map(|x| pixels[(row * r + x) * 4]).min().unwrap();
+        assert!(
+            min_on_centerline > 0,
+            "the bundle's centerline went fully black at some point along its length \
+             (min={min_on_centerline}) — the plies' orbit left a real gap, not just a groove"
+        );
+    }
+
     #[test]
     fn zero_twist_cycles_is_constant_along_its_length_even_with_multiple_plies() {
         let pixels = render(&ThreadShapeParams {

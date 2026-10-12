@@ -81,20 +81,29 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     // Pack `ply_count` strands evenly around a circle of `orbit_radius`,
-    // sized so neighboring strands just touch — with a small gap left over
-    // for the visible groove real plied yarn shows between its plies —
-    // rather than each strand being nearly as wide as the orbit itself.
-    // Overlapping, similarly-sized strands is what turned the first version
-    // of this into a moire lattice instead of distinct plies: for N
-    // strands spaced evenly around radius R, they just touch when
-    // strand_radius == R * sin(PI / N); orbit_radius + strand_half_width
-    // reaching exactly `half_w` keeps the whole bundle filling the
-    // thickness the slider promises.
+    // sized so every strand's own circle overlaps its neighbors enough
+    // that the bundle's cross-section never shows bare space down its
+    // centerline — unlike the first version of this (each strand nearly as
+    // wide as the whole orbit), which read as a moire lattice, instead of
+    // sizing strands from a "just touching" baseline, which turned out to
+    // leave an actual gap: for N strands evenly spaced around radius R,
+    // the single strand closest to crossing dead center (local_y == 0) can
+    // be up to PI/N of orbit away from it at any moment — "just touching"
+    // sizes the strand to reach exactly that distance and no further,
+    // which is an exact knife-edge (reaches zero coverage, not a visible
+    // hole, only at the one instant every strand is simultaneously at its
+    // worst-case offset) that a screenshot showed reading as a real void,
+    // not a subtle groove. `overlap` pushes every strand comfortably past
+    // that minimum instead. `orbit_radius + strand_half_width` still
+    // reaches exactly `half_w`, so the bundle still fills the thickness
+    // the slider promises; the groove look between plies that real yarn
+    // has still comes through from each strand's own profile naturally
+    // falling off toward its edge, not from an artificial shortfall.
     let n = f32(ply_count);
-    let half_gap_angle = PI / n;
-    let gap_factor = 0.82;
-    let orbit_radius = half_w / (1.0 + gap_factor * sin(half_gap_angle));
-    let strand_half_width = orbit_radius * gap_factor * sin(half_gap_angle);
+    let worst_case_offset_angle = PI / n;
+    let overlap = 1.18;
+    let orbit_radius = half_w / (1.0 + overlap * sin(worst_case_offset_angle));
+    let strand_half_width = orbit_radius * overlap * sin(worst_case_offset_angle);
 
     // Each strand orbits the bundle's center as `uv.x` advances — an
     // integer number of full turns (`twist_cycles`) across this texture's
