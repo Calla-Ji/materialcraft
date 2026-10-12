@@ -88,7 +88,47 @@ fn show_inner(
     }
     ui.separator();
 
+    // Pattern Generator: once a custom Shape is wired in, Rows and Columns
+    // collapse into one linked "Tile Count" slider instead of their normal
+    // independent ones below — a custom shape stamped into an uneven grid
+    // would read as visibly stretched, unlike the built-in brick/grid shape
+    // (which *wants* independent Rows/Columns, e.g. the classic 6x4 brick
+    // layout). Only this one node/case; not a generic ParamSpecKind, since
+    // nothing else in the app needs two params kept in lockstep like this.
+    let linked_tile_count = node_kind == "tile_generator" && graph.upstream(id, "shape").is_some();
+    if linked_tile_count {
+        let rows = current_params
+            .get("rows")
+            .and_then(mc_core::ParamValue::as_int)
+            .unwrap_or(4);
+        let columns = current_params
+            .get("columns")
+            .and_then(mc_core::ParamValue::as_int)
+            .unwrap_or(4);
+        let mut tile_count = rows.max(columns);
+        let response = ui
+            .add(egui::Slider::new(&mut tile_count, 1..=32).text("Tile Count"))
+            .on_hover_text(
+                "Rows and Columns together, locked to the same value while a custom Shape \
+                 is wired in, so it isn't stretched across an uneven grid.",
+            );
+        if response.changed() {
+            commit_once_multi(
+                graph,
+                history,
+                id,
+                &[
+                    ("rows", mc_core::ParamValue::Int(tile_count)),
+                    ("columns", mc_core::ParamValue::Int(tile_count)),
+                ],
+            );
+        }
+    }
+
     for param in def.params {
+        if linked_tile_count && (param.name == "rows" || param.name == "columns") {
+            continue;
+        }
         if !mc_nodes::defs::param_is_relevant(&node_kind, param.name, &current_params) {
             continue;
         }
@@ -423,5 +463,33 @@ fn commit_once(
                 value: old_value,
             }]);
         }
+    }
+}
+
+/// Like `commit_once`, but for several params that should feel like one
+/// user action (e.g. Pattern Generator's linked Tile Count setting both
+/// Rows and Columns) — one undo step for all of them together, rather than
+/// needing Undo pressed once per param to fully revert the edit.
+fn commit_once_multi(
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    id: mc_core::NodeId,
+    new_values: &[(&str, mc_core::ParamValue)],
+) {
+    let mut inverse = Vec::new();
+    for (name, new_value) in new_values {
+        let old = graph.node(id).and_then(|n| n.params.get(*name).cloned());
+        if graph.set_param(id, name, new_value.clone()).is_ok() {
+            if let Some(old_value) = old {
+                inverse.push(mc_core::Command::SetParam {
+                    id,
+                    name: name.to_string(),
+                    value: old_value,
+                });
+            }
+        }
+    }
+    if !inverse.is_empty() {
+        history.record_applied(inverse);
     }
 }
