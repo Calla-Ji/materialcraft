@@ -364,6 +364,21 @@ pub fn param_is_relevant(
             _ => true,
         };
     }
+    if node_kind == "thread_shape" {
+        let ply_count = current_params
+            .get("ply_count")
+            .and_then(ParamValue::as_int)
+            .unwrap_or(1);
+        let twist_cycles = current_params
+            .get("twist_cycles")
+            .and_then(ParamValue::as_int)
+            .unwrap_or(0);
+        return match param_name {
+            "twist_cycles" => ply_count >= 2,
+            "twist_direction" => ply_count >= 2 && twist_cycles > 0,
+            _ => true,
+        };
+    }
     if node_kind != "shape" {
         return true;
     }
@@ -960,8 +975,8 @@ static NODE_DEFS: &[NodeDef] = &[
         kind: "thread_shape",
         display_name: "Thread",
         category: "Generators/Patterns",
-        tooltip: "A single fiber cross-section \u{2014} wire into Fabric Generator's Thread \
-                  input to control what its threads look like.",
+        tooltip: "A single fiber's cross-section and twist \u{2014} wire into Fabric \
+                  Generator's Thread input to control what its threads look like.",
         inputs: &[],
         outputs: &[PortSpec {
             name: "output",
@@ -970,18 +985,20 @@ static NODE_DEFS: &[NodeDef] = &[
         }],
         params: &[
             ParamSpec {
-                name: "fiber_type",
-                display_name: "Fiber Type",
-                tooltip: "Which fiber cross-section to generate.",
-                kind: ParamSpecKind::Enum {
-                    options: &crate::thread_shape::FiberType::NAMES,
-                    default: "Tube",
+                name: "ply_count",
+                display_name: "Ply Count",
+                tooltip: "How many strands are twisted together. 1 is a plain single strand; \
+                          2-4 match 2-ply/3-ply/4-ply yarn.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 4,
+                    default: 1,
                 },
             },
             ParamSpec {
                 name: "thickness",
                 display_name: "Thickness",
-                tooltip: "How much of the tile's height the fiber fills.",
+                tooltip: "How much of the tile's height the whole fiber bundle fills.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
@@ -991,11 +1008,32 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "roundness",
                 display_name: "Roundness",
-                tooltip: "0 is a flat ribbon, 1 is a round thread cross-section.",
+                tooltip: "0 is a flat ribbon, 1 is a round cross-section (per strand).",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
                     default: 0.3,
+                },
+            },
+            ParamSpec {
+                name: "twist_cycles",
+                display_name: "Twist Cycles",
+                tooltip: "2+ plies only: how many full twist rotations repeat along the \
+                          thread. 0 is straight, untwisted parallel plies.",
+                kind: ParamSpecKind::Int {
+                    min: 0,
+                    max: 8,
+                    default: 2,
+                },
+            },
+            ParamSpec {
+                name: "twist_direction",
+                display_name: "Twist Direction",
+                tooltip: "Which way the plies spiral (standard textile S/Z-twist terms) \u{2014} \
+                          only visible with 2+ plies and at least 1 twist cycle.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::thread_shape::TwistDirection::NAMES,
+                    default: "Z",
                 },
             },
         ],

@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // fabric_generator.wgsl — Generators / Patterns / Fabric Generator
 //
-// Inputs:  `fiber_tex` — a single fiber's cross-section (see
-//          `thread_shape.wgsl`/the Thread node): a horizontal bar spanning
-//          the input's full width, constant along it, varying by height —
-//          sampled as the thread shape for Plain Weave, Twill, and Rib
-//          Knit's straight thread segments. If nothing's wired into Thread
-//          in the graph, `mc_nodes::fabric_generator::dispatch` renders one
-//          internally from `thread_width`/`thread_roundness` below, so this
-//          is never actually unbound. Stockinette's loops aren't straight
-//          thread segments with a cross-section — it keeps its own built-in
-//          "V" stitch shape regardless of what's wired into Fiber.
+// Inputs:  `fiber_tex` — a single fiber's own pattern (see
+//          `thread_shape.wgsl`/the Thread node): Y is cross-section, X is
+//          position along the fiber's length (constant along X for an
+//          untwisted single-ply fiber; it only actually varies along X once
+//          Thread has 2+ twisted plies) — sampled as the thread shape for
+//          Plain Weave, Twill, and Rib Knit's straight thread segments, with
+//          each grid cell's own local coordinate standing in for "how far
+//          along this cell's stretch of the thread" (see `fiber_height`'s
+//          own doc comment for why that's seamless cell-to-cell with no
+//          extra bookkeeping). If nothing's wired into Thread in the graph,
+//          `mc_nodes::fabric_generator::dispatch` renders one internally
+//          from `thread_width`/`thread_roundness` below, so this is never
+//          actually unbound. Stockinette's loops aren't straight thread
+//          segments with a cross-section — it keeps its own built-in "V"
+//          stitch shape regardless of what's wired into Fiber.
 // Output:  `output` — a height-like value tracing a woven or knit fabric's
 //          thread structure, 0 in the valleys between threads up to 1 on a
 //          thread's own ridge. Chain into Height to Normal the same way
@@ -72,18 +77,19 @@ fn wrap_i(v: i32, n: i32) -> i32 {
     return ((v % n) + n) % n;
 }
 
-// Reads `fiber_tex`'s cross-section at signed distance `t` (-0.5..0.5) from
-// a thread's centerline, with `width_scale` stretching/shrinking which part
-// of the fiber's own profile that maps to — the per-crossing jitter's
-// stand-in for narrowing/widening an actual thread, since warping the
-// sampled image itself isn't on the table here. `fiber_tex` is constant
-// along its own width (see the module doc comment), so which x it's read at
-// doesn't matter; the center column is as good as any.
-fn fiber_height(t: f32, width_scale: f32) -> f32 {
+// Reads `fiber_tex` at cross-section distance `t` (-0.5..0.5, `width_scale`
+// stretching/shrinking which part of the fiber's own profile that maps to —
+// the per-crossing jitter's stand-in for narrowing/widening an actual
+// thread) and `along_frac` (0..1, this cell's fractional position along the
+// thread's own length — see `fiber_tex`'s own doc comment on why each
+// cell's independent `fract()` already lines up seamlessly cell-to-cell
+// without any extra global coordinate).
+fn fiber_height(t: f32, along_frac: f32, width_scale: f32) -> f32 {
     let size = i32(params.resolution);
     let sample_t = clamp(t / max(width_scale, 0.0001), -0.5, 0.5);
     let y = clamp(i32((sample_t + 0.5) * f32(size)), 0, size - 1);
-    return textureLoad(fiber_tex, vec2<i32>(size / 2, y), 0).r;
+    let x = clamp(i32(fract(along_frac) * f32(size)), 0, size - 1);
+    return textureLoad(fiber_tex, vec2<i32>(x, y), 0).r;
 }
 
 @compute @workgroup_size(8, 8)
@@ -112,7 +118,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if params.weave_type == WEAVE_RIB_KNIT {
         let rib_width = max(i32(params.rib_width), 1);
         let raised = wrap_i(col, rib_width * 2) < rib_width;
-        var h = fiber_height(xp, width_scale);
+        var h = fiber_height(xp, yp + 0.5, width_scale);
         // A gentle per-row undulation hints at a knit column's stacked
         // loops without simulating each individual one.
         h = h * (0.9 + 0.1 * cos(yp * 6.28318530718));
@@ -144,8 +150,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         // Plain Weave and Twill both cross a vertical and a horizontal
         // thread at every cell; they only differ in which thread is "on
         // top" at a given crossing.
-        let v_h = fiber_height(xp, width_scale);
-        let h_h = fiber_height(yp, width_scale);
+        let v_h = fiber_height(xp, yp + 0.5, width_scale);
+        let h_h = fiber_height(yp, xp + 0.5, width_scale);
 
         var vertical_on_top: bool;
         if params.weave_type == WEAVE_TWILL {

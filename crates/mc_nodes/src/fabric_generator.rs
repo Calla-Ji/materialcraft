@@ -170,9 +170,10 @@ pub fn dispatch(
                 &default_fiber_key,
                 resolution,
                 &crate::thread_shape::ThreadShapeParams {
-                    fiber_type: crate::thread_shape::FiberType::Tube,
+                    ply_count: 1,
                     thickness: params.thread_width,
                     roundness: params.thread_roundness,
+                    ..crate::thread_shape::ThreadShapeParams::default()
                 },
             );
             &default_fiber_key
@@ -402,9 +403,10 @@ mod tests {
             "thin_fiber",
             RESOLUTION,
             &crate::thread_shape::ThreadShapeParams {
-                fiber_type: crate::thread_shape::FiberType::Tube,
+                ply_count: 1,
                 thickness: 0.1,
                 roundness: 0.0,
+                ..crate::thread_shape::ThreadShapeParams::default()
             },
         );
         dispatch(
@@ -420,6 +422,70 @@ mod tests {
         assert_ne!(
             fallback, with_fiber,
             "wiring in a very different fiber shape should change Fabric Generator's output"
+        );
+    }
+
+    /// A twisted multi-ply Thread should actually show its twist in the
+    /// woven result, not just at the Thread node's own preview — end-to-end
+    /// proof the per-cell along-length sampling (`fiber_height`'s `along`
+    /// parameter) is wired up correctly.
+    #[test]
+    fn a_twisted_fiber_changes_the_output_differently_than_an_untwisted_one() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let params = FabricGeneratorParams {
+            rows: 24,
+            columns: 24,
+            size_jitter: 0.0,
+            ..FabricGeneratorParams::default()
+        };
+
+        crate::thread_shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "straight",
+            RESOLUTION,
+            &crate::thread_shape::ThreadShapeParams {
+                ply_count: 3,
+                twist_cycles: 0,
+                thickness: 0.7,
+                ..crate::thread_shape::ThreadShapeParams::default()
+            },
+        );
+        crate::thread_shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "twisted",
+            RESOLUTION,
+            &crate::thread_shape::ThreadShapeParams {
+                ply_count: 3,
+                twist_cycles: 3,
+                thickness: 0.7,
+                ..crate::thread_shape::ThreadShapeParams::default()
+            },
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("straight"),
+            "with_straight",
+            RESOLUTION,
+            &params,
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("twisted"),
+            "with_twisted",
+            RESOLUTION,
+            &params,
+        );
+        let with_straight = gpu.read_rgba8(pool.texture("with_straight").unwrap(), RESOLUTION);
+        let with_twisted = gpu.read_rgba8(pool.texture("with_twisted").unwrap(), RESOLUTION);
+
+        assert_ne!(
+            with_straight, with_twisted,
+            "a twisted 3-ply fiber should weave differently than the same fiber untwisted"
         );
     }
 }

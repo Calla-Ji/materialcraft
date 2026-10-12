@@ -1,74 +1,77 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Generators / Patterns / Thread.
 //!
-//! Display name: "Thread". Tooltip: "A single fiber cross-section — wire
-//! into Fabric Generator's Fiber input to control what its threads look
-//! like."
+//! Display name: "Thread". Tooltip: "A single fiber's cross-section and
+//! twist — wire into Fabric Generator's Thread input to control what its
+//! threads look like."
 //!
 //! One shape, not tiled — the same relationship to Fabric Generator that
 //! Shape has to Pattern Generator's own Shape input: a dedicated shape
 //! generator feeding an arranger node, rather than the arranger owning the
 //! shape itself.
+//!
+//! Redesigned around real yarn-construction references (the owner's own
+//! textile reference book, not assumed from a generic "rope" mental image):
+//! a twisted/plied yarn's visual identity comes from the strands' helical
+//! path *along* the thread's length (the Yarn Twist S/Z-direction and
+//! twist-level concepts every ply-yarn reference covers), not from its
+//! cross-section silhouette alone — the first version of this node only
+//! varied cross-section and, correctly, didn't read as "rope" at all. See
+//! the shader's own doc comment for the periodicity requirement this
+//! drives.
+//!
+//! Known limitation, found while testing rather than assumed: Twist
+//! Direction has no visible effect at exactly `ply_count` 2. Two strands
+//! 180° apart mirror onto *each other* under a direction flip, so the
+//! combined (max-of-both) height field is identical either way — there's
+//! no separate "which strand is on top" depth cue to break that symmetry.
+//! 3+ plies don't have that even symmetry, so direction is visible there.
 
 use crate::shaders::full_source;
 
 const NODE_KIND: &str = "thread_shape";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FiberType {
-    /// A round (or, at `roundness` 0, flat-ribbon) cross-section.
-    Tube,
-    /// Three overlapping strand-sized Tubes side by side — the scalloped
-    /// silhouette a 3-strand twisted rope has end-on. Not a literal twist
-    /// running along the thread's length — see `rope_profile`'s own doc
-    /// comment in the shader for why this is the closest fit within
-    /// Thread's "one cross-section, constant along its length" shape.
-    Rope,
-    // More kinds that fit this same "one cross-section" shape can go here
-    // the way Shape grew its own kinds over time. Loop/knit-stitch shapes
-    // don't fit it at all (they're not a straight thread's cross-section),
-    // and are planned as their own, separate node instead.
+pub enum TwistDirection {
+    S,
+    Z,
 }
 
-impl FiberType {
-    pub const NAMES: [&'static str; 2] = ["Tube", "Rope"];
+impl TwistDirection {
+    pub const NAMES: [&'static str; 2] = ["S", "Z"];
 
     fn as_u32(self) -> u32 {
         match self {
-            FiberType::Tube => 0,
-            FiberType::Rope => 1,
+            TwistDirection::S => 0,
+            TwistDirection::Z => 1,
         }
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
-            "Tube" => Some(FiberType::Tube),
-            "Rope" => Some(FiberType::Rope),
+            "S" => Some(TwistDirection::S),
+            "Z" => Some(TwistDirection::Z),
             _ => None,
         }
     }
 }
 
 pub struct ThreadShapeParams {
-    pub fiber_type: FiberType,
+    pub ply_count: u32,
     pub thickness: f32,
     pub roundness: f32,
+    pub twist_cycles: u32,
+    pub twist_direction: TwistDirection,
 }
 
 impl Default for ThreadShapeParams {
     fn default() -> Self {
         Self {
-            fiber_type: FiberType::Tube,
-            // Deliberately *not* the same as Fabric Generator's own fallback
-            // defaults (0.85/0.6) — a freshly-connected Thread at its
-            // defaults used to look pixel-identical to not connecting one at
-            // all, which read as "the connection isn't doing anything" even
-            // though it genuinely was (confirmed via a diagnostic test).
-            // Thinner and flatter here makes the very first connection
-            // visibly different without the artist needing to tweak a
-            // slider first just to confirm the wiring works.
+            ply_count: 1,
             thickness: 0.5,
             roundness: 0.3,
+            twist_cycles: 2,
+            twist_direction: TwistDirection::Z,
         }
     }
 }
@@ -77,13 +80,11 @@ impl ThreadShapeParams {
     pub fn from_graph(params: &std::collections::BTreeMap<String, mc_core::ParamValue>) -> Self {
         let defaults = Self::default();
         Self {
-            fiber_type: params
-                .get("fiber_type")
-                .and_then(|v| match v {
-                    mc_core::ParamValue::Enum(name) => FiberType::from_name(name),
-                    _ => None,
-                })
-                .unwrap_or(defaults.fiber_type),
+            ply_count: params
+                .get("ply_count")
+                .and_then(mc_core::ParamValue::as_int)
+                .map(|v| v.max(1) as u32)
+                .unwrap_or(defaults.ply_count),
             thickness: params
                 .get("thickness")
                 .and_then(mc_core::ParamValue::as_float)
@@ -92,16 +93,30 @@ impl ThreadShapeParams {
                 .get("roundness")
                 .and_then(mc_core::ParamValue::as_float)
                 .unwrap_or(defaults.roundness),
+            twist_cycles: params
+                .get("twist_cycles")
+                .and_then(mc_core::ParamValue::as_int)
+                .map(|v| v.max(0) as u32)
+                .unwrap_or(defaults.twist_cycles),
+            twist_direction: params
+                .get("twist_direction")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TwistDirection::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.twist_direction),
         }
     }
 }
 
-fn pack_params(resolution: u32, params: &ThreadShapeParams) -> [u8; 16] {
-    let mut bytes = [0u8; 16];
+fn pack_params(resolution: u32, params: &ThreadShapeParams) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
     bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
-    bytes[4..8].copy_from_slice(&params.fiber_type.as_u32().to_le_bytes());
+    bytes[4..8].copy_from_slice(&params.ply_count.to_le_bytes());
     bytes[8..12].copy_from_slice(&params.thickness.to_le_bytes());
     bytes[12..16].copy_from_slice(&params.roundness.to_le_bytes());
+    bytes[16..20].copy_from_slice(&params.twist_cycles.to_le_bytes());
+    bytes[20..24].copy_from_slice(&params.twist_direction.as_u32().to_le_bytes());
     bytes
 }
 
@@ -167,7 +182,7 @@ pub fn dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch, FiberType, ThreadShapeParams};
+    use super::{dispatch, ThreadShapeParams, TwistDirection};
     use crate::test_support::RESOLUTION;
 
     fn render(params: &ThreadShapeParams) -> Vec<u8> {
@@ -186,7 +201,10 @@ mod tests {
 
     #[test]
     fn centerline_is_brighter_than_the_edge() {
-        let pixels = render(&ThreadShapeParams::default());
+        let pixels = render(&ThreadShapeParams {
+            ply_count: 1,
+            ..ThreadShapeParams::default()
+        });
         let r = RESOLUTION as usize;
         let center = pixels[(r / 2 * r + r / 2) * 4];
         let edge = pixels[(0 * r + r / 2) * 4];
@@ -199,6 +217,7 @@ mod tests {
     #[test]
     fn zero_thickness_is_blank() {
         let pixels = render(&ThreadShapeParams {
+            ply_count: 1,
             thickness: 0.0,
             ..ThreadShapeParams::default()
         });
@@ -211,10 +230,12 @@ mod tests {
     #[test]
     fn roundness_changes_the_profile() {
         let flat = render(&ThreadShapeParams {
+            ply_count: 1,
             roundness: 0.0,
             ..ThreadShapeParams::default()
         });
         let round = render(&ThreadShapeParams {
+            ply_count: 1,
             roundness: 1.0,
             ..ThreadShapeParams::default()
         });
@@ -222,11 +243,14 @@ mod tests {
     }
 
     #[test]
-    fn constant_across_the_horizontal_axis() {
-        // The fiber is meant to be a bar spanning the full tile width, with
-        // no variation left-to-right — Fabric Generator relies on this to
-        // sample it at any arbitrary x.
-        let pixels = render(&ThreadShapeParams::default());
+    fn single_ply_is_constant_along_its_length() {
+        // Fabric Generator relies on sampling at any along-length position
+        // when there's nothing to twist (a single strand has no partner to
+        // orbit around).
+        let pixels = render(&ThreadShapeParams {
+            ply_count: 1,
+            ..ThreadShapeParams::default()
+        });
         let r = RESOLUTION as usize;
         let row = r / 4;
         let left = pixels[(row * r) * 4];
@@ -235,35 +259,37 @@ mod tests {
     }
 
     #[test]
-    fn every_fiber_type_name_round_trips() {
-        for name in FiberType::NAMES {
-            assert!(
-                FiberType::from_name(name).is_some(),
-                "{name:?} should parse"
-            );
-        }
-        assert!(FiberType::from_name("Nonsense").is_none());
-    }
-
-    #[test]
-    fn rope_looks_different_from_tube() {
-        let tube = render(&ThreadShapeParams {
-            fiber_type: FiberType::Tube,
-            ..ThreadShapeParams::default()
-        });
-        let rope = render(&ThreadShapeParams {
-            fiber_type: FiberType::Rope,
-            ..ThreadShapeParams::default()
-        });
-        assert_ne!(tube, rope);
-    }
-
-    #[test]
-    fn rope_is_constant_across_the_horizontal_axis() {
-        // Same requirement as Tube — Fabric Generator samples at a single
-        // fixed x regardless of fiber type.
+    fn multi_ply_varies_along_its_length_when_twisted() {
+        // The whole point of twist: unlike a single ply, a twisted 2+ ply
+        // thread's cross-section at a fixed height genuinely differs as you
+        // move along its length. Checks the full spread across a row
+        // rather than two specific columns — an orbiting strand's period
+        // for N plies is 2*PI/N, not 2*PI, so two arbitrarily-chosen
+        // columns can land exactly half a strand-period apart and
+        // coincidentally read identical without the pattern actually being
+        // constant (hit this for real while writing this test).
         let pixels = render(&ThreadShapeParams {
-            fiber_type: FiberType::Rope,
+            ply_count: 2,
+            twist_cycles: 2,
+            thickness: 0.6,
+            ..ThreadShapeParams::default()
+        });
+        let r = RESOLUTION as usize;
+        let row = r / 2 + r / 6; // off-center, where an orbiting strand sweeps through
+        let row_values: Vec<u8> = (0..r).map(|x| pixels[(row * r + x) * 4]).collect();
+        let min = *row_values.iter().min().unwrap();
+        let max = *row_values.iter().max().unwrap();
+        assert!(
+            max - min > 20,
+            "a twisted multi-ply thread should vary along its own length (min={min}, max={max})"
+        );
+    }
+
+    #[test]
+    fn zero_twist_cycles_is_constant_along_its_length_even_with_multiple_plies() {
+        let pixels = render(&ThreadShapeParams {
+            ply_count: 3,
+            twist_cycles: 0,
             ..ThreadShapeParams::default()
         });
         let r = RESOLUTION as usize;
@@ -273,26 +299,61 @@ mod tests {
         assert_eq!(left, right);
     }
 
-    /// A rope's 3 strands should show up as 3 separate bright bands with a
-    /// visible dip between them near the fiber's center, not one smooth
-    /// bump the way Tube reads.
     #[test]
-    fn rope_has_a_dip_between_strands() {
+    fn is_seamless_along_its_own_length() {
+        // twist_cycles must be a whole number of rotations across this
+        // texture's own width, or Fabric Generator's per-cell wraparound
+        // sampling would show a visible seam where the twist jumps. Uses
+        // the same calibrated seam-vs-interior check every other periodic
+        // node's tiling test uses, not a flat small-delta threshold — a
+        // sharp strand edge crossing the seam at a slightly different pixel
+        // center than its interior neighbors is the same ordinary texel-
+        // quantization noise every periodic generator here has, not a real
+        // discontinuity.
         let pixels = render(&ThreadShapeParams {
-            fiber_type: FiberType::Rope,
-            thickness: 1.0,
-            roundness: 1.0,
+            ply_count: 3,
+            twist_cycles: 3,
+            thickness: 0.7,
             ..ThreadShapeParams::default()
         });
-        let r = RESOLUTION as usize;
-        let col = r / 2;
-        let center = pixels[(r / 2 * r + col) * 4] as i32;
-        let between_strands = pixels[((r / 2 + r / 8) * r + col) * 4] as i32;
-        let strand_peak = pixels[((r / 2 + r / 4) * r + col) * 4] as i32;
-        assert!(
-            between_strands < center.min(strand_peak),
-            "expected a dip between strands (center={center}, between={between_strands}, \
-             strand_peak={strand_peak})"
-        );
+        crate::test_support::assert_tiles_seamlessly(&pixels, RESOLUTION);
+    }
+
+    /// 2-ply is a special case: with exactly 2 strands spaced 180° apart,
+    /// flipping twist direction just swaps which strand is which — the set
+    /// of occupied cross-section positions at any given point along the
+    /// length is identical either way, so a plain max-combined height field
+    /// (no separate "which strand is on top" depth cue) genuinely can't
+    /// show a difference. 3+ plies don't have that even-symmetry, so
+    /// direction is visible there — confirmed by this test actually
+    /// failing on 2-ply during development, not assumed.
+    #[test]
+    fn twist_direction_mirrors_the_spiral() {
+        let s_twist = render(&ThreadShapeParams {
+            ply_count: 3,
+            twist_cycles: 2,
+            twist_direction: TwistDirection::S,
+            thickness: 0.6,
+            ..ThreadShapeParams::default()
+        });
+        let z_twist = render(&ThreadShapeParams {
+            ply_count: 3,
+            twist_cycles: 2,
+            twist_direction: TwistDirection::Z,
+            thickness: 0.6,
+            ..ThreadShapeParams::default()
+        });
+        assert_ne!(s_twist, z_twist);
+    }
+
+    #[test]
+    fn every_twist_direction_name_round_trips() {
+        for name in TwistDirection::NAMES {
+            assert!(
+                TwistDirection::from_name(name).is_some(),
+                "{name:?} should parse"
+            );
+        }
+        assert!(TwistDirection::from_name("Nonsense").is_none());
     }
 }
