@@ -24,6 +24,7 @@
 //! and multi-scale layering (see `height_to_ao_dilate.wgsl`'s doc comment).
 
 use crate::shaders::full_source;
+use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "height_to_ao";
 const DILATE_NODE_KIND: &str = "height_to_ao_dilate";
@@ -46,10 +47,29 @@ fn dilate(
     output_key: &str,
     resolution: u32,
     radius_px: f32,
+    tiling_mode: TilingMode,
 ) {
     let temp_key = format!("{output_key}__dilate_temp");
-    dilate_pass(gpu, pool, input_key, &temp_key, resolution, 0, radius_px);
-    dilate_pass(gpu, pool, &temp_key, output_key, resolution, 1, radius_px);
+    dilate_pass(
+        gpu,
+        pool,
+        input_key,
+        &temp_key,
+        resolution,
+        0,
+        radius_px,
+        tiling_mode.wrap_x(),
+    );
+    dilate_pass(
+        gpu,
+        pool,
+        &temp_key,
+        output_key,
+        resolution,
+        1,
+        radius_px,
+        tiling_mode.wrap_y(),
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -61,6 +81,7 @@ fn dilate_pass(
     resolution: u32,
     direction: u32,
     radius_px: f32,
+    wrap: bool,
 ) {
     let input_view = pool
         .view(input_key)
@@ -74,6 +95,7 @@ fn dilate_pass(
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     param_bytes[4..8].copy_from_slice(&direction.to_le_bytes());
     param_bytes[8..12].copy_from_slice(&radius_px.to_le_bytes());
+    param_bytes[12..16].copy_from_slice(&(wrap as u32).to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("height_to_ao_dilate_params"),
         size: param_bytes.len() as u64,
@@ -132,6 +154,7 @@ pub struct HeightToAoParams {
     /// broad scales are fixed multiples of this (see `SCALE_MULTIPLIERS`).
     pub radius: f32,
     pub intensity: f32,
+    pub tiling_mode: TilingMode,
 }
 
 impl Default for HeightToAoParams {
@@ -139,6 +162,7 @@ impl Default for HeightToAoParams {
         Self {
             radius: 0.02,
             intensity: 2.0,
+            tiling_mode: TilingMode::default(),
         }
     }
 }
@@ -155,6 +179,13 @@ impl HeightToAoParams {
         Self {
             radius: float("radius", defaults.radius),
             intensity: float("intensity", defaults.intensity),
+            tiling_mode: params
+                .get("tiling_mode")
+                .and_then(|v| match v {
+                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    _ => None,
+                })
+                .unwrap_or(defaults.tiling_mode),
         }
     }
 }
@@ -176,7 +207,15 @@ pub fn dispatch(
         .map(|(i, multiplier)| {
             let dilate_key = format!("{output_key}__ao_dilate_{i}");
             let radius_px = (params.radius * multiplier * resolution as f32).max(1.0);
-            dilate(gpu, pool, input_key, &dilate_key, resolution, radius_px);
+            dilate(
+                gpu,
+                pool,
+                input_key,
+                &dilate_key,
+                resolution,
+                radius_px,
+                params.tiling_mode,
+            );
             dilate_key
         })
         .collect();
@@ -285,7 +324,7 @@ pub fn dispatch(
         resolution,
         &crate::blur::BlurParams {
             radius: params.radius * 0.5,
-            tiling_mode: crate::tiling::TilingMode::default(),
+            tiling_mode: params.tiling_mode,
         },
     );
 }
@@ -297,6 +336,7 @@ mod tests {
     use crate::perlin::{dispatch as perlin_dispatch, PerlinParams};
     use crate::shape::{dispatch as shape_dispatch, ShapeKind, ShapeParams};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
+    use crate::tiling::TilingMode;
     use crate::uniform_color::{dispatch as uniform_color_dispatch, UniformColorParams};
 
     fn render(params: &HeightToAoParams) -> Vec<u8> {
@@ -324,6 +364,7 @@ mod tests {
         let params = HeightToAoParams {
             radius: 0.03,
             intensity: 3.0,
+            tiling_mode: TilingMode::Both,
         };
         assert_eq!(render(&params), render(&params));
     }
@@ -384,6 +425,7 @@ mod tests {
             &HeightToAoParams {
                 radius: 0.04,
                 intensity: 4.0,
+                tiling_mode: TilingMode::Both,
             },
         );
         let pixels = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
@@ -500,6 +542,74 @@ mod tests {
             just_outside_tip < 200,
             "the point immediately outside a sharp tip should be clearly occluded, not left in \
              a gap (got {just_outside_tip})"
+        );
+    }
+
+    #[test]
+    fn tiling_off_changes_the_edge_reading() {
+        // A tall ridge at column 0 and flat low ground everywhere else,
+        // including the last column right next to it across the wrap seam
+        // — with tiling on, the last column should read occluded by that
+        // ridge; with tiling off, it shouldn't see it at all.
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let r = RESOLUTION;
+        let mut pixels = vec![0u8; (r * r * 4) as usize];
+        for y in 0..r {
+            for x in 0..r {
+                let v = if x == 0 { 255 } else { 0 };
+                let i = ((y * r + x) * 4) as usize;
+                pixels[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        pool.get_or_create(&gpu.device, "input", r, wgpu::TextureFormat::Rgba8Unorm);
+        let texture = pool.texture("input").expect("just created above");
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(r * 4),
+                rows_per_image: Some(r),
+            },
+            wgpu::Extent3d {
+                width: r,
+                height: r,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let base = HeightToAoParams {
+            radius: 0.1,
+            intensity: 4.0,
+            tiling_mode: TilingMode::Both,
+        };
+        dispatch(&mut gpu, &mut pool, "input", "wrapped", RESOLUTION, &base);
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            "input",
+            "clamped",
+            RESOLUTION,
+            &HeightToAoParams {
+                tiling_mode: TilingMode::Off,
+                ..base
+            },
+        );
+        let wrapped = gpu.read_rgba8(pool.texture("wrapped").unwrap(), RESOLUTION);
+        let clamped = gpu.read_rgba8(pool.texture("clamped").unwrap(), RESOLUTION);
+        let last_col = RESOLUTION - 1;
+        let y = RESOLUTION / 2;
+        let idx = ((y * RESOLUTION + last_col) * 4) as usize;
+        assert_ne!(
+            wrapped[idx], clamped[idx],
+            "disabling tiling should change whether the last column sees the ridge at column 0 \
+             across the wrap seam"
         );
     }
 }

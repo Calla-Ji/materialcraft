@@ -27,7 +27,7 @@ struct DilateParams {
     resolution: u32,
     direction: u32,
     radius_px: f32,
-    _pad0: f32,
+    wrap: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: DilateParams;
@@ -54,12 +54,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
         var coord_pos = vec2<i32>(id.xy);
         var coord_neg = vec2<i32>(id.xy);
+        let wrap = params.wrap != 0u;
         if params.direction == 0u {
-            coord_pos.x = wrap_coord(coord_pos.x + offset, size);
-            coord_neg.x = wrap_coord(coord_neg.x - offset, size);
+            coord_pos.x = tile_coord(coord_pos.x + offset, size, wrap);
+            coord_neg.x = tile_coord(coord_neg.x - offset, size, wrap);
         } else {
-            coord_pos.y = wrap_coord(coord_pos.y + offset, size);
-            coord_neg.y = wrap_coord(coord_neg.y - offset, size);
+            coord_pos.y = tile_coord(coord_pos.y + offset, size, wrap);
+            coord_neg.y = tile_coord(coord_neg.y - offset, size, wrap);
         }
         let neighbor = max(
             textureLoad(input_tex, coord_pos, 0).r,
