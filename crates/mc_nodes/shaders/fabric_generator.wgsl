@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // fabric_generator.wgsl — Generators / Patterns / Fabric Generator
 //
-// Inputs:  none.
+// Inputs:  `fiber_tex` — a single fiber's cross-section (see
+//          `thread_shape.wgsl`/the Thread node): a horizontal bar spanning
+//          the input's full width, constant along it, varying by height —
+//          sampled as the thread shape for Plain Weave, Twill, and Rib
+//          Knit's straight thread segments. If nothing's wired into Thread
+//          in the graph, `mc_nodes::fabric_generator::dispatch` renders one
+//          internally from `thread_width`/`thread_roundness` below, so this
+//          is never actually unbound. Stockinette's loops aren't straight
+//          thread segments with a cross-section — it keeps its own built-in
+//          "V" stitch shape regardless of what's wired into Fiber.
 // Output:  `output` — a height-like value tracing a woven or knit fabric's
 //          thread structure, 0 in the valleys between threads up to 1 on a
 //          thread's own ridge. Chain into Height to Normal the same way
@@ -10,8 +19,13 @@
 //   weave_type         — 0 Plain Weave, 1 Twill, 2 Rib Knit, 3 Stockinette
 //                         (Jersey Knit)
 //   rows, columns       — thread/stitch density
-//   thread_width        — how much of each thread's own cell it fills, 0..1
-//   thread_roundness    — 0 a flat ribbon, 1 a round cross-section
+//   thread_width        — Stockinette's own loop width, 0..1; also what
+//                         `dispatch` renders the fallback Fiber at when
+//                         nothing's connected to it
+//   thread_roundness    — only affects the fallback Fiber `dispatch` renders
+//                         when nothing's connected (has no effect on
+//                         Stockinette, which doesn't use a thread
+//                         cross-section at all)
 //   thread_group_size   — Plain Weave only: threads per group acting as one
 //                         woven unit (1 = plain weave, 2+ = basket weave)
 //   twill_count         — Twill only: the diagonal stripe's repeat period
@@ -46,30 +60,30 @@ struct FabricGeneratorParams {
 }
 
 @group(0) @binding(0) var<uniform> params: FabricGeneratorParams;
-@group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(1) var fiber_tex: texture_2d<f32>;
+@group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
 
 const WEAVE_PLAIN: u32 = 0u;
 const WEAVE_TWILL: u32 = 1u;
 const WEAVE_RIB_KNIT: u32 = 2u;
 const WEAVE_STOCKINETTE: u32 = 3u;
 
-// A single thread's cross-section: `t` is the signed distance from the
-// thread's centerline, `half_width` the thread's own half-width, both in
-// cell-fraction space. 0 outside the thread, rising to 1 at its center —
-// `roundness` blends from a flat-topped ribbon (0) to a circular
-// cross-section (1, the classic embroidery-render look).
-fn thread_profile(t: f32, half_width: f32, roundness: f32) -> f32 {
-    if half_width <= 0.0001 {
-        return 0.0;
-    }
-    let d = clamp(abs(t) / half_width, 0.0, 1.0);
-    let flat = 1.0 - d;
-    let round_profile = sqrt(max(1.0 - d * d, 0.0));
-    return mix(flat, round_profile, roundness);
-}
-
 fn wrap_i(v: i32, n: i32) -> i32 {
     return ((v % n) + n) % n;
+}
+
+// Reads `fiber_tex`'s cross-section at signed distance `t` (-0.5..0.5) from
+// a thread's centerline, with `width_scale` stretching/shrinking which part
+// of the fiber's own profile that maps to — the per-crossing jitter's
+// stand-in for narrowing/widening an actual thread, since warping the
+// sampled image itself isn't on the table here. `fiber_tex` is constant
+// along its own width (see the module doc comment), so which x it's read at
+// doesn't matter; the center column is as good as any.
+fn fiber_height(t: f32, width_scale: f32) -> f32 {
+    let size = i32(params.resolution);
+    let sample_t = clamp(t / max(width_scale, 0.0001), -0.5, 0.5);
+    let y = clamp(i32((sample_t + 0.5) * f32(size)), 0, size - 1);
+    return textureLoad(fiber_tex, vec2<i32>(size / 2, y), 0).r;
 }
 
 @compute @workgroup_size(8, 8)
@@ -94,13 +108,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let width_scale = 1.0 - params.size_jitter * h1;
     let luminance = 1.0 - params.luminance_jitter * h2;
 
-    let half_w = clamp(params.thread_width, 0.0, 1.0) * 0.5 * width_scale;
-
     var value = 0.0;
     if params.weave_type == WEAVE_RIB_KNIT {
         let rib_width = max(i32(params.rib_width), 1);
         let raised = wrap_i(col, rib_width * 2) < rib_width;
-        var h = thread_profile(xp, half_w, params.thread_roundness);
+        var h = fiber_height(xp, width_scale);
         // A gentle per-row undulation hints at a knit column's stacked
         // loops without simulating each individual one.
         h = h * (0.9 + 0.1 * cos(yp * 6.28318530718));
@@ -121,7 +133,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let lh2 = hash2(loop_cell, params.seed + 101u);
         let loop_width_scale = 1.0 - params.size_jitter * lh1;
         // A squashed rhombus — the classic simplified "V" stitch silhouette
-        // stockinette knitting is known for.
+        // stockinette knitting is known for. Not a thread cross-section, so
+        // `fiber_tex` plays no part here.
         let d = abs(lx) * 2.2 + abs(ly) * 1.3;
         let edge = clamp(params.thread_width, 0.05, 1.0) * loop_width_scale;
         value = clamp(1.0 - d / edge, 0.0, 1.0) * (1.0 - params.luminance_jitter * lh2);
@@ -131,8 +144,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         // Plain Weave and Twill both cross a vertical and a horizontal
         // thread at every cell; they only differ in which thread is "on
         // top" at a given crossing.
-        let v_h = thread_profile(xp, half_w, params.thread_roundness);
-        let h_h = thread_profile(yp, half_w, params.thread_roundness);
+        let v_h = fiber_height(xp, width_scale);
+        let h_h = fiber_height(yp, width_scale);
 
         var vertical_on_top: bool;
         if params.weave_type == WEAVE_TWILL {

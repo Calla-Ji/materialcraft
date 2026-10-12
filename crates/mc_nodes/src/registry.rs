@@ -137,8 +137,16 @@ pub fn evaluate(
                     tile_generator::dispatch(gpu, pool, &key, resolution, &params);
                 }
                 "fabric_generator" => {
+                    let fiber_key = resolve_optional_input("fiber").map(texture_key);
                     let params = fabric_generator::FabricGeneratorParams::from_graph(&node.params);
-                    fabric_generator::dispatch(gpu, pool, &key, resolution, &params);
+                    fabric_generator::dispatch(
+                        gpu,
+                        pool,
+                        fiber_key.as_deref(),
+                        &key,
+                        resolution,
+                        &params,
+                    );
                 }
                 "thread_shape" => {
                     let params = thread_shape::ThreadShapeParams::from_graph(&node.params);

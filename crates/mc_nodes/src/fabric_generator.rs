@@ -151,10 +151,38 @@ fn pack_params(resolution: u32, params: &FabricGeneratorParams) -> [u8; 48] {
 pub fn dispatch(
     gpu: &mut mc_gpu::Context,
     pool: &mut mc_gpu::TexturePool,
-    key: &str,
+    fiber_key: Option<&str>,
+    output_key: &str,
     resolution: u32,
     params: &FabricGeneratorParams,
 ) {
+    // No Thread wired in: render one internally from this node's own
+    // thread_width/thread_roundness, so Fabric Generator still works
+    // standalone with no setup — same "optional input defaults sensibly"
+    // convention as Blend's mask or Scanline Jitter's own mask above.
+    let default_fiber_key = format!("{output_key}__default_fiber");
+    let fiber_key = match fiber_key {
+        Some(key) => key,
+        None => {
+            crate::thread_shape::dispatch(
+                gpu,
+                pool,
+                &default_fiber_key,
+                resolution,
+                &crate::thread_shape::ThreadShapeParams {
+                    fiber_type: crate::thread_shape::FiberType::Tube,
+                    thickness: params.thread_width,
+                    roundness: params.thread_roundness,
+                },
+            );
+            &default_fiber_key
+        }
+    };
+    let fiber_view = pool
+        .view(fiber_key)
+        .unwrap_or_else(|| panic!("fabric_generator: no texture at fiber key {fiber_key:?}"))
+        .clone();
+
     let shader_source = full_source("fabric_generator.wgsl");
     let pipeline = gpu.compute_pipeline(NODE_KIND, &shader_source, "main");
 
@@ -169,7 +197,7 @@ pub fn dispatch(
 
     let view = pool.get_or_create(
         &gpu.device,
-        key,
+        output_key,
         resolution,
         wgpu::TextureFormat::Rgba8Unorm,
     );
@@ -185,6 +213,10 @@ pub fn dispatch(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
+                resource: wgpu::BindingResource::TextureView(&fiber_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
                 resource: wgpu::BindingResource::TextureView(view),
             },
         ],
@@ -216,7 +248,7 @@ mod tests {
     fn render(params: &FabricGeneratorParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
         let mut pool = mc_gpu::TexturePool::default();
-        dispatch(&mut gpu, &mut pool, "test", RESOLUTION, params);
+        dispatch(&mut gpu, &mut pool, None, "test", RESOLUTION, params);
         let texture = pool.texture("test").expect("fabric_generator texture");
         gpu.read_rgba8(texture, RESOLUTION)
     }
@@ -350,5 +382,44 @@ mod tests {
             ..FabricGeneratorParams::default()
         });
         assert_ne!(plain, basket);
+    }
+
+    /// A connected Fiber input should actually change the output, not just
+    /// be plumbing that never gets read — distinct from the fallback the
+    /// node renders internally when nothing's wired in.
+    #[test]
+    fn a_connected_fiber_changes_the_output() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let params = FabricGeneratorParams::default();
+
+        dispatch(&mut gpu, &mut pool, None, "fallback", RESOLUTION, &params);
+        let fallback = gpu.read_rgba8(pool.texture("fallback").unwrap(), RESOLUTION);
+
+        crate::thread_shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "thin_fiber",
+            RESOLUTION,
+            &crate::thread_shape::ThreadShapeParams {
+                fiber_type: crate::thread_shape::FiberType::Tube,
+                thickness: 0.1,
+                roundness: 0.0,
+            },
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("thin_fiber"),
+            "with_fiber",
+            RESOLUTION,
+            &params,
+        );
+        let with_fiber = gpu.read_rgba8(pool.texture("with_fiber").unwrap(), RESOLUTION);
+
+        assert_ne!(
+            fallback, with_fiber,
+            "wiring in a very different fiber shape should change Fabric Generator's output"
+        );
     }
 }

@@ -319,6 +319,18 @@ pub fn param_is_relevant(
             _ => true,
         };
     }
+    if node_kind == "fabric_generator" {
+        let weave_type = current_params.get("weave_type").and_then(|v| match v {
+            ParamValue::Enum(name) => Some(name.as_str()),
+            _ => None,
+        });
+        return match param_name {
+            "thread_group_size" => weave_type == Some("Plain Weave"),
+            "twill_count" => weave_type == Some("Twill"),
+            "rib_width" => weave_type == Some("Rib Knit"),
+            _ => true,
+        };
+    }
     if node_kind != "shape" {
         return true;
     }
@@ -764,7 +776,11 @@ static NODE_DEFS: &[NodeDef] = &[
         display_name: "Fabric Generator",
         category: "Generators/Patterns",
         tooltip: "Woven and knit base shapes for building fabric materials from scratch.",
-        inputs: &[],
+        inputs: &[PortSpec {
+            name: "fiber",
+            display_name: "Fiber",
+            port_type: PortType::Gray,
+        }],
         outputs: &[PortSpec {
             name: "output",
             display_name: "Output",
@@ -806,8 +822,10 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "thread_width",
                 display_name: "Thread Width",
-                tooltip: "How much of each thread's own cell it fills \u{2014} higher means \
-                          less gap between threads.",
+                tooltip: "Stockinette: how much of each loop's own cell it fills. Every other \
+                          weave type: only used to render a fallback fiber shape when nothing's \
+                          wired into Fiber below \u{2014} connect a Thread node there instead for \
+                          full control over the actual thread shape.",
                 kind: ParamSpecKind::Float {
                     min: 0.1,
                     max: 1.0,
@@ -817,7 +835,10 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "thread_roundness",
                 display_name: "Thread Roundness",
-                tooltip: "0 is a flat ribbon, 1 is a round thread cross-section.",
+                tooltip: "Only used to render a fallback fiber shape when nothing's wired into \
+                          Fiber below (0 a flat ribbon, 1 round) \u{2014} connect a Thread node \
+                          there instead for full control. Has no effect on Stockinette, which \
+                          doesn't use a thread cross-section at all.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
@@ -2747,5 +2768,51 @@ mod tests {
             effective_output_type(&graph, edge, "edge_detect", PortType::Gray),
             PortType::Gray
         );
+    }
+
+    /// Each Fabric Generator weave-specific param should only be relevant
+    /// for its own Weave Type, so the panel can hide the other two instead
+    /// of showing three mode-specific sliders that mostly do nothing.
+    #[test]
+    fn fabric_generator_weave_specific_params_are_relevant_only_for_their_own_weave_type() {
+        use super::param_is_relevant;
+        use mc_core::ParamValue;
+        use std::collections::BTreeMap;
+
+        let params_for = |weave_type: &str| {
+            let mut params = BTreeMap::new();
+            params.insert(
+                "weave_type".to_string(),
+                ParamValue::Enum(weave_type.to_string()),
+            );
+            params
+        };
+
+        for (weave_type, relevant_param) in [
+            ("Plain Weave", "thread_group_size"),
+            ("Twill", "twill_count"),
+            ("Rib Knit", "rib_width"),
+        ] {
+            let params = params_for(weave_type);
+            assert!(
+                param_is_relevant("fabric_generator", relevant_param, &params),
+                "{relevant_param} should be relevant when Weave Type is {weave_type}"
+            );
+            for other_param in ["thread_group_size", "twill_count", "rib_width"] {
+                if other_param == relevant_param {
+                    continue;
+                }
+                assert!(
+                    !param_is_relevant("fabric_generator", other_param, &params),
+                    "{other_param} should NOT be relevant when Weave Type is {weave_type}"
+                );
+            }
+        }
+
+        // Stockinette uses none of the three.
+        let params = params_for("Stockinette");
+        for param in ["thread_group_size", "twill_count", "rib_width"] {
+            assert!(!param_is_relevant("fabric_generator", param, &params));
+        }
     }
 }
