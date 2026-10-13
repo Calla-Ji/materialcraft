@@ -48,6 +48,7 @@ mod shaders;
 pub mod shape;
 pub mod simplex_noise;
 pub mod slope_blur;
+pub mod stitch;
 #[cfg(test)]
 mod test_support;
 pub mod thread_shape;
