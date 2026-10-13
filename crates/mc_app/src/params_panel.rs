@@ -26,6 +26,25 @@ fn random_seed() -> u32 {
     (z ^ (z >> 31)) as u32
 }
 
+/// Fiber Depth carves relative to a *ply's own* radius, but Height
+/// normalizes against the whole thread row's radius — so the more that
+/// radius gets subdivided (more Threads stacked, Cable Groups turned on),
+/// the smaller a fraction of the final image one ply's own groove covers,
+/// and the harder the fiber detail is to see. Not a bug (confirmed against
+/// the owner's own reference renderer, same formula at every nesting level)
+/// but easy to mistake for one, having mistaken it for one once already —
+/// a quiet hint here beats a second round of "why doesn't this do
+/// anything?".
+fn thread_fiber_param_hint(ui: &mut egui::Ui, node_kind: &str, param_name: &str) {
+    if node_kind == "thread_shape" && matches!(param_name, "fibers_per_ply" | "fiber_depth") {
+        ui.weak(
+            "Most visible with Threads at 1 and Cable Groups off \u{2014} more stacked \
+             threads/cable layers shrink how much of the final image one ply's own groove \
+             covers.",
+        );
+    }
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     graph: &mut mc_core::Graph,
@@ -183,6 +202,7 @@ fn show_inner(
                     &response,
                     mc_core::ParamValue::Float(value),
                 );
+                thread_fiber_param_hint(ui, &node_kind, param.name);
             }
             mc_nodes::defs::ParamSpecKind::Int { min, max, default } => {
                 let mut value = current.and_then(|v| v.as_int()).unwrap_or(*default);
@@ -199,6 +219,7 @@ fn show_inner(
                     &response,
                     mc_core::ParamValue::Int(value),
                 );
+                thread_fiber_param_hint(ui, &node_kind, param.name);
             }
             mc_nodes::defs::ParamSpecKind::Seed { default } => {
                 let mut value = current.and_then(|v| v.as_seed()).unwrap_or(*default);
