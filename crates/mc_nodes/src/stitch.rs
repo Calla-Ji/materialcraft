@@ -568,6 +568,165 @@ pub fn generate(path: &mc_core::Path, params: &StitchParams) -> Vec<Stitch> {
     out
 }
 
+// ---------------------------------------------------------------------
+// Drape (STITCH_NODE_SPEC.md §6 / `stitch_reference.py`'s own `drape`) —
+// the sequential 3D centre line of every thread. Runs on the CPU because
+// it's inherently sequential: every thread depends on every thread before
+// it (does it rest on the fabric, or on top of an earlier one it
+// crosses?).
+// ---------------------------------------------------------------------
+
+/// Hole depth: a dipping end's centre goes to `-DIP * r` inside the hole.
+const DIP: f64 = 0.5;
+/// A thread dives into its hole over this many thread diameters.
+const END_LEN: f64 = 1.5;
+/// Earlier threads within this many degrees of the new thread's own
+/// direction are ignored for occlusion (unless the new stitch has
+/// `stack: true`) — real threads lying side by side spread out and
+/// flatten instead of piling up.
+const PARALLEL_DEG: f64 = 25.0;
+/// A thread's centre never rises above `r + 2r * (MAX_LAYERS - 1)`.
+const MAX_LAYERS: f64 = 3.0;
+
+/// One thread's own 3D centre line, `x`/`y`/`z` all the same length —
+/// `stitch_reference.py`'s own `lines` tuple, as a named struct.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadLine {
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
+    pub z: Vec<f64>,
+}
+
+/// Minimum-image delta: when `wrap`, maps `d` into `[-0.5, 0.5]` (the
+/// shortest way around a periodic `[0,1)` tile) — the same convention
+/// `tube_raster.wgsl`'s own `min_image` uses on the GPU side.
+fn wrap_delta(d: f64, wrap: bool) -> f64 {
+    if wrap {
+        d - d.round()
+    } else {
+        d
+    }
+}
+
+fn smoothstep01(x: f64) -> f64 {
+    let t = x.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Every stitch's own 3D centre line, in the same sewing order as
+/// `stitches` — later entries can rest on top of earlier ones, never the
+/// reverse, since real embroidery is sewn one thread at a time.
+/// `resolution` is the node's own output resolution: sample density along
+/// each thread scales with it (`n = max(8, ceil(L * res * 1.5))`), same as
+/// the reference — a thread needs enough samples to splat cleanly at
+/// whatever pixel density it'll actually be rasterized at.
+pub fn drape(
+    stitches: &[Stitch],
+    params: &StitchParams,
+    wrap: bool,
+    resolution: u32,
+) -> Vec<ThreadLine> {
+    let resolved = params.resolved();
+    let r = resolved.r;
+    let cos_par = PARALLEL_DEG.to_radians().cos();
+
+    let mut lines: Vec<ThreadLine> = Vec::with_capacity(stitches.len());
+    // (center_x, center_y, half_extent_x, half_extent_y) per thread, for
+    // the bounding-box prefilter — required for speed, must not change
+    // the result (STITCH_NODE_SPEC.md §6.6).
+    let mut boxes: Vec<(f64, f64, f64, f64)> = Vec::with_capacity(stitches.len());
+    let mut dirs: Vec<[f64; 2]> = Vec::with_capacity(stitches.len());
+
+    for st in stitches {
+        let mut ab = [st.b[0] - st.a[0], st.b[1] - st.a[1]];
+        if wrap {
+            ab = [wrap_delta(ab[0], true), wrap_delta(ab[1], true)];
+        }
+        let length = (ab[0] * ab[0] + ab[1] * ab[1]).sqrt() + 1e-12;
+        let dvec = [ab[0] / length, ab[1] / length];
+        let n = (((length * f64::from(resolution) * 1.5).ceil()) as i64).max(8) as usize;
+        let perp = [ab[1] / length, -ab[0] / length];
+
+        let mut us = vec![0.0; n];
+        let mut xs = vec![0.0; n];
+        let mut ys = vec![0.0; n];
+        for (i, (u_out, (x_out, y_out))) in us
+            .iter_mut()
+            .zip(xs.iter_mut().zip(ys.iter_mut()))
+            .enumerate()
+        {
+            let u = (i as f64 + 0.5) / n as f64;
+            *u_out = u;
+            let bow_term = st.bow * (std::f64::consts::PI * u).sin();
+            *x_out = st.a[0] + ab[0] * u + perp[0] * bow_term;
+            *y_out = st.a[1] + ab[1] * u + perp[1] * bow_term;
+        }
+
+        let mut z_rest = vec![r; n];
+        let cx = xs.iter().sum::<f64>() / n as f64;
+        let cy = ys.iter().sum::<f64>() / n as f64;
+        let hx = 0.5 * ab[0].abs() + st.bow.abs() + 2.0 * r;
+        let hy = 0.5 * ab[1].abs() + st.bow.abs() + 2.0 * r;
+
+        for (j, &(bcx, bcy, bhx, bhy)) in boxes.iter().enumerate() {
+            let dx = wrap_delta(cx - bcx, wrap);
+            let dy = wrap_delta(cy - bcy, wrap);
+            if dx.abs() > hx + bhx || dy.abs() > hy + bhy {
+                continue;
+            }
+            if !st.stack && (dvec[0] * dirs[j][0] + dvec[1] * dirs[j][1]).abs() > cos_par {
+                continue;
+            }
+            let other = &lines[j];
+            for i in 0..n {
+                let mut best = f64::NEG_INFINITY;
+                for k in 0..other.x.len() {
+                    let ddx = wrap_delta(xs[i] - other.x[k], wrap);
+                    let ddy = wrap_delta(ys[i] - other.y[k], wrap);
+                    let d2 = ddx * ddx + ddy * ddy;
+                    let rr = (2.0 * r) * (2.0 * r) - d2;
+                    if rr > 0.0 {
+                        let cand = other.z[k] + rr.sqrt();
+                        if cand > best {
+                            best = cand;
+                        }
+                    }
+                }
+                if best > z_rest[i] {
+                    z_rest[i] = best;
+                }
+            }
+        }
+
+        let layer_cap = r + 2.0 * r * (MAX_LAYERS - 1.0);
+        for z in &mut z_rest {
+            *z = z.min(layer_cap);
+        }
+
+        let e = (END_LEN * resolved.thread / length).min(0.4);
+        let mut z = vec![0.0; n];
+        for i in 0..n {
+            let env_a = if st.dip_a {
+                smoothstep01(us[i] / e)
+            } else {
+                1.0
+            };
+            let env_b = if st.dip_b {
+                smoothstep01((1.0 - us[i]) / e)
+            } else {
+                1.0
+            };
+            let env = env_a * env_b;
+            z[i] = -DIP * r + (z_rest[i] + DIP * r) * env;
+        }
+
+        lines.push(ThreadLine { x: xs, y: ys, z });
+        boxes.push((cx, cy, hx, hy));
+        dirs.push(dvec);
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -717,5 +876,163 @@ mod tests {
                 );
             }
         }
+    }
+
+    // `drape()` has no golden fixture in the reference package itself
+    // (STITCH_NODE_SPEC.md §2's own table: Drape is validated "implicitly,
+    // through the height PNGs" — i.e. only indirectly, via Step 3's GPU
+    // raster). To still get a real bit-level check now rather than only a
+    // property test, `tests/golden/stitch/drape.json` was generated by
+    // running `stitch_reference.py`'s own `drape()` directly (numpy
+    // installed locally) against a handful of real stitches from the demo
+    // path, truncated short to keep the fixture small — see the Python
+    // snippet in this module's own git history for exactly how.
+    const DRAPE_JSON: &str = include_str!("../../../tests/golden/stitch/drape.json");
+
+    fn stitch_from_json(v: &serde_json::Value) -> Stitch {
+        Stitch {
+            a: arr(&v["a"]),
+            b: arr(&v["b"]),
+            dip_a: v["dip_a"].as_bool().unwrap(),
+            dip_b: v["dip_b"].as_bool().unwrap(),
+            bow: v["bow"].as_f64().unwrap(),
+            stack: v["stack"].as_bool().unwrap(),
+            order: 0,
+        }
+    }
+
+    #[test]
+    fn drape_matches_a_self_generated_golden_for_every_case() {
+        let drape_json: serde_json::Value = serde_json::from_str(DRAPE_JSON).unwrap();
+        let cases = drape_json.as_object().unwrap();
+        assert_eq!(cases.len(), 3);
+
+        for (case_name, case) in cases {
+            let stitch_kind = match case["stitch_params"]["stitch"].as_str().unwrap() {
+                "running" => StitchKind::Running,
+                "bean" => StitchKind::Bean,
+                "stem" => StitchKind::Stem,
+                other => panic!("unknown stitch kind {other:?} in case {case_name}"),
+            };
+            let resolution = case["resolution"].as_u64().unwrap() as u32;
+            let wrap = case["wrap"].as_bool().unwrap();
+            let params = StitchParams {
+                stitch: stitch_kind,
+                resolution,
+                ..Default::default()
+            };
+
+            let stitches: Vec<Stitch> = case["stitches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(stitch_from_json)
+                .collect();
+            let golden_lines = case["lines"].as_array().unwrap();
+            assert_eq!(stitches.len(), golden_lines.len());
+
+            let lines = drape(&stitches, &params, wrap, resolution);
+            assert_eq!(lines.len(), golden_lines.len(), "case {case_name}");
+
+            for (i, (line, g)) in lines.iter().zip(golden_lines).enumerate() {
+                let gx: Vec<f64> = g["x"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_f64().unwrap())
+                    .collect();
+                let gy: Vec<f64> = g["y"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_f64().unwrap())
+                    .collect();
+                let gz: Vec<f64> = g["z"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_f64().unwrap())
+                    .collect();
+                assert_eq!(
+                    line.x.len(),
+                    gx.len(),
+                    "{case_name}[{i}]: sample count mismatch"
+                );
+                for k in 0..line.x.len() {
+                    assert!(
+                        (line.x[k] - gx[k]).abs() < 1e-6,
+                        "{case_name}[{i}].x[{k}]: actual={} expected={}",
+                        line.x[k],
+                        gx[k]
+                    );
+                    assert!(
+                        (line.y[k] - gy[k]).abs() < 1e-6,
+                        "{case_name}[{i}].y[{k}]: actual={} expected={}",
+                        line.y[k],
+                        gy[k]
+                    );
+                    assert!(
+                        (line.z[k] - gz[k]).abs() < 1e-6,
+                        "{case_name}[{i}].z[{k}]: actual={} expected={}",
+                        line.z[k],
+                        gz[k]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn drape_caps_height_at_the_max_layers_limit() {
+        // A pile of coincident, stacking stitches should never rise past
+        // r + 2r*(MAX_LAYERS - 1) no matter how many layer on top of each
+        // other.
+        let params = StitchParams::default();
+        let r = params.resolved().r;
+        let stitches: Vec<Stitch> = (0..10)
+            .map(|_| Stitch {
+                a: [0.4, 0.4],
+                b: [0.5, 0.4],
+                dip_a: false,
+                dip_b: false,
+                bow: 0.0,
+                stack: true,
+                order: 0,
+            })
+            .collect();
+        let lines = drape(&stitches, &params, true, 64);
+        let cap = r + 2.0 * r * (MAX_LAYERS - 1.0);
+        for line in &lines {
+            for &z in &line.z {
+                assert!(z <= cap + 1e-9, "z={z} exceeds cap {cap}");
+            }
+        }
+    }
+
+    #[test]
+    fn drape_dips_toward_the_hole_at_a_dipping_end() {
+        let params = StitchParams::default();
+        let r = params.resolved().r;
+        let stitches = [Stitch {
+            a: [0.2, 0.2],
+            b: [0.4, 0.2],
+            dip_a: true,
+            dip_b: true,
+            bow: 0.0,
+            stack: false,
+            order: 0,
+        }];
+        let lines = drape(&stitches, &params, true, 64);
+        let line = &lines[0];
+        // The very first sample (near u=0, a dipping end) should be well
+        // below the resting height r; the middle sample should be at r
+        // (nothing else to rest on).
+        assert!(line.z[0] < r * 0.5, "z[0]={} should dip low", line.z[0]);
+        let mid = line.z.len() / 2;
+        assert!(
+            (line.z[mid] - r).abs() < 1e-6,
+            "z[mid]={} should rest at r={r}",
+            line.z[mid]
+        );
     }
 }
