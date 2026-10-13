@@ -1162,7 +1162,30 @@ static NODE_DEFS: &[NodeDef] = &[
         tooltip: "An editable vector curve — draw an ornament by hand (click a segment \
                   to add a point, drag handles to curve it) or paste an SVG, then feed it \
                   into a Stitch node.",
-        inputs: &[],
+        inputs: &[
+            // Seeds this node's own geometry from an upstream Path-type
+            // source (a future SVG import node, or just another Path
+            // node) the moment this one has no points of its own yet —
+            // after that it's a normal, independently-editable copy, not
+            // a live link, so connecting it never clobbers hand-edits.
+            // Functional now even without a dedicated SVG node: chaining
+            // two Path nodes together already exercises it.
+            PortSpec {
+                name: "reference",
+                display_name: "Reference",
+                port_type: PortType::Path,
+            },
+            // Not yet consumed by anything — reserved for the planned
+            // Stitch node's own output (a single stitch's thread-physics
+            // geometry), which this node will repeat/orient along its own
+            // curve once that node and the distribution logic exist.
+            // Connecting something here has no effect yet.
+            PortSpec {
+                name: "stamp",
+                display_name: "Stamp",
+                port_type: PortType::Gray,
+            },
+        ],
         // Preview Mask stays first so `mc_nodes::registry::resolve_texture_key`'s
         // "first declared output" default has an actual GPU texture to show —
         // the Path port is never written into the texture pool at all (see

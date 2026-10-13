@@ -161,14 +161,6 @@ impl PathEditorState {
         self.selected.contains(&(subpath, point))
     }
 
-    /// How many points are currently selected — used by the Params panel
-    /// to explain *why* the Join button isn't showing when the selection
-    /// is close (exactly two points) but doesn't qualify, rather than
-    /// leaving it looking like the feature just doesn't work.
-    pub fn selected_count(&self) -> usize {
-        self.selected.len()
-    }
-
     /// Selects exactly one point — used by the Params panel's point list,
     /// so clicking a row there also highlights it in the 2D View, the same
     /// one-way-becomes-two-way link clicking a point in the 2D View
@@ -415,6 +407,58 @@ fn hit_test(
         }
     }
     best.map(|(_, t)| t)
+}
+
+/// `(subpath, segment, t)` of the nearest point on any subpath's own curve
+/// within `PICK_RADIUS` of `screen_pos`, via `mc_nodes::path::nearest_on_path`
+/// — the third hit-test tier (after handles, then points) PATH_NODE_SPEC.md
+/// §4 calls out for "click on a segment inserts a point." `nearest_on_path`
+/// reports distance in UV units; multiplying by `image_rect`'s own width
+/// converts that to screen pixels (valid since the tile is always square,
+/// so x/y scale is uniform) to compare against the same pixel-space radius
+/// every other hit-test tier uses.
+fn segment_hit_test(
+    path: &mc_core::Path,
+    image_rect: egui::Rect,
+    screen_pos: egui::Pos2,
+) -> Option<(usize, usize, f64)> {
+    let q = screen_to_uv(screen_pos, image_rect);
+    let mut best: Option<(usize, usize, f64, f64)> = None; // (subpath, segment, t, dist_px)
+    for (sp_i, sp) in path.subpaths.iter().enumerate() {
+        if sp.points.len() < 2 {
+            continue;
+        }
+        let (seg_i, t, dist_uv) = mc_nodes::path::nearest_on_path(sp, q);
+        let dist_px = dist_uv * image_rect.width() as f64;
+        if dist_px <= PICK_RADIUS as f64 && best.is_none_or(|(_, _, _, best_px)| dist_px < best_px)
+        {
+            best = Some((sp_i, seg_i, t, dist_px));
+        }
+    }
+    best.map(|(sp_i, seg_i, t, _)| (sp_i, seg_i, t))
+}
+
+/// Inserts a point mid-curve without changing its shape (`insert_point`'s
+/// own de Casteljau split) and selects the new point — the click-on-a-
+/// segment half of PATH_NODE_SPEC.md §4's hit-test table.
+#[allow(clippy::too_many_arguments)]
+fn insert_point_on_segment(
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    node_id: mc_core::NodeId,
+    state: &mut PathEditorState,
+    path: &mc_core::Path,
+    subpath: usize,
+    segment: usize,
+    t: f64,
+) {
+    let Some(sp) = path.subpaths.get(subpath) else {
+        return;
+    };
+    let mut new_path = path.clone();
+    new_path.subpaths[subpath] = mc_nodes::path::insert_point(sp, segment, t);
+    state.selected = HashSet::from([(subpath, segment + 1)]);
+    commit_path_change(graph, history, node_id, path.clone(), new_path);
 }
 
 fn apply_selection(ui: &egui::Ui, state: &mut PathEditorState, target: Option<DragTarget>) {
@@ -722,10 +766,16 @@ pub fn show(
     node_id: mc_core::NodeId,
     state: &mut PathEditorState,
     response: &egui::Response,
-) {
+) -> bool {
     let Some(path) = current_path(graph, node_id) else {
-        return;
+        return false;
     };
+    // Reported back to the caller so `main.rs`'s own global Delete/
+    // Backspace handler (which deletes the whole *node*) can skip acting
+    // this same frame — without this, deleting a point while a Node Graph
+    // selection still includes this Path node would delete the point
+    // *and* the entire node on the same keypress.
+    let mut deleted_a_point = false;
 
     if response.hovered() {
         if ui.input(|i| i.key_pressed(egui::Key::P)) {
@@ -764,7 +814,13 @@ pub fn show(
         if response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let target = hit_test(&path, image_rect, pos, &state.selected);
-                apply_selection(ui, state, target);
+                if target.is_some() {
+                    apply_selection(ui, state, target);
+                } else if let Some((sp_i, seg_i, t)) = segment_hit_test(&path, image_rect, pos) {
+                    insert_point_on_segment(graph, history, node_id, state, &path, sp_i, seg_i, t);
+                } else {
+                    apply_selection(ui, state, None);
+                }
             }
         }
         if response.drag_started() {
@@ -783,6 +839,7 @@ pub fn show(
             && ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
         {
             delete_selected(graph, history, node_id, &path, state);
+            deleted_a_point = true;
         }
     }
 
@@ -804,6 +861,8 @@ pub fn show(
     {
         draw(ui, image_rect, current, &state.selected, state.pen_mode);
     }
+
+    deleted_a_point
 }
 
 /// Appends a new `Symmetric` point (starting a fresh subpath if Pen mode
@@ -1448,5 +1507,49 @@ mod tests {
         state.delete_point(&mut graph, &mut history, id, 0, 99);
 
         assert_eq!(path_of(&graph, id), path);
+    }
+
+    fn straight_line_path() -> mc_core::Path {
+        mc_core::Path {
+            subpaths: vec![SubPath::new(
+                vec![Point::new([0.1, 0.1]), Point::new([0.5, 0.1])],
+                false,
+            )],
+            wrap: true,
+        }
+    }
+
+    #[test]
+    fn segment_hit_test_finds_a_click_near_the_middle_of_a_straight_segment() {
+        let path = straight_line_path();
+        let rect = square_rect();
+        let midpoint = uv_to_screen([0.3, 0.1], rect);
+        let hit = segment_hit_test(&path, rect, midpoint);
+        assert!(matches!(hit, Some((0, 0, t)) if (t - 0.5).abs() < 1e-3));
+    }
+
+    #[test]
+    fn segment_hit_test_finds_nothing_far_from_any_curve() {
+        let path = straight_line_path();
+        let rect = square_rect();
+        let far = uv_to_screen([0.9, 0.9], rect);
+        assert!(segment_hit_test(&path, rect, far).is_none());
+    }
+
+    #[test]
+    fn insert_point_on_segment_splits_without_changing_the_endpoints() {
+        let path = straight_line_path();
+        let (mut graph, id) = graph_with_path(path.clone());
+        let mut history = mc_core::History::new();
+        let mut state = PathEditorState::default();
+
+        insert_point_on_segment(&mut graph, &mut history, id, &mut state, &path, 0, 0, 0.5);
+
+        let after = path_of(&graph, id);
+        assert_eq!(after.subpaths[0].points.len(), 3);
+        assert_eq!(after.subpaths[0].points[0].pos, [0.1, 0.1]);
+        assert_eq!(after.subpaths[0].points[2].pos, [0.5, 0.1]);
+        assert_uv_close(after.subpaths[0].points[1].pos, [0.3, 0.1]);
+        assert_eq!(state.selected, HashSet::from([(0, 1)]));
     }
 }

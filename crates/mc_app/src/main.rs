@@ -221,6 +221,11 @@ impl eframe::App for MaterialCreatorApp {
         let drawer_width = self.viewport_panels.current_width();
         let preview_texture_id = self.preview_texture();
         let mut canvas_output = None;
+        // Set when the Path editor just deleted a selected point this
+        // frame — read below by the global Delete/Backspace handler so it
+        // doesn't *also* delete the whole node on the same keypress (see
+        // `path_editor::show`'s own doc comment on its return value).
+        let mut path_editor_deleted_a_point = false;
 
         // Disjoint borrows of the fields each dock cell's content needs, so
         // the closure below doesn't have to borrow `self` as a whole while
@@ -351,7 +356,7 @@ impl eframe::App for MaterialCreatorApp {
 
                                 if editing_path {
                                     if let Some(id) = *selected {
-                                        path_editor::show(
+                                        path_editor_deleted_a_point = path_editor::show(
                                             ui,
                                             image_rect,
                                             content_rect,
@@ -682,7 +687,7 @@ impl eframe::App for MaterialCreatorApp {
                 self.canvas.selected = self.graph.nodes().map(|(id, _)| id).collect();
             }
 
-            if delete_pressed && !self.canvas.selected.is_empty() {
+            if delete_pressed && !path_editor_deleted_a_point && !self.canvas.selected.is_empty() {
                 let ids: Vec<mc_core::NodeId> = self.canvas.selected.iter().copied().collect();
                 let transaction = self.graph.remove_nodes_transaction(&ids);
                 let _ = self.history.do_transaction(&mut self.graph, transaction);

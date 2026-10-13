@@ -997,28 +997,6 @@ fn show_inner(
                     );
                 }
 
-                if path_editor.can_join(graph, id) {
-                    ui.add_space(4.0);
-                    if ui
-                        .button("Join Selected Endpoints")
-                        .on_hover_text(
-                            "Connects the two selected open-path endpoints with a new \
-                             segment — joins two separate pieces into one, or closes a \
-                             single piece into a loop.",
-                        )
-                        .clicked()
-                    {
-                        path_editor.join_selected(graph, history, id);
-                    }
-                } else if path_editor.selected_count() == 2 {
-                    ui.add_space(4.0);
-                    ui.weak(
-                        "Join needs two endpoints — each selected point must be the \
-                         first or last point of its own open subpath, not already \
-                         connected to anything on that side.",
-                    );
-                }
-
                 path_point_list(ui, graph, history, dragging, id, path_editor, &path_value);
             }
         }
