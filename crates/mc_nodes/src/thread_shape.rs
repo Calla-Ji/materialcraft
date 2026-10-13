@@ -476,6 +476,41 @@ mod tests {
         render_at(params, RESOLUTION)
     }
 
+    /// Seed only ever drives `phase0`, a per-row phase offset applied to a
+    /// *ply's* orbit position — so with `plies: 1` (a single, unplied
+    /// yarn), there's no orbit for it to shift at all (the single strand
+    /// sits on the thread axis regardless of phase), and the fiber groove
+    /// pattern doesn't read `phase0` either. Confirmed by the owner
+    /// noticing Seed appeared inert, not assumed: Seed is a genuine no-op
+    /// whenever Plies is 1, regardless of Threads — a real property of the
+    /// spec's own model (no per-strand randomness exists yet for an
+    /// unplied single yarn), not a bug in this port of it.
+    #[test]
+    fn seed_only_has_an_effect_with_two_or_more_plies() {
+        let differs = |plies: u32| {
+            let a = render(&ThreadShapeParams {
+                plies,
+                seed: 1,
+                ..ThreadShapeParams::default()
+            });
+            let b = render(&ThreadShapeParams {
+                plies,
+                seed: 2,
+                ..ThreadShapeParams::default()
+            });
+            a.height != b.height
+        };
+        assert!(
+            !differs(1),
+            "seed should be a no-op for a single (unplied) yarn"
+        );
+        assert!(
+            differs(2),
+            "seed should change output once there's a ply orbit to shift"
+        );
+        assert!(differs(3));
+    }
+
     fn render_at(params: &ThreadShapeParams, resolution: u32) -> Rendered {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
         let mut pool = mc_gpu::TexturePool::default();

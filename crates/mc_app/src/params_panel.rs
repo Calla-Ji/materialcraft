@@ -26,6 +26,31 @@ fn random_seed() -> u32 {
     (z ^ (z >> 31)) as u32
 }
 
+/// An explanatory aside under a param — e.g. "this only matters once X is
+/// set" — styled to actually read as a comment rather than another label:
+/// half the body text size (still legible, not a tooltip-only detail) and
+/// italic, matching how comments look in code. The established convention
+/// for this kind of per-param note going forward (first used for Thread's
+/// Fiber Depth/Fibers per Ply hint below) — reach for this instead of a
+/// plain `ui.weak(...)` whenever the text is explaining a param's behavior
+/// rather than its live connection state (the `[x]`/`[ ] connected` status
+/// lines above stay full-size, since those are closer to a label than an
+/// aside).
+fn param_comment(ui: &mut egui::Ui, text: &str) {
+    let body_size = ui
+        .style()
+        .text_styles
+        .get(&egui::TextStyle::Body)
+        .map(|font| font.size)
+        .unwrap_or(14.0);
+    ui.label(
+        egui::RichText::new(text)
+            .size(body_size * 0.5)
+            .italics()
+            .weak(),
+    );
+}
+
 /// Fiber Depth carves relative to a *ply's own* radius, but Height
 /// normalizes against the whole thread row's radius — so the more that
 /// radius gets subdivided (more Threads stacked, Cable Groups turned on),
@@ -37,7 +62,8 @@ fn random_seed() -> u32 {
 /// anything?".
 fn thread_fiber_param_hint(ui: &mut egui::Ui, node_kind: &str, param_name: &str) {
     if node_kind == "thread_shape" && matches!(param_name, "fibers_per_ply" | "fiber_depth") {
-        ui.weak(
+        param_comment(
+            ui,
             "Most visible with Threads at 1 and Cable Groups off \u{2014} more stacked \
              threads/cable layers shrink how much of the final image one ply's own groove \
              covers.",
