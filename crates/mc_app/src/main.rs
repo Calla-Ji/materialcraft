@@ -19,6 +19,7 @@ mod hdri;
 mod mipgen;
 mod node_icons;
 mod params_panel;
+mod path_editor;
 mod theme;
 mod toast;
 mod viewport3d;
@@ -74,6 +75,7 @@ struct MaterialCreatorApp {
 
     preview_texture_id: Option<egui::TextureId>,
     two_d_view: TwoDViewState,
+    path_editor: path_editor::PathEditorState,
 
     /// Where the current graph was last loaded from or saved to — `None`
     /// for a never-saved graph, in which case Save behaves like Save As.
@@ -238,6 +240,7 @@ impl eframe::App for MaterialCreatorApp {
             render_state,
             toasts,
             two_d_view,
+            path_editor,
             ..
         } = self;
 
@@ -264,13 +267,22 @@ impl eframe::App for MaterialCreatorApp {
                         let content_rect = full_rect.shrink(PADDING);
 
                         // Drag-to-pan, under the tiling icon button below so
-                        // the button's own click still wins there.
+                        // the button's own click still wins there. While a
+                        // Path node is selected, this same response drives
+                        // the path editor's own point/handle dragging
+                        // instead (see below) — panning a vector editor
+                        // mid-edit would be more confusing than useful, and
+                        // reusing one interact region avoids two senses
+                        // racing for the same pointer input.
                         let drag_response = ui.interact(
                             content_rect,
                             ui.id().with("two_d_view_drag"),
                             egui::Sense::click_and_drag(),
                         );
-                        if drag_response.dragged() {
+                        let editing_path = selected
+                            .and_then(|id| graph.node(id))
+                            .is_some_and(|n| n.kind == "path");
+                        if drag_response.dragged() && !editing_path {
                             two_d_view.pan += drag_response.drag_delta();
                         }
 
@@ -325,6 +337,20 @@ impl eframe::App for MaterialCreatorApp {
                                 ),
                                 egui::Color32::WHITE,
                             );
+
+                            if editing_path {
+                                if let Some(id) = *selected {
+                                    path_editor::show(
+                                        ui,
+                                        image_rect,
+                                        graph,
+                                        history,
+                                        id,
+                                        path_editor,
+                                        &drag_response,
+                                    );
+                                }
+                            }
                         }
 
                         // Tiling toggle, top-right corner overlay — same
@@ -1136,6 +1162,7 @@ fn main() -> eframe::Result<()> {
                 dock: dock::DockLayout::default(),
                 preview_texture_id: None,
                 two_d_view: TwoDViewState::default(),
+                path_editor: path_editor::PathEditorState::default(),
                 current_path: None,
                 toasts: toast::Toasts::default(),
                 last_eval_error: None,

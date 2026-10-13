@@ -519,7 +519,13 @@ const PREVIEW_HALF_WIDTH_PX: f32 = 1.0;
 /// re-renders on every frame of a drag gesture (an editor concern Step 1
 /// didn't have), so it stays far cheaper than `sections`'s exact-arclen
 /// tabulation at 400 samples/segment.
-fn preview_polyline(sp: &SubPath, samples_per_segment: usize) -> Vec<[f64; 2]> {
+///
+/// `pub` (not just used by [`dispatch_preview_mask`] below) because
+/// `mc_app`'s own 2D View editor overlay draws this same outline on top
+/// of the rasterized mask — reusing it keeps the curve-sampling math in
+/// one place rather than mc_app hand-rolling a second copy via its own
+/// `kurbo` dependency.
+pub fn preview_polyline(sp: &SubPath, samples_per_segment: usize) -> Vec<[f64; 2]> {
     use kurbo::ParamCurve;
     let segs = segments(sp);
     let mut out = Vec::new();
