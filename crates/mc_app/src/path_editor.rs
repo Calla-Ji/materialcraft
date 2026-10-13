@@ -26,8 +26,13 @@ use mc_core::{ParamValue, Point, PointKind, SubPath};
 /// have one — just a small nudge-pan — so this never needs to divide by a
 /// zoom factor the way the Node Graph's own picking does).
 const POINT_RADIUS: f32 = 4.0;
-const HANDLE_RADIUS: f32 = 3.0;
-const PICK_RADIUS: f32 = 8.0;
+const HANDLE_RADIUS: f32 = 4.0;
+const PICK_RADIUS: f32 = 9.0;
+/// Handles are small and fiddly to land a click on exactly, so their own
+/// grab target is deliberately bigger than their drawn size (and bigger
+/// than a point's own `PICK_RADIUS`) — a standard "hit target larger than
+/// the visual" allowance, not a rendering change.
+const HANDLE_PICK_RADIUS: f32 = 13.0;
 /// How densely to sample each curve segment for drawing — cheap and
 /// smooth-looking is all this needs, same reasoning as
 /// `mc_nodes::path::dispatch_preview_mask`'s own sample count.
@@ -113,17 +118,148 @@ impl PathEditorState {
     /// own P-key handler) doesn't already have that frame's `Path` value in
     /// hand.
     pub fn toggle_pen_mode(&mut self, graph: &mc_core::Graph, node_id: mc_core::NodeId) {
-        let Some(path) = graph
-            .node(node_id)
-            .and_then(|n| n.params.get("path"))
-            .and_then(ParamValue::as_path)
-            .cloned()
-        else {
+        let Some(path) = current_path(graph, node_id) else {
             return;
         };
         let enable = !self.pen_mode;
         self.set_pen_mode(&path, enable);
     }
+
+    /// Whether `key` is currently selected — used by the Params panel to
+    /// highlight a point's row so it's obvious which one a drag in the 2D
+    /// View just moved, or which one typing into an X/Y field will move.
+    pub fn is_selected(&self, subpath: usize, point: usize) -> bool {
+        self.selected.contains(&(subpath, point))
+    }
+
+    /// Selects exactly one point — used by the Params panel's point list,
+    /// so clicking a row there also highlights it in the 2D View, the same
+    /// one-way-becomes-two-way link clicking a point in the 2D View
+    /// already has with its own X/Y fields in the Params panel.
+    pub fn select_only(&mut self, subpath: usize, point: usize) {
+        self.selected = HashSet::from([(subpath, point)]);
+    }
+
+    /// Whether the current selection is exactly two open-subpath endpoints
+    /// — either two different subpaths' own ends, or one subpath's own
+    /// first and last point — the condition [`join_selected`] acts on.
+    /// Used by the Params panel to decide whether to show its Join button
+    /// at all.
+    pub fn can_join(&self, graph: &mc_core::Graph, node_id: mc_core::NodeId) -> bool {
+        current_path(graph, node_id)
+            .is_some_and(|path| joinable_endpoints(&path, &self.selected).is_some())
+    }
+
+    /// Connects the two selected endpoints with a new segment — merging
+    /// two different open subpaths into one, or closing a single
+    /// subpath's own two ends — added at the owner's request as an
+    /// explicit, discoverable action (Pen mode's close-on-first-point only
+    /// ever covered the subpath currently being drawn, not reconnecting
+    /// two already-finished ones).
+    pub fn join_selected(
+        &mut self,
+        graph: &mut mc_core::Graph,
+        history: &mut mc_core::History,
+        node_id: mc_core::NodeId,
+    ) {
+        let Some(path) = current_path(graph, node_id) else {
+            return;
+        };
+        perform_join(graph, history, node_id, &path, self);
+    }
+}
+
+fn current_path(graph: &mc_core::Graph, node_id: mc_core::NodeId) -> Option<mc_core::Path> {
+    graph
+        .node(node_id)
+        .and_then(|n| n.params.get("path"))
+        .and_then(ParamValue::as_path)
+        .cloned()
+}
+
+/// `(a, b)` if the selection is exactly two endpoints [`perform_join`] can
+/// act on — see [`PathEditorState::can_join`].
+fn joinable_endpoints(
+    path: &mc_core::Path,
+    selected: &HashSet<PointKey>,
+) -> Option<(PointKey, PointKey)> {
+    if selected.len() != 2 {
+        return None;
+    }
+    let mut it = selected.iter().copied();
+    let a = it.next()?;
+    let b = it.next()?;
+
+    let is_endpoint = |key: PointKey| {
+        let (sp_i, pt_i) = key;
+        path.subpaths
+            .get(sp_i)
+            .is_some_and(|sp| !sp.closed && (pt_i == 0 || pt_i + 1 == sp.points.len()))
+    };
+    if !is_endpoint(a) || !is_endpoint(b) {
+        return None;
+    }
+    if a.0 == b.0 {
+        // Same subpath — only its own two distinct ends, and only with
+        // enough points left to close into a meaningful shape (mirrors
+        // Pen mode's own `MIN_POINTS_TO_CLOSE` rule).
+        let sp = path.subpaths.get(a.0)?;
+        if a.1 == b.1 || sp.points.len() < MIN_POINTS_TO_CLOSE {
+            return None;
+        }
+    }
+    Some((a, b))
+}
+
+/// See [`PathEditorState::join_selected`].
+fn perform_join(
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    node_id: mc_core::NodeId,
+    path: &mc_core::Path,
+    state: &mut PathEditorState,
+) {
+    let Some((a, b)) = joinable_endpoints(path, &state.selected) else {
+        return;
+    };
+    let mut new_path = path.clone();
+
+    if a.0 == b.0 {
+        new_path.subpaths[a.0].closed = true;
+        state.selected = HashSet::from([a, b]);
+        commit_path_change(graph, history, node_id, path.clone(), new_path);
+        return;
+    }
+
+    // Orient each subpath so its own selected endpoint ends up last (the
+    // first subpath) / first (the second), so concatenating lands the two
+    // formerly-disconnected endpoints adjacent — connected by one new
+    // segment, with both points (and all their others) kept intact.
+    let first_sp = path.subpaths[a.0].clone();
+    let second_sp = path.subpaths[b.0].clone();
+    let first_oriented = if a.1 == 0 {
+        mc_nodes::path::reverse_subpath(&first_sp)
+    } else {
+        first_sp
+    };
+    let second_oriented = if b.1 + 1 == second_sp.points.len() {
+        mc_nodes::path::reverse_subpath(&second_sp)
+    } else {
+        second_sp
+    };
+
+    let join_index = first_oriented.points.len() - 1;
+    let mut merged_points = first_oriented.points;
+    merged_points.extend(second_oriented.points);
+    let merged = SubPath::new(merged_points, false);
+
+    let (lo, hi) = if a.0 < b.0 { (a.0, b.0) } else { (b.0, a.0) };
+    new_path.subpaths.remove(hi);
+    new_path.subpaths.remove(lo);
+    new_path.subpaths.insert(lo, merged);
+
+    state.selected = HashSet::from([(lo, join_index), (lo, join_index + 1)]);
+    commit_path_change(graph, history, node_id, path.clone(), new_path);
 }
 
 fn uv_to_screen(uv: [f64; 2], image_rect: egui::Rect) -> egui::Pos2 {
@@ -162,8 +298,8 @@ fn hit_test(
     screen_pos: egui::Pos2,
     selected: &HashSet<PointKey>,
 ) -> Option<DragTarget> {
-    fn consider(best: &mut Option<(f32, DragTarget)>, dist: f32, target: DragTarget) {
-        if dist <= PICK_RADIUS && best.is_none_or(|(best_dist, _)| dist < best_dist) {
+    fn consider(best: &mut Option<(f32, DragTarget)>, dist: f32, radius: f32, target: DragTarget) {
+        if dist <= radius && best.is_none_or(|(best_dist, _)| dist < best_dist) {
             *best = Some((dist, target));
         }
     }
@@ -182,7 +318,12 @@ fn hit_test(
             }
             let world = [pt.pos[0] + offset[0], pt.pos[1] + offset[1]];
             let dist = uv_to_screen(world, image_rect).distance(screen_pos);
-            consider(&mut best, dist, DragTarget::Handle((sp_i, pt_i), side));
+            consider(
+                &mut best,
+                dist,
+                HANDLE_PICK_RADIUS,
+                DragTarget::Handle((sp_i, pt_i), side),
+            );
         }
     }
     if best.is_some() {
@@ -192,7 +333,12 @@ fn hit_test(
     for (sp_i, sp) in path.subpaths.iter().enumerate() {
         for (pt_i, pt) in sp.points.iter().enumerate() {
             let dist = uv_to_screen(pt.pos, image_rect).distance(screen_pos);
-            consider(&mut best, dist, DragTarget::Point((sp_i, pt_i)));
+            consider(
+                &mut best,
+                dist,
+                PICK_RADIUS,
+                DragTarget::Point((sp_i, pt_i)),
+            );
         }
     }
     best.map(|(_, t)| t)
@@ -292,12 +438,7 @@ fn finish_drag(
     state: &mut PathEditorState,
 ) {
     if let Some(active) = state.drag.take() {
-        if let Some(current) = graph
-            .node(node_id)
-            .and_then(|n| n.params.get("path"))
-            .and_then(ParamValue::as_path)
-            .cloned()
-        {
+        if let Some(current) = current_path(graph, node_id) {
             commit_path_change(graph, history, node_id, active.old_path, current);
         }
     }
@@ -491,12 +632,7 @@ pub fn show(
     state: &mut PathEditorState,
     response: &egui::Response,
 ) {
-    let Some(path) = graph
-        .node(node_id)
-        .and_then(|n| n.params.get("path"))
-        .and_then(ParamValue::as_path)
-        .cloned()
-    else {
+    let Some(path) = current_path(graph, node_id) else {
         return;
     };
 
@@ -934,5 +1070,160 @@ mod tests {
         let mut closed = path.clone();
         closed.subpaths[0].closed = true;
         assert!(!is_last_point_of_an_open_subpath(&closed, (0, 2)));
+    }
+
+    fn two_line_path() -> mc_core::Path {
+        mc_core::Path {
+            subpaths: vec![
+                SubPath::new(vec![Point::new([0.0, 0.0]), Point::new([0.2, 0.0])], false),
+                SubPath::new(vec![Point::new([0.5, 0.0]), Point::new([0.7, 0.0])], false),
+            ],
+            wrap: true,
+        }
+    }
+
+    #[test]
+    fn joinable_endpoints_accepts_two_different_open_subpath_ends() {
+        let path = two_line_path();
+        let mut selected = HashSet::new();
+        selected.insert((0usize, 1usize)); // last of subpath 0
+        selected.insert((1usize, 0usize)); // first of subpath 1
+        assert!(joinable_endpoints(&path, &selected).is_some());
+    }
+
+    #[test]
+    fn joinable_endpoints_rejects_a_non_endpoint_or_a_closed_subpath() {
+        let path = {
+            let mut p = two_line_path();
+            p.subpaths[0].points.push(Point::new([0.4, 0.0])); // 3 points now
+            p
+        };
+        let mut middle_point = HashSet::new();
+        middle_point.insert((0usize, 1usize)); // middle, not an end anymore
+        middle_point.insert((1usize, 0usize));
+        assert!(joinable_endpoints(&path, &middle_point).is_none());
+
+        let mut closed = two_line_path();
+        closed.subpaths[0].closed = true;
+        let mut selected = HashSet::new();
+        selected.insert((0usize, 0usize));
+        selected.insert((0usize, 1usize));
+        assert!(joinable_endpoints(&closed, &selected).is_none());
+    }
+
+    #[test]
+    fn joinable_endpoints_requires_three_points_to_close_a_single_subpath() {
+        let path = two_line_path(); // subpath 0 has only 2 points
+        let mut selected = HashSet::new();
+        selected.insert((0usize, 0usize));
+        selected.insert((0usize, 1usize));
+        assert!(joinable_endpoints(&path, &selected).is_none());
+    }
+
+    #[test]
+    fn perform_join_closes_a_single_subpaths_own_two_ends() {
+        let path = triangle_path(); // one open subpath, 3 points
+        let (mut graph, id) = graph_with_path(path.clone());
+        let mut history = mc_core::History::new();
+        let mut state = PathEditorState {
+            selected: HashSet::from([(0, 0), (0, 2)]),
+            ..Default::default()
+        };
+
+        perform_join(&mut graph, &mut history, id, &path, &mut state);
+
+        let joined = path_of(&graph, id);
+        assert_eq!(joined.subpaths.len(), 1);
+        assert!(joined.subpaths[0].closed);
+        assert_eq!(
+            joined.subpaths[0].points.len(),
+            3,
+            "joining shouldn't add or remove points"
+        );
+    }
+
+    #[test]
+    fn perform_join_merges_two_subpaths_last_to_first() {
+        let path = two_line_path();
+        let (mut graph, id) = graph_with_path(path.clone());
+        let mut history = mc_core::History::new();
+        let mut state = PathEditorState {
+            selected: HashSet::from([(0, 1), (1, 0)]),
+            ..Default::default()
+        };
+
+        perform_join(&mut graph, &mut history, id, &path, &mut state);
+
+        let joined = path_of(&graph, id);
+        assert_eq!(joined.subpaths.len(), 1);
+        assert_eq!(joined.subpaths[0].points.len(), 4);
+        assert!(!joined.subpaths[0].closed);
+        // Which subpath `perform_join` treats as "first" depends on
+        // `HashSet` iteration order, which isn't guaranteed — so this
+        // checks the curve is one of the two equally-valid tracings
+        // (forward or reversed) rather than one hardcoded order.
+        let xs: Vec<f64> = joined.subpaths[0].points.iter().map(|p| p.pos[0]).collect();
+        assert!(
+            xs == vec![0.0, 0.2, 0.5, 0.7] || xs == vec![0.7, 0.5, 0.2, 0.0],
+            "unexpected point order: {xs:?}"
+        );
+        // The two originally-selected endpoints (0.2 and 0.5) should have
+        // ended up selected again and adjacent to each other.
+        let mut selected: Vec<_> = state.selected.iter().copied().collect();
+        selected.sort_unstable();
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].0, 0);
+        assert_eq!(selected[1].0, 0);
+        assert_eq!(selected[1].1, selected[0].1 + 1);
+        let selected_xs: Vec<f64> = selected
+            .iter()
+            .map(|&(sp, pt)| joined.subpaths[sp].points[pt].pos[0])
+            .collect();
+        assert!(
+            (selected_xs == vec![0.2, 0.5]) || (selected_xs == vec![0.5, 0.2]),
+            "unexpected selected positions: {selected_xs:?}"
+        );
+    }
+
+    #[test]
+    fn perform_join_reverses_subpaths_as_needed_for_a_first_to_first_join() {
+        let path = two_line_path();
+        let (mut graph, id) = graph_with_path(path.clone());
+        let mut history = mc_core::History::new();
+        // Both selected points are each subpath's own *first* point — the
+        // first subpath needs reversing so the shared joint lands adjacent.
+        let mut state = PathEditorState {
+            selected: HashSet::from([(0, 0), (1, 0)]),
+            ..Default::default()
+        };
+
+        perform_join(&mut graph, &mut history, id, &path, &mut state);
+
+        let joined = path_of(&graph, id);
+        assert_eq!(joined.subpaths.len(), 1);
+        let xs: Vec<f64> = joined.subpaths[0].points.iter().map(|p| p.pos[0]).collect();
+        // Either a reversed-subpath-0 then subpath-1, or the exact reverse
+        // of that (reversed-subpath-1 then subpath-0) — which one depends
+        // on `HashSet` iteration order, which isn't guaranteed; both are
+        // the same curve, just traced in opposite directions.
+        assert!(
+            xs == vec![0.2, 0.0, 0.5, 0.7] || xs == vec![0.7, 0.5, 0.0, 0.2],
+            "unexpected point order: {xs:?}"
+        );
+    }
+
+    #[test]
+    fn perform_join_does_nothing_when_the_selection_is_not_joinable() {
+        let path = triangle_path();
+        let (mut graph, id) = graph_with_path(path.clone());
+        let mut history = mc_core::History::new();
+        let mut state = PathEditorState {
+            selected: HashSet::from([(0, 1)]), // only one point selected
+            ..Default::default()
+        };
+
+        perform_join(&mut graph, &mut history, id, &path, &mut state);
+
+        assert_eq!(path_of(&graph, id), path);
     }
 }

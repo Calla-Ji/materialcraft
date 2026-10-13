@@ -257,7 +257,7 @@ impl eframe::App for MaterialCreatorApp {
             },
             &mut |ui, id| match id {
                 dock::CrateId::Parameters => {
-                    params_panel::show(ui, graph, history, *selected, param_drag);
+                    params_panel::show(ui, graph, history, *selected, param_drag, path_editor);
                 }
                 dock::CrateId::TwoDView => {
                     let full_rect = ui.available_rect_before_wrap();
@@ -364,8 +364,17 @@ impl eframe::App for MaterialCreatorApp {
                             }
                         }
                         None => {
-                            ui.add_space(8.0);
-                            ui.horizontal(|ui| {
+                            // A plain `ui.add_space`/`ui.horizontal` here
+                            // would lay out from the panel's own default
+                            // cursor, starting under the toolbar rail —
+                            // anchoring to `toolbar_content_rect` keeps
+                            // this text clear of it, same as the toolbar
+                            // itself being anchored rather than laid out
+                            // inline.
+                            let mut content_ui =
+                                ui.new_child(egui::UiBuilder::new().max_rect(toolbar_content_rect));
+                            content_ui.add_space(8.0);
+                            content_ui.horizontal(|ui| {
                                 ui.add_space(8.0);
                                 ui.weak("(select a node to preview it)");
                             });

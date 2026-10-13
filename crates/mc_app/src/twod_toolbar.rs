@@ -8,7 +8,6 @@
 
 const TOOLBAR_WIDTH: f32 = 38.0;
 const BUTTON_SIZE: f32 = 30.0;
-const BUTTON_GAP: f32 = 4.0;
 const ICON_FONT_SIZE: f32 = 20.0;
 const TOP_PADDING: f32 = 8.0;
 
@@ -38,9 +37,11 @@ pub fn show(
         toolbar_ui.vertical(|ui| {
             ui.add_space(TOP_PADDING);
             tiling_button(ui, tiling_preview);
-            ui.add_space(BUTTON_GAP);
-            separator(ui);
-            ui.add_space(BUTTON_GAP);
+            // `ui.separator()` draws a horizontal rule inset from both
+            // edges inside a vertical layout — the exact same widget, and
+            // so the exact same look, as the menu bar's own separators
+            // between e.g. Export and Undo.
+            ui.separator();
 
             let path_node_id =
                 selected.filter(|&id| graph.node(id).is_some_and(|n| n.kind == "path"));
@@ -54,17 +55,6 @@ pub fn show(
         egui::pos2(toolbar_rect.right() + 1.0, full_rect.top()),
         full_rect.max,
     )
-}
-
-/// A thin horizontal rule spanning the toolbar column's own width, same
-/// grey as the menu bar's vertical separators — visually groups Tiling
-/// (a 2D View setting) apart from Pen and whatever editor-action icons
-/// join it below.
-fn separator(ui: &mut egui::Ui) {
-    let y = ui.cursor().min.y;
-    let x_range = ui.cursor().min.x..=(ui.cursor().min.x + ui.available_width());
-    ui.painter().hline(x_range, y, ui.visuals().window_stroke());
-    ui.add_space(1.0);
 }
 
 /// Square icon button, drawn from raw primitives (not `ui.selectable_label`)

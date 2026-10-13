@@ -201,6 +201,28 @@ pub fn delete_point(sp: &SubPath, index: usize) -> SubPath {
     SubPath::new(pts, closed)
 }
 
+/// Reverses point order — used by the 2D View's "Join" action to orient
+/// two subpaths so the endpoints being joined land adjacent to each other
+/// before concatenating. `h_in`/`h_out` swap along with the order, since
+/// they're directional (toward the previous/next point) and that
+/// direction itself reverses; a plain point-list reversal without this
+/// swap would leave every handle pointing the wrong way along the curve.
+pub fn reverse_subpath(sp: &SubPath) -> SubPath {
+    let points = sp
+        .points
+        .iter()
+        .rev()
+        .map(|p| Point {
+            pos: p.pos,
+            h_in: p.h_out,
+            h_out: p.h_in,
+            kind: p.kind,
+            width: p.width,
+        })
+        .collect();
+    SubPath::new(points, sp.closed)
+}
+
 /// `(segment_index, t, distance)` of the closest point on the subpath to
 /// `q`, via `kurbo::ParamCurveNearest` — PATH_NODE_SPEC.md §6 explicitly
 /// calls out `path_reference.py`'s own `nearest_on_path` as "a coarse
@@ -891,6 +913,39 @@ mod tests {
         assert_eq!(deleted.points.len(), before - 1);
         assert_eq!(deleted.points[0], sp.points[0]);
         assert_eq!(deleted.points[1], sp.points[2]);
+    }
+
+    #[test]
+    fn reverse_subpath_swaps_order_and_handle_direction() {
+        let sp = SubPath::new(
+            vec![
+                Point {
+                    pos: [0.0, 0.0],
+                    h_in: [0.0, 0.0],
+                    h_out: [0.1, 0.0],
+                    kind: PointKind::Smooth,
+                    width: 1.0,
+                },
+                Point {
+                    pos: [1.0, 0.0],
+                    h_in: [-0.1, 0.0],
+                    h_out: [0.1, 0.1],
+                    kind: PointKind::Smooth,
+                    width: 1.0,
+                },
+            ],
+            false,
+        );
+        let rev = reverse_subpath(&sp);
+        assert_eq!(rev.points.len(), 2);
+        // Order reversed...
+        assert_eq!(rev.points[0].pos, sp.points[1].pos);
+        assert_eq!(rev.points[1].pos, sp.points[0].pos);
+        // ...and each point's own h_in/h_out swapped.
+        assert_eq!(rev.points[0].h_in, sp.points[1].h_out);
+        assert_eq!(rev.points[0].h_out, sp.points[1].h_in);
+        assert_eq!(rev.points[1].h_in, sp.points[0].h_out);
+        assert_eq!(rev.points[1].h_out, sp.points[0].h_in);
     }
 
     #[test]

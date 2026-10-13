@@ -471,6 +471,7 @@ pub fn show(
     history: &mut mc_core::History,
     selected: Option<mc_core::NodeId>,
     dragging: &mut DragState,
+    path_editor: &mut crate::path_editor::PathEditorState,
 ) {
     egui::Frame::new()
         .inner_margin(egui::Margin::symmetric(12, 8))
@@ -484,7 +485,7 @@ pub fn show(
                 .id_salt("params_panel_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    show_inner(ui, graph, history, selected, dragging);
+                    show_inner(ui, graph, history, selected, dragging, path_editor);
                 });
         });
 }
@@ -495,6 +496,7 @@ fn show_inner(
     history: &mut mc_core::History,
     selected: Option<mc_core::NodeId>,
     dragging: &mut DragState,
+    path_editor: &mut crate::path_editor::PathEditorState,
 ) {
     let Some(id) = selected else {
         ui.weak("(select a node to edit its parameters)");
@@ -988,10 +990,113 @@ fn show_inner(
                         history,
                         id,
                         param.name,
-                        mc_core::ParamValue::Path(mc_core::Path { wrap, ..path_value }),
+                        mc_core::ParamValue::Path(mc_core::Path {
+                            wrap,
+                            ..path_value.clone()
+                        }),
                     );
                 }
+
+                if path_editor.can_join(graph, id) {
+                    ui.add_space(4.0);
+                    if ui
+                        .button("Join Selected Endpoints")
+                        .on_hover_text(
+                            "Connects the two selected open-path endpoints with a new \
+                             segment — joins two separate pieces into one, or closes a \
+                             single piece into a loop.",
+                        )
+                        .clicked()
+                    {
+                        path_editor.join_selected(graph, history, id);
+                    }
+                }
+
+                path_point_list(ui, graph, history, dragging, id, path_editor, &path_value);
             }
+        }
+    }
+}
+
+/// Every point, grouped by subpath, with its own X/Y `DragValue` fields —
+/// added at the owner's request so a point can be nudged to an exact
+/// coordinate here instead of only by eye in the 2D View. Clicking a
+/// point's own label selects it there too, the same link clicking a point
+/// in the 2D View already has back to its own fields appearing here.
+#[allow(clippy::too_many_arguments)]
+fn path_point_list(
+    ui: &mut egui::Ui,
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    dragging: &mut DragState,
+    id: mc_core::NodeId,
+    path_editor: &mut crate::path_editor::PathEditorState,
+    path_value: &mc_core::Path,
+) {
+    if path_value.subpaths.is_empty() {
+        return;
+    }
+    ui.add_space(6.0);
+    ui.separator();
+    for (sp_i, sp) in path_value.subpaths.iter().enumerate() {
+        ui.weak(format!(
+            "Subpath {} ({})",
+            sp_i + 1,
+            if sp.closed { "closed" } else { "open" }
+        ));
+        for (pt_i, pt) in sp.points.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let is_selected = path_editor.is_selected(sp_i, pt_i);
+                if ui
+                    .selectable_label(is_selected, format!("Point {}", pt_i + 1))
+                    .clicked()
+                {
+                    path_editor.select_only(sp_i, pt_i);
+                }
+
+                let mut new_pos = pt.pos;
+                let x_response = ui.add(
+                    egui::DragValue::new(&mut new_pos[0])
+                        .speed(0.001)
+                        .prefix("X: "),
+                );
+                let y_response = ui.add(
+                    egui::DragValue::new(&mut new_pos[1])
+                        .speed(0.001)
+                        .prefix("Y: "),
+                );
+
+                // Called every frame regardless of whether either value
+                // actually changed — same as the Vec2 case above,
+                // `commit_live` itself is the thing deciding whether this
+                // frame is a drag-start/live-apply/drag-stop no-op, same
+                // reasoning as why that case doesn't gate on `changed()`
+                // either: gating here on our own would risk skipping the
+                // exact frame `commit_live` needs to see to open or close
+                // its undo snapshot.
+                let mut new_path = path_value.clone();
+                new_path.subpaths[sp_i].points[pt_i].pos = new_pos;
+                commit_live(
+                    ui,
+                    graph,
+                    history,
+                    dragging,
+                    id,
+                    "path",
+                    &x_response,
+                    mc_core::ParamValue::Path(new_path.clone()),
+                );
+                commit_live(
+                    ui,
+                    graph,
+                    history,
+                    dragging,
+                    id,
+                    "path",
+                    &y_response,
+                    mc_core::ParamValue::Path(new_path),
+                );
+            });
         }
     }
 }
