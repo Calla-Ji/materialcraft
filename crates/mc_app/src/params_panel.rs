@@ -28,14 +28,14 @@ fn random_seed() -> u32 {
 
 /// An explanatory aside under a param — e.g. "this only matters once X is
 /// set" — styled to actually read as a comment rather than another label:
-/// half the body text size (still legible, not a tooltip-only detail) and
-/// italic, matching how comments look in code. The established convention
-/// for this kind of per-param note going forward (first used for Thread's
-/// Fiber Depth/Fibers per Ply hint below) — reach for this instead of a
-/// plain `ui.weak(...)` whenever the text is explaining a param's behavior
-/// rather than its live connection state (the `[x]`/`[ ] connected` status
-/// lines above stay full-size, since those are closer to a label than an
-/// aside).
+/// three-quarters of the body text size (half read as too small to be
+/// comfortable; this is the settled middle ground) and italic, matching how
+/// comments look in code. The established convention for this kind of
+/// per-param note going forward (first used for Thread's Fiber Depth/Fibers
+/// per Ply hint below) — reach for this instead of a plain `ui.weak(...)`
+/// whenever the text is explaining a param's behavior rather than its live
+/// connection state (the `[x]`/`[ ] connected` status lines above stay
+/// full-size, since those are closer to a label than an aside).
 fn param_comment(ui: &mut egui::Ui, text: &str) {
     let body_size = ui
         .style()
@@ -45,7 +45,7 @@ fn param_comment(ui: &mut egui::Ui, text: &str) {
         .unwrap_or(14.0);
     ui.label(
         egui::RichText::new(text)
-            .size(body_size * 0.5)
+            .size(body_size * 0.75)
             .italics()
             .weak(),
     );
@@ -67,6 +67,35 @@ fn thread_fiber_param_hint(ui: &mut egui::Ui, node_kind: &str, param_name: &str)
             "Most visible with Threads at 1 and Cable Groups off \u{2014} more stacked \
              threads/cable layers shrink how much of the final image one ply's own groove \
              covers.",
+        );
+    }
+}
+
+/// Seed only ever shifts where a *ply* sits in its own orbit around the
+/// thread axis — a single (unplied) yarn has no orbit to shift, so Seed is
+/// a genuine no-op at Plies 1 (confirmed: `thread_shape`'s own
+/// `seed_only_has_an_effect_with_two_or_more_plies` test). Explained here
+/// rather than hiding the control outright — a user who already has a
+/// seed dialed in on a Plies-2+ thread shouldn't lose that value from view
+/// just because they're trying Plies 1.
+fn thread_seed_hint(
+    ui: &mut egui::Ui,
+    node_kind: &str,
+    param_name: &str,
+    current_params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+) {
+    if node_kind != "thread_shape" || param_name != "seed" {
+        return;
+    }
+    let plies = current_params
+        .get("plies")
+        .and_then(mc_core::ParamValue::as_int)
+        .unwrap_or(2);
+    if plies <= 1 {
+        param_comment(
+            ui,
+            "No effect at Plies 1 \u{2014} a single yarn has no ply orbit for Seed to \
+             shift.",
         );
     }
 }
@@ -276,6 +305,7 @@ fn show_inner(
                         );
                     }
                 });
+                thread_seed_hint(ui, &node_kind, param.name, &current_params);
             }
             mc_nodes::defs::ParamSpecKind::Enum { options, default } => {
                 let value = match &current {
