@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The Path node's own interactive overlay in the 2D View — drawing the
 //! curve on top of its Preview Mask, and letting the artist select and
-//! drag its points and handles directly, or draw brand new ones with Pen
-//! mode. PATH_NODE_SPEC.md §4 is the source of truth for the full editor;
-//! this covers: click/shift-click select, drag a point, drag a handle
+//! drag its points and handles directly, draw brand new ones with Pen
+//! mode, insert a point mid-curve, or join two open endpoints together.
+//! PATH_NODE_SPEC.md §4 is the source of truth for the full editor; this
+//! covers: click/shift-click select, drag a point, drag a handle
 //! (respecting its kind's constraint via `mc_nodes::path::drag_handle`),
-//! Delete/Backspace to remove the selection, and Pen mode (P to enter,
-//! click empty space to append a point, click-and-drag to append one with
-//! a dragged-out symmetric handle, click the first point to close, Esc to
-//! leave). Double-click kind toggling, the right-click menu, Alt-drag
-//! break-link, click-on-segment insert, SVG paste, and wrap ghost copies
-//! are still to come.
+//! Delete/Backspace to remove the selection, Pen mode (P to enter, click
+//! empty space to append a point, click-and-drag to append one with a
+//! dragged-out symmetric handle, click the first point to close, Esc to
+//! leave), Insert mode (click a segment to split it there, via the 2D
+//! View toolbar's own toggle — deliberately *not* always-on background
+//! behavior, since that read as "I can't stop adding points" the one
+//! time it surprised someone), and Join (two selected open-subpath
+//! endpoints connect with a new segment). Double-click kind toggling, the
+//! right-click menu, Alt-drag break-link, SVG paste, and wrap ghost
+//! copies are still to come.
 //!
 //! Shares the 2D View's existing pan-drag `egui::Response` rather than
 //! opening a second `Sense::click_and_drag()` region over the same rect —
@@ -89,11 +94,27 @@ pub struct PathEditorState {
     /// Which subpath Pen mode is currently appending to — `None` means the
     /// next empty-space click/drag starts a brand new subpath.
     pen_subpath: Option<usize>,
+    /// Whether clicking a segment inserts a point there — a real toggle
+    /// (not always-on background behavior, which read as "I can't stop
+    /// adding points" once discovered by accident) so the 2D View's own
+    /// "add_circle" icon actually controls something rather than just
+    /// describing an always-active behavior.
+    insert_mode: bool,
 }
 
 impl PathEditorState {
     pub fn pen_mode(&self) -> bool {
         self.pen_mode
+    }
+
+    pub fn insert_mode(&self) -> bool {
+        self.insert_mode
+    }
+
+    /// Flips whether clicking a segment inserts a point there. Unlike Pen
+    /// mode, there's no "resume" state to restore on exit — just the flag.
+    pub fn toggle_insert_mode(&mut self) {
+        self.insert_mode = !self.insert_mode;
     }
 
     /// Enter or leave Pen mode. Entering with exactly one point selected —
@@ -701,20 +722,26 @@ fn draw(
     path: &mc_core::Path,
     selected: &HashSet<PointKey>,
     pen_mode: bool,
+    show_curve: bool,
 ) {
     let painter = ui.painter();
     let curve_stroke = egui::Stroke::new(1.5, crate::theme::PATH_CYAN);
     let handle_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(190));
     let point_outline = egui::Stroke::new(1.0, egui::Color32::BLACK);
 
-    for sp in &path.subpaths {
-        let samples = mc_nodes::path::preview_polyline(sp, DRAW_SAMPLES_PER_SEGMENT);
-        let screen_points: Vec<egui::Pos2> = samples
-            .iter()
-            .map(|&uv| uv_to_screen(uv, image_rect))
-            .collect();
-        if screen_points.len() >= 2 {
-            painter.add(egui::Shape::line(screen_points, curve_stroke));
+    // Points/handles still draw either way — hiding those too would make
+    // a Show-Curve-off Path impossible to keep editing, not just tidier
+    // to look at.
+    if show_curve {
+        for sp in &path.subpaths {
+            let samples = mc_nodes::path::preview_polyline(sp, DRAW_SAMPLES_PER_SEGMENT);
+            let screen_points: Vec<egui::Pos2> = samples
+                .iter()
+                .map(|&uv| uv_to_screen(uv, image_rect))
+                .collect();
+            if screen_points.len() >= 2 {
+                painter.add(egui::Shape::line(screen_points, curve_stroke));
+            }
         }
     }
 
@@ -746,14 +773,34 @@ fn draw(
     }
 
     if pen_mode {
-        painter.text(
-            image_rect.left_top() + egui::vec2(6.0, 6.0),
-            egui::Align2::LEFT_TOP,
+        draw_wrapped_hint(
+            painter,
+            image_rect,
             "Pen mode — click to add points, click the first point to close, Esc to exit",
-            egui::FontId::proportional(12.0),
-            crate::theme::SUPERNOVA_LIGHT,
         );
     }
+}
+
+/// `Painter::text` never wraps — on a narrow 2D View a long hint like Pen
+/// mode's own just runs off the edge instead of breaking onto a second
+/// line. Wraps to `image_rect`'s own width (minus the same margin the
+/// text is inset by) via a real `LayoutJob`, same mechanism egui's own
+/// multiline labels use internally.
+fn draw_wrapped_hint(painter: &egui::Painter, image_rect: egui::Rect, text: &str) {
+    const MARGIN: f32 = 6.0;
+    let wrap_width = (image_rect.width() - 2.0 * MARGIN).max(40.0);
+    let job = egui::text::LayoutJob::simple(
+        text.to_string(),
+        egui::FontId::proportional(12.0),
+        crate::theme::SUPERNOVA_LIGHT,
+        wrap_width,
+    );
+    let galley = painter.layout_job(job);
+    painter.galley(
+        image_rect.left_top() + egui::vec2(MARGIN, MARGIN),
+        galley,
+        crate::theme::SUPERNOVA_LIGHT,
+    );
 }
 
 /// Draws the current Path and handles select/drag/delete/Pen-mode for it.
@@ -821,9 +868,13 @@ pub fn show(
         if response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let target = hit_test(&path, image_rect, pos, &state.selected);
+                let segment_hit = state
+                    .insert_mode
+                    .then(|| segment_hit_test(&path, image_rect, pos))
+                    .flatten();
                 if target.is_some() {
                     apply_selection(ui, state, target);
-                } else if let Some((sp_i, seg_i, t)) = segment_hit_test(&path, image_rect, pos) {
+                } else if let Some((sp_i, seg_i, t)) = segment_hit {
                     insert_point_on_segment(graph, history, node_id, state, &path, sp_i, seg_i, t);
                 } else {
                     apply_selection(ui, state, None);
@@ -861,12 +912,24 @@ pub fn show(
 
     // Re-read for drawing — a drag, click, or delete just above may have
     // changed it this same frame.
+    let show_curve = graph
+        .node(node_id)
+        .and_then(|n| n.params.get("show_curve"))
+        .and_then(ParamValue::as_bool)
+        .unwrap_or(true);
     if let Some(current) = graph
         .node(node_id)
         .and_then(|n| n.params.get("path"))
         .and_then(ParamValue::as_path)
     {
-        draw(ui, image_rect, current, &state.selected, state.pen_mode);
+        draw(
+            ui,
+            image_rect,
+            current,
+            &state.selected,
+            state.pen_mode,
+            show_curve,
+        );
     }
 
     deleted_a_point

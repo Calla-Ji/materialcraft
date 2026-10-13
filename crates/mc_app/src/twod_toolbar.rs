@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The 2D View's own left-edge icon rail — Tiling on top, a thin divider,
-//! then Pen and Join (each greyed out with an explanatory tooltip when
-//! they don't currently apply) — mirroring `viewport3d_panels`' own
-//! icon-button toolbar so the 2D and 3D panels read as one consistent app
-//! rather than two different UI styles. Room is left here for future
-//! Path-editor actions (SVG import, etc.) to join them in the same rail.
+//! then Pen, Insert Point, and Join (each greyed out with an explanatory
+//! tooltip when they don't currently apply) — mirroring
+//! `viewport3d_panels`' own icon-button toolbar so the 2D and 3D panels
+//! read as one consistent app rather than two different UI styles. Room
+//! is left here for future Path-editor actions (SVG import, etc.) to
+//! join them in the same rail.
 
 const TOOLBAR_WIDTH: f32 = 38.0;
 const BUTTON_SIZE: f32 = 30.0;
@@ -63,7 +64,7 @@ pub fn show(
                 selected.filter(|&id| graph.node(id).is_some_and(|n| n.kind == "path"));
             pen_button(ui, path_editor, graph, history, path_node_id);
             join_button(ui, path_editor, graph, history, path_node_id);
-            insert_point_hint_button(ui, path_node_id);
+            insert_point_button(ui, path_editor, path_node_id);
         });
     }
     ui.painter()
@@ -205,21 +206,29 @@ fn join_button(
 /// (`path_editor::segment_hit_test`), with no mode to switch into first.
 /// This icon just makes that fact visible; it has no click handler of its
 /// own.
-fn insert_point_hint_button(ui: &mut egui::Ui, path_node_id: Option<mc_core::NodeId>) {
+fn insert_point_button(
+    ui: &mut egui::Ui,
+    path_editor: &mut crate::path_editor::PathEditorState,
+    path_node_id: Option<mc_core::NodeId>,
+) {
     let enabled = path_node_id.is_some();
+    let active = path_editor.insert_mode();
     let tooltip = if enabled {
-        "Click any point on this curve's own line to insert a new point there — always \
-         available, no need to enter Pen mode first."
+        "Click a point on this curve's own line to insert a new point there. Click this icon \
+         again to turn it off."
     } else {
-        "Add a Path node and select it — then click anywhere on its curve to insert a point \
-         there."
+        "Add a Path node and select it — then turn this on to insert points by clicking the \
+         curve."
     };
-    icon_button(
+    let response = icon_button(
         ui,
-        "two_d_toolbar_insert_point_hint",
+        "two_d_toolbar_insert_point",
         ADD_CIRCLE_GLYPH,
-        false,
+        active,
         enabled,
         tooltip,
     );
+    if enabled && response.clicked() {
+        path_editor.toggle_insert_mode();
+    }
 }
