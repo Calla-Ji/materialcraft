@@ -19,17 +19,27 @@ const EDIT_GLYPH: char = '\u{e3c9}'; // "edit" (pencil)
 /// and returns the rect the 2D View's actual content should use instead of
 /// `full_rect` — same split as `dock::CrateId::ThreeDView`'s own
 /// toolbar/viewport division in `main.rs`.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
     full_rect: egui::Rect,
     tiling_preview: &mut bool,
     path_editor: &mut crate::path_editor::PathEditorState,
-    graph: &mc_core::Graph,
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
     selected: Option<mc_core::NodeId>,
 ) -> egui::Rect {
     let toolbar_rect =
         egui::Rect::from_min_size(full_rect.min, egui::vec2(TOOLBAR_WIDTH, full_rect.height()));
     let divider_stroke = ui.visuals().window_stroke();
+
+    // The rail had no background fill of its own before — whatever was
+    // directly behind it (even a stray point/handle dragged underneath,
+    // see `path_editor`'s own drag clamping) showed straight through,
+    // reading as a gap rather than a proper opaque panel strip like every
+    // other toolbar in the app.
+    ui.painter()
+        .rect_filled(toolbar_rect, 0.0, crate::theme::NEUTRON_STAR);
 
     {
         let mut toolbar_ui = ui.new_child(egui::UiBuilder::new().max_rect(toolbar_rect));
@@ -45,7 +55,7 @@ pub fn show(
 
             let path_node_id =
                 selected.filter(|&id| graph.node(id).is_some_and(|n| n.kind == "path"));
-            pen_button(ui, path_editor, graph, path_node_id);
+            pen_button(ui, path_editor, graph, history, path_node_id);
         });
     }
     ui.painter()
@@ -122,7 +132,8 @@ fn tiling_button(ui: &mut egui::Ui, tiling_preview: &mut bool) {
 fn pen_button(
     ui: &mut egui::Ui,
     path_editor: &mut crate::path_editor::PathEditorState,
-    graph: &mc_core::Graph,
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
     path_node_id: Option<mc_core::NodeId>,
 ) {
     let enabled = path_node_id.is_some();
@@ -143,7 +154,7 @@ fn pen_button(
     );
     if let Some(id) = path_node_id {
         if response.clicked() {
-            path_editor.toggle_pen_mode(graph, id);
+            path_editor.toggle_pen_mode(graph, history, id);
         }
     }
 }

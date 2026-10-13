@@ -100,8 +100,32 @@ impl PathEditorState {
     /// and it's the last point of an open subpath — resumes drawing that
     /// subpath instead of starting a fresh one on the next click
     /// (PATH_NODE_SPEC.md §4). Leaving always clears the selection too,
-    /// same as pressing Esc.
-    fn set_pen_mode(&mut self, path: &mc_core::Path, enabled: bool) {
+    /// same as pressing Esc — and if the subpath Pen mode was actively
+    /// appending to only ever got one point (a single click-and-drag,
+    /// then the artist left before adding a second), that lone point gets
+    /// dropped rather than left behind as a stray, unfinished subpath with
+    /// no curve to show for it.
+    fn set_pen_mode(
+        &mut self,
+        graph: &mut mc_core::Graph,
+        history: &mut mc_core::History,
+        node_id: mc_core::NodeId,
+        path: &mc_core::Path,
+        enabled: bool,
+    ) {
+        if !enabled {
+            if let Some(sp_i) = self.pen_subpath {
+                if path
+                    .subpaths
+                    .get(sp_i)
+                    .is_some_and(|sp| sp.points.len() < 2)
+                {
+                    let mut new_path = path.clone();
+                    new_path.subpaths.remove(sp_i);
+                    commit_path_change(graph, history, node_id, path.clone(), new_path);
+                }
+            }
+        }
         self.pen_mode = enabled;
         if enabled {
             self.pen_subpath = single_selected_point(&self.selected)
@@ -117,12 +141,17 @@ impl PathEditorState {
     /// used by the 2D View's own Pen toggle button, which (unlike `show`'s
     /// own P-key handler) doesn't already have that frame's `Path` value in
     /// hand.
-    pub fn toggle_pen_mode(&mut self, graph: &mc_core::Graph, node_id: mc_core::NodeId) {
+    pub fn toggle_pen_mode(
+        &mut self,
+        graph: &mut mc_core::Graph,
+        history: &mut mc_core::History,
+        node_id: mc_core::NodeId,
+    ) {
         let Some(path) = current_path(graph, node_id) else {
             return;
         };
         let enable = !self.pen_mode;
-        self.set_pen_mode(&path, enable);
+        self.set_pen_mode(graph, history, node_id, &path, enable);
     }
 
     /// Whether `key` is currently selected — used by the Params panel to
@@ -130,6 +159,14 @@ impl PathEditorState {
     /// View just moved, or which one typing into an X/Y field will move.
     pub fn is_selected(&self, subpath: usize, point: usize) -> bool {
         self.selected.contains(&(subpath, point))
+    }
+
+    /// How many points are currently selected — used by the Params panel
+    /// to explain *why* the Join button isn't showing when the selection
+    /// is close (exactly two points) but doesn't qualify, rather than
+    /// leaving it looking like the feature just doesn't work.
+    pub fn selected_count(&self) -> usize {
+        self.selected.len()
     }
 
     /// Selects exactly one point — used by the Params panel's point list,
@@ -416,6 +453,15 @@ fn commit_path_change(
 
 /// Live-applies the in-progress drag every frame it moves, re-deriving
 /// from `active.base_path` each time rather than mutating incrementally.
+/// How far past the tile's own edge a drag is still allowed to go, in
+/// screen pixels — small room to pull a handle slightly past the border
+/// (useful groundwork for `Wrap`'s eventual ghost-copy preview), without
+/// letting it wander arbitrarily far. Without this, a fast drag could land
+/// a point or handle anywhere on screen — including under a neighboring
+/// panel's own toolbar, where nothing in the 2D View can ever pick it up
+/// again.
+const DRAG_OVERSHOOT_PX: f32 = 32.0;
+
 fn update_dragged(
     graph: &mut mc_core::Graph,
     node_id: mc_core::NodeId,
@@ -423,8 +469,17 @@ fn update_dragged(
     image_rect: egui::Rect,
     cur: egui::Pos2,
 ) {
+    let bounds = image_rect.expand(DRAG_OVERSHOOT_PX);
+    let clamped = egui::pos2(
+        cur.x.clamp(bounds.min.x, bounds.max.x),
+        cur.y.clamp(bounds.min.y, bounds.max.y),
+    );
     let mut new_path = active.base_path.clone();
-    apply_drag(&mut new_path, active.target, screen_to_uv(cur, image_rect));
+    apply_drag(
+        &mut new_path,
+        active.target,
+        screen_to_uv(clamped, image_rect),
+    );
     let _ = graph.set_param(node_id, "path", ParamValue::Path(new_path));
 }
 
@@ -639,10 +694,10 @@ pub fn show(
     if response.hovered() {
         if ui.input(|i| i.key_pressed(egui::Key::P)) {
             let enable = !state.pen_mode;
-            state.set_pen_mode(&path, enable);
+            state.set_pen_mode(graph, history, node_id, &path, enable);
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            state.set_pen_mode(&path, false);
+            state.set_pen_mode(graph, history, node_id, &path, false);
         }
     }
 
@@ -1225,5 +1280,80 @@ mod tests {
         perform_join(&mut graph, &mut history, id, &path, &mut state);
 
         assert_eq!(path_of(&graph, id), path);
+    }
+
+    #[test]
+    fn leaving_pen_mode_drops_a_subpath_that_only_ever_got_one_point() {
+        let path = {
+            let mut p = triangle_path(); // one finished, unrelated subpath
+            p.subpaths
+                .push(SubPath::new(vec![Point::new([0.4, 0.4])], false));
+            p
+        };
+        let (mut graph, id) = graph_with_path(path.clone());
+        let mut history = mc_core::History::new();
+        let mut state = PathEditorState {
+            pen_mode: true,
+            pen_subpath: Some(1), // the lone stray point
+            ..Default::default()
+        };
+
+        state.set_pen_mode(&mut graph, &mut history, id, &path, false);
+
+        let after = path_of(&graph, id);
+        assert_eq!(
+            after.subpaths.len(),
+            1,
+            "the 1-point subpath should be dropped"
+        );
+        assert_eq!(
+            after.subpaths[0].points.len(),
+            3,
+            "the unrelated subpath is untouched"
+        );
+        assert!(!state.pen_mode);
+        assert_eq!(state.pen_subpath, None);
+    }
+
+    #[test]
+    fn leaving_pen_mode_keeps_a_subpath_with_two_or_more_points() {
+        let path = triangle_path();
+        let (mut graph, id) = graph_with_path(path.clone());
+        let mut history = mc_core::History::new();
+        let mut state = PathEditorState {
+            pen_mode: true,
+            pen_subpath: Some(0),
+            ..Default::default()
+        };
+
+        state.set_pen_mode(&mut graph, &mut history, id, &path, false);
+
+        assert_eq!(path_of(&graph, id), path, "nothing should be removed");
+    }
+
+    #[test]
+    fn update_dragged_clamps_far_off_pointer_positions_to_stay_near_the_tile() {
+        let path = triangle_path();
+        let (mut graph, id) = graph_with_path(path.clone());
+        let rect = square_rect();
+        let active = ActiveDrag {
+            target: DragTarget::Point((0, 0)),
+            base_path: path.clone(),
+            old_path: path,
+        };
+
+        // Far outside the rect entirely — simulates a fast drag toward a
+        // neighboring panel.
+        let far_away = egui::pos2(rect.min.x - 5000.0, rect.min.y - 5000.0);
+        update_dragged(&mut graph, id, &active, rect, far_away);
+
+        let moved = path_of(&graph, id);
+        let new_pos = moved.subpaths[0].points[0].pos;
+        let new_screen = uv_to_screen(new_pos, rect);
+        let bounds = rect.expand(DRAG_OVERSHOOT_PX + 1.0); // +1 for float slack
+        assert!(
+            bounds.contains(new_screen),
+            "dragged point landed outside the clamp bounds: {new_screen:?}"
+        );
     }
 }

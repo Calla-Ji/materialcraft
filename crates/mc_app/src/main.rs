@@ -267,6 +267,7 @@ impl eframe::App for MaterialCreatorApp {
                         &mut two_d_view.tiling_preview,
                         path_editor,
                         graph,
+                        history,
                         *selected,
                     );
 
