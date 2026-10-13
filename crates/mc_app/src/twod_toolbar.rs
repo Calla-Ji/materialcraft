@@ -18,6 +18,7 @@ const GRID_3X3_GLYPH: char = '\u{f015}';
 // differs, so these render correctly against the bundled Round font.
 const ROUTE_GLYPH: char = '\u{eacd}'; // "route" — the owner's own pick over a plain pencil
 const JOIN_GLYPH: char = '\u{eaeb}'; // "join_full"
+const ADD_CIRCLE_GLYPH: char = '\u{e147}'; // "add_circle"
 
 /// Draws the rail into a fixed-width column at the left edge of
 /// `full_rect`, with a vertical divider matching the 3D viewport's own,
@@ -62,6 +63,7 @@ pub fn show(
                 selected.filter(|&id| graph.node(id).is_some_and(|n| n.kind == "path"));
             pen_button(ui, path_editor, graph, history, path_node_id);
             join_button(ui, path_editor, graph, history, path_node_id);
+            insert_point_hint_button(ui, path_node_id);
         });
     }
     ui.painter()
@@ -196,4 +198,28 @@ fn join_button(
             path_editor.join_selected(graph, history, id);
         }
     }
+}
+
+/// A discoverability hint, not a toggle — clicking any segment of a Path
+/// node's curve (outside Pen mode) always inserts a point there
+/// (`path_editor::segment_hit_test`), with no mode to switch into first.
+/// This icon just makes that fact visible; it has no click handler of its
+/// own.
+fn insert_point_hint_button(ui: &mut egui::Ui, path_node_id: Option<mc_core::NodeId>) {
+    let enabled = path_node_id.is_some();
+    let tooltip = if enabled {
+        "Click any point on this curve's own line to insert a new point there — always \
+         available, no need to enter Pen mode first."
+    } else {
+        "Add a Path node and select it — then click anywhere on its curve to insert a point \
+         there."
+    };
+    icon_button(
+        ui,
+        "two_d_toolbar_insert_point_hint",
+        ADD_CIRCLE_GLYPH,
+        false,
+        enabled,
+        tooltip,
+    );
 }

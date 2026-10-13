@@ -562,6 +562,291 @@ pub fn preview_polyline(sp: &SubPath, samples_per_segment: usize) -> Vec<[f64; 2
     out
 }
 
+/// What a Path node should actually be treated as containing: its own
+/// `"path"` param if it has any points, otherwise whatever's connected to
+/// its Reference input — same "optional input with a built-in fallback"
+/// pattern every other node's own optional input already follows (Tile
+/// Generator's Shape, Fabric Generator's Fiber), just for Path-type data
+/// read directly off the upstream node's own params instead of a texture
+/// (see [`mc_core::PortType::Path`]'s own doc comment on why). Read-only:
+/// the moment the artist edits anything, the editor writes a full copy
+/// into this node's own `"path"` param (see `mc_app::path_editor`), so
+/// editing never mutates the upstream node and a later edit upstream
+/// stops affecting this node once that happens.
+pub fn resolve_effective_path(graph: &mc_core::Graph, node_id: mc_core::NodeId) -> Path {
+    let own = graph
+        .node(node_id)
+        .and_then(|n| n.params.get("path"))
+        .and_then(mc_core::ParamValue::as_path)
+        .cloned()
+        .unwrap_or_default();
+    if !own.subpaths.is_empty() {
+        return own;
+    }
+    graph
+        .upstream_from(node_id, "reference")
+        .and_then(|(upstream_id, _)| graph.node(upstream_id))
+        .and_then(|n| n.params.get("path"))
+        .and_then(mc_core::ParamValue::as_path)
+        .cloned()
+        .unwrap_or(own)
+}
+
+// ---------------------------------------------------------------------
+// Stamp distribution: repeat whatever's connected to the Stamp input
+// along this node's own curve, oriented to its tangent — the owner's own
+// "second input... to translate as a splatter on Path" design, with Path
+// itself (not a separate Stitch/Shape node) owning the actual placement
+// math. First version: a CPU instance table (position + rotation per
+// copy) and a gather-style compute shader that tests every instance per
+// output pixel — correct and simple, not yet optimized with the kind of
+// spatial binning `tube_raster` uses, so a very small Stamp Spacing on a
+// long curve at high resolution will be slow (see `MAX_INSTANCES`).
+// ---------------------------------------------------------------------
+
+/// One placed copy of the Stamp input: where, and rotated by how much
+/// (radians, already including both the curve's own tangent angle *and*
+/// the Stamp Rotation param — the shader itself doesn't know about
+/// "align to curve" at all, it just rotates by whatever angle it's given).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StampInstance {
+    pub pos: [f32; 2],
+    pub angle: f32,
+}
+
+/// A spacing/path combination that would place more than this many
+/// instances is silently capped rather than left to produce an
+/// unusably slow (or, at the true pathological extreme, VRAM-exhausting)
+/// dispatch — generous enough for any reasonable Stamp Spacing on a
+/// hand-drawn curve.
+const MAX_STAMP_INSTANCES: usize = 4000;
+
+/// Places instances every `spacing` tile units along `path`'s own arc
+/// length, reusing [`sections`]'s exact tabulation (the same one a future
+/// Stitch node will walk) rather than a second, separately-maintained
+/// curve sampler. `extra_rotation_rad` is added to every instance's own
+/// angle; passing `align_to_curve: false` skips the tangent term entirely
+/// (every instance gets just `extra_rotation_rad`, upright-with-a-twist
+/// rather than curve-following).
+pub fn stamp_instances(
+    path: &Path,
+    spacing: f64,
+    align_to_curve: bool,
+    extra_rotation_rad: f32,
+) -> Vec<StampInstance> {
+    const MIN_SPACING: f64 = 1e-4;
+    let spacing = spacing.max(MIN_SPACING);
+    let mut out = Vec::new();
+    'sections: for section in sections(path, 30.0) {
+        let length = section.length();
+        let mut s = 0.0;
+        loop {
+            let (p, tan, _width) = section.at(s);
+            let angle = if align_to_curve {
+                tan[1].atan2(tan[0]) as f32 + extra_rotation_rad
+            } else {
+                extra_rotation_rad
+            };
+            out.push(StampInstance {
+                pos: [p[0] as f32, p[1] as f32],
+                angle,
+            });
+            if out.len() >= MAX_STAMP_INSTANCES {
+                break 'sections;
+            }
+            if s >= length {
+                break;
+            }
+            s = (s + spacing).min(length);
+        }
+    }
+    out
+}
+
+/// Live-read params for the Stamp distribution controls and Show Curve —
+/// same `XxxParams::from_graph` pattern every other node's own params
+/// struct already follows.
+pub struct PathParams {
+    pub show_curve: bool,
+    pub stamp_spacing: f32,
+    pub stamp_size: f32,
+    pub stamp_rotation_deg: f32,
+    pub stamp_align_to_curve: bool,
+}
+
+impl Default for PathParams {
+    fn default() -> Self {
+        Self {
+            show_curve: true,
+            stamp_spacing: 0.1,
+            stamp_size: 0.08,
+            stamp_rotation_deg: 0.0,
+            stamp_align_to_curve: true,
+        }
+    }
+}
+
+impl PathParams {
+    pub fn from_graph(params: &std::collections::BTreeMap<String, mc_core::ParamValue>) -> Self {
+        let defaults = Self::default();
+        Self {
+            show_curve: params
+                .get("show_curve")
+                .and_then(mc_core::ParamValue::as_bool)
+                .unwrap_or(defaults.show_curve),
+            stamp_spacing: params
+                .get("stamp_spacing")
+                .and_then(mc_core::ParamValue::as_float)
+                .unwrap_or(defaults.stamp_spacing),
+            stamp_size: params
+                .get("stamp_size")
+                .and_then(mc_core::ParamValue::as_float)
+                .unwrap_or(defaults.stamp_size),
+            stamp_rotation_deg: params
+                .get("stamp_rotation")
+                .and_then(mc_core::ParamValue::as_float)
+                .unwrap_or(defaults.stamp_rotation_deg),
+            stamp_align_to_curve: params
+                .get("stamp_align_to_curve")
+                .and_then(mc_core::ParamValue::as_bool)
+                .unwrap_or(defaults.stamp_align_to_curve),
+        }
+    }
+}
+
+fn pack_stamp_instances(instances: &[StampInstance]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(instances.len() * 16);
+    for inst in instances {
+        bytes.extend_from_slice(&inst.pos[0].to_le_bytes());
+        bytes.extend_from_slice(&inst.pos[1].to_le_bytes());
+        bytes.extend_from_slice(&inst.angle.to_le_bytes());
+        bytes.extend_from_slice(&0f32.to_le_bytes()); // pad to 16 bytes/instance
+    }
+    bytes
+}
+
+fn pack_stamp_params(
+    resolution: u32,
+    instance_count: u32,
+    stamp_size: f32,
+    wrap: bool,
+) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
+    bytes[4..8].copy_from_slice(&instance_count.to_le_bytes());
+    bytes[8..12].copy_from_slice(&stamp_size.max(1e-4).to_le_bytes());
+    bytes[12..16].copy_from_slice(&(wrap as u32).to_le_bytes());
+    bytes
+}
+
+/// Composites `instances` worth of `stamp_key`'s own texture on top of
+/// `base_key` (already-rendered content — the outline, or blank if Show
+/// Curve is off) into `output_key`, via `max` per pixel (consistent with
+/// every other "strands/shapes occupy space, the most prominent one
+/// wins" composite in this codebase — `tube_raster`'s own height test,
+/// Knit's ply occlusion). `base_key` and `output_key` must be different
+/// textures — the shader reads one while writing the other.
+#[allow(clippy::too_many_arguments)]
+pub fn dispatch_stamp(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    stamp_key: &str,
+    base_key: &str,
+    output_key: &str,
+    resolution: u32,
+    instances: &[StampInstance],
+    stamp_size: f32,
+    wrap: bool,
+) {
+    let shader_source = crate::shaders::full_source("path_stamp.wgsl");
+    let pipeline = gpu.compute_pipeline("path_stamp", &shader_source, "main");
+
+    let param_bytes = pack_stamp_params(resolution, instances.len() as u32, stamp_size, wrap);
+    let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("path_stamp_params"),
+        size: param_bytes.len() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue.write_buffer(&param_buffer, 0, &param_bytes);
+
+    let instance_bytes = pack_stamp_instances(instances);
+    let instance_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("path_stamp_instances"),
+        // wgpu rejects a zero-sized buffer outright — pad to at least 16
+        // bytes (one unread instance) for the no-instances case; the
+        // shader's own loop bound (`instance_count` in the uniform) is 0
+        // then, so it's never actually read.
+        size: (instance_bytes.len() as u64).max(16),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    if !instance_bytes.is_empty() {
+        gpu.queue.write_buffer(&instance_buffer, 0, &instance_bytes);
+    }
+
+    let stamp_view = pool
+        .view(stamp_key)
+        .unwrap_or_else(|| panic!("path::dispatch_stamp: no texture at stamp key {stamp_key:?}"))
+        .clone();
+    let base_view = pool
+        .view(base_key)
+        .unwrap_or_else(|| panic!("path::dispatch_stamp: no texture at base key {base_key:?}"))
+        .clone();
+
+    let output_view = pool.get_or_create(
+        &gpu.device,
+        output_key,
+        resolution,
+        wgpu::TextureFormat::Rgba8Unorm,
+    );
+
+    let bind_group_layout = pipeline.get_bind_group_layout(0);
+    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("path_stamp_bind_group"),
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: param_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: instance_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&stamp_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&base_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(output_view),
+            },
+        ],
+    });
+
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("path_stamp_encoder"),
+        });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("path_stamp_pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        let workgroups = resolution.div_ceil(8);
+        pass.dispatch_workgroups(workgroups, workgroups, 1);
+    }
+    gpu.queue.submit(Some(encoder.finish()));
+}
+
 /// Renders `path` as a thin outline into `keys`' Preview Mask texture —
 /// every subpath's own polyline, as constant-radius capsules
 /// ([`crate::tube_raster`]), with wrap-around handled the same way Knit's
@@ -916,6 +1201,54 @@ mod tests {
     }
 
     #[test]
+    fn resolve_effective_path_prefers_its_own_data_when_non_empty() {
+        let mut graph = mc_core::Graph::new();
+        let own = mc_core::Node::new("path");
+        let id = graph.add_node(own);
+        let own_path = Path {
+            subpaths: vec![SubPath::new(vec![Point::new([0.2, 0.2])], false)],
+            wrap: true,
+        };
+        graph
+            .set_param(id, "path", mc_core::ParamValue::Path(own_path.clone()))
+            .unwrap();
+
+        assert_eq!(resolve_effective_path(&graph, id), own_path);
+    }
+
+    #[test]
+    fn resolve_effective_path_falls_back_to_a_connected_reference_when_empty() {
+        let mut graph = mc_core::Graph::new();
+        let reference = graph.add_node(mc_core::Node::new("path"));
+        let reference_path = Path {
+            subpaths: vec![SubPath::new(vec![Point::new([0.4, 0.4])], false)],
+            wrap: true,
+        };
+        graph
+            .set_param(
+                reference,
+                "path",
+                mc_core::ParamValue::Path(reference_path.clone()),
+            )
+            .unwrap();
+
+        let id = graph.add_node(mc_core::Node::new("path"));
+        graph
+            .set_param(id, "path", mc_core::ParamValue::Path(Path::default()))
+            .unwrap();
+        graph.connect(reference, "path", id, "reference").unwrap();
+
+        assert_eq!(resolve_effective_path(&graph, id), reference_path);
+    }
+
+    #[test]
+    fn resolve_effective_path_ignores_an_unconnected_reference_input() {
+        let mut graph = mc_core::Graph::new();
+        let id = graph.add_node(mc_core::Node::new("path"));
+        assert_eq!(resolve_effective_path(&graph, id), Path::default());
+    }
+
+    #[test]
     fn reverse_subpath_swaps_order_and_handle_direction() {
         let sp = SubPath::new(
             vec![
@@ -1023,5 +1356,184 @@ mod tests {
         let a = gpu.read_rgba8(pool.texture("a").unwrap(), 128);
         let b = gpu.read_rgba8(pool.texture("b").unwrap(), 128);
         assert_eq!(a, b);
+    }
+
+    fn straight_line() -> Path {
+        Path {
+            subpaths: vec![SubPath::new(
+                vec![Point::new([0.1, 0.5]), Point::new([0.9, 0.5])],
+                false,
+            )],
+            wrap: true,
+        }
+    }
+
+    #[test]
+    fn stamp_instances_spaces_evenly_along_a_straight_line() {
+        let path = straight_line();
+        let instances = stamp_instances(&path, 0.2, true, 0.0);
+        // Length 0.8 at spacing 0.2 → samples at s = 0.0, 0.2, 0.4, 0.6, 0.8.
+        assert_eq!(instances.len(), 5);
+        assert!((instances[0].pos[0] - 0.1).abs() < 1e-5);
+        assert!((instances[4].pos[0] - 0.9).abs() < 1e-5);
+    }
+
+    #[test]
+    fn stamp_instances_align_to_curve_matches_the_tangent_angle() {
+        let path = straight_line(); // tangent points along +x
+        let instances = stamp_instances(&path, 0.5, true, 0.0);
+        for inst in &instances {
+            assert!(
+                inst.angle.abs() < 1e-4,
+                "expected ~0 rad, got {}",
+                inst.angle
+            );
+        }
+    }
+
+    #[test]
+    fn stamp_instances_without_align_ignores_the_tangent() {
+        let path = straight_line();
+        let extra = std::f32::consts::FRAC_PI_2;
+        let instances = stamp_instances(&path, 0.5, false, extra);
+        for inst in &instances {
+            assert!((inst.angle - extra).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn stamp_instances_is_empty_for_an_empty_path() {
+        assert!(stamp_instances(&Path::default(), 0.05, true, 0.0).is_empty());
+    }
+
+    #[test]
+    fn stamp_instances_respects_the_hard_cap_on_a_pathological_spacing() {
+        let path = straight_line();
+        let instances = stamp_instances(&path, 1e-6, true, 0.0);
+        assert_eq!(instances.len(), MAX_STAMP_INSTANCES);
+    }
+
+    #[test]
+    fn dispatch_stamp_composites_the_stamp_texture_over_the_base() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        const RES: u32 = 128;
+
+        // A disc stamp, bright in the middle — something unmistakably
+        // different from a blank base.
+        crate::shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "disc_stamp",
+            RES,
+            &crate::shape::ShapeParams::default(),
+        );
+        gpu.fill_rgba8(&mut pool, "blank_base", RES, [0, 0, 0, 255]);
+
+        let path = straight_line();
+        let instances = stamp_instances(&path, 0.1, true, 0.0);
+        assert!(!instances.is_empty());
+
+        dispatch_stamp(
+            &mut gpu,
+            &mut pool,
+            "disc_stamp",
+            "blank_base",
+            "stamped",
+            RES,
+            &instances,
+            0.15,
+            path.wrap,
+        );
+        let stamped = gpu.read_rgba8(pool.texture("stamped").unwrap(), RES);
+        let base = gpu.read_rgba8(pool.texture("blank_base").unwrap(), RES);
+        assert_ne!(stamped, base, "stamping should change the output");
+        let lit = stamped.iter().step_by(4).filter(|&&v| v > 0).count();
+        assert!(lit > 0, "stamped output should have visible pixels");
+    }
+
+    /// Regression test for a real bug caught while building this feature:
+    /// at the *default* Stamp Size, stamps are centered exactly on the
+    /// curve the outline also draws, so a too-small size can land
+    /// entirely inside the outline's own already-lit stroke — same
+    /// `max()` value both ways, zero observable change, even though
+    /// stamping genuinely ran. `PathParams::default`'s own Stamp Size is
+    /// deliberately kept comfortably bigger than the outline's stroke
+    /// width specifically to avoid this; this test guards that margin
+    /// with a non-blank (outline) base, not the blank one every other
+    /// `dispatch_stamp` test above uses.
+    #[test]
+    fn dispatch_stamp_is_visible_over_a_non_blank_base_at_default_size() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        const RES: u32 = 64;
+
+        crate::shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "disc_stamp",
+            RES,
+            &crate::shape::ShapeParams::default(),
+        );
+        let path = straight_line();
+        dispatch_preview_mask(&mut gpu, &mut pool, "outline_base", RES, &path);
+        let base_before = gpu.read_rgba8(pool.texture("outline_base").unwrap(), RES);
+
+        let defaults = PathParams::default();
+        let instances = stamp_instances(
+            &path,
+            defaults.stamp_spacing as f64,
+            defaults.stamp_align_to_curve,
+            defaults.stamp_rotation_deg.to_radians(),
+        );
+        assert!(!instances.is_empty());
+
+        dispatch_stamp(
+            &mut gpu,
+            &mut pool,
+            "disc_stamp",
+            "outline_base",
+            "result",
+            RES,
+            &instances,
+            defaults.stamp_size,
+            path.wrap,
+        );
+        let result = gpu.read_rgba8(pool.texture("result").unwrap(), RES);
+        assert_ne!(
+            base_before, result,
+            "stamping at the default size onto a non-blank base should still be visible"
+        );
+    }
+
+    #[test]
+    fn dispatch_stamp_with_no_instances_leaves_the_base_untouched() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        const RES: u32 = 64;
+
+        crate::shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "disc_stamp",
+            RES,
+            &crate::shape::ShapeParams::default(),
+        );
+        dispatch_preview_mask(&mut gpu, &mut pool, "outline_base", RES, &demo_path());
+
+        dispatch_stamp(
+            &mut gpu,
+            &mut pool,
+            "disc_stamp",
+            "outline_base",
+            "unchanged",
+            RES,
+            &[],
+            0.1,
+            true,
+        );
+        let base = gpu.read_rgba8(pool.texture("outline_base").unwrap(), RES);
+        let result = gpu.read_rgba8(pool.texture("unchanged").unwrap(), RES);
+        assert_eq!(base, result);
     }
 }

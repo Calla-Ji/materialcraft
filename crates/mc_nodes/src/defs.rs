@@ -1205,12 +1205,65 @@ static NODE_DEFS: &[NodeDef] = &[
                 port_type: PortType::Path,
             },
         ],
-        params: &[ParamSpec {
-            name: "path",
-            display_name: "Path",
-            tooltip: "The curve's own point/handle data — edited in the 2D View, not here.",
-            kind: ParamSpecKind::Path,
-        }],
+        params: &[
+            ParamSpec {
+                name: "path",
+                display_name: "Path",
+                tooltip: "The curve's own point/handle data — edited in the 2D View, not here.",
+                kind: ParamSpecKind::Path,
+            },
+            ParamSpec {
+                name: "show_curve",
+                display_name: "Show Curve",
+                tooltip: "Draw the curve's own thin outline into Preview Mask. Turn off once \
+                          a Stamp is wired up and you only want the stamped pattern, not the \
+                          guide line underneath it.",
+                kind: ParamSpecKind::Bool { default: true },
+            },
+            ParamSpec {
+                name: "stamp_spacing",
+                display_name: "Stamp Spacing",
+                tooltip: "Distance along the curve between repeats of whatever's connected \
+                          to the Stamp input, in tile units. Smaller = more, denser copies.",
+                kind: ParamSpecKind::Float {
+                    min: 0.005,
+                    max: 0.5,
+                    default: 0.1,
+                },
+            },
+            ParamSpec {
+                name: "stamp_size",
+                display_name: "Stamp Size",
+                tooltip: "How large each stamped copy is, in tile units (its own footprint \
+                          width and height). Kept comfortably bigger than the curve's own \
+                          thin outline by default, so a fresh Stamp connection is obviously \
+                          visible rather than hiding under it.",
+                kind: ParamSpecKind::Float {
+                    min: 0.005,
+                    max: 0.5,
+                    default: 0.08,
+                },
+            },
+            ParamSpec {
+                name: "stamp_rotation",
+                display_name: "Stamp Rotation",
+                tooltip: "Extra rotation applied to every stamped copy, on top of following \
+                          the curve's own direction (if Align to Curve is on).",
+                kind: ParamSpecKind::Float {
+                    min: -180.0,
+                    max: 180.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "stamp_align_to_curve",
+                display_name: "Align to Curve",
+                tooltip: "On: each stamp rotates to follow the curve's own direction at that \
+                          point (useful for anything directional, like a stitch). Off: every \
+                          stamp keeps the same upright orientation.",
+                kind: ParamSpecKind::Bool { default: true },
+            },
+        ],
     },
     NodeDef {
         kind: "knit",

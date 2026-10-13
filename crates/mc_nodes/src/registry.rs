@@ -189,22 +189,67 @@ pub fn evaluate(
                 "path" => {
                     // The "path" output isn't a texture at all (see
                     // mc_core::PortType::Path's own doc comment) — nothing
-                    // to dispatch for it here. Only Preview Mask is a real
-                    // GPU raster.
+                    // to dispatch for it here. `resolve_effective_path`
+                    // folds in the Reference input's own fallback (this
+                    // node's own data if it has any points, else
+                    // whatever's connected there) so Preview Mask and the
+                    // "path" output a downstream Stitch node reads agree.
                     let preview_mask_key = texture_key(id, "preview_mask");
-                    let path_value = node
-                        .params
-                        .get("path")
-                        .and_then(mc_core::ParamValue::as_path)
-                        .cloned()
-                        .unwrap_or_default();
-                    path::dispatch_preview_mask(
-                        gpu,
-                        pool,
-                        &preview_mask_key,
-                        resolution,
-                        &path_value,
-                    );
+                    let path_value = path::resolve_effective_path(graph, id);
+                    let path_params = path::PathParams::from_graph(&node.params);
+                    let stamp_key = resolve_optional_input("stamp");
+
+                    match stamp_key {
+                        None => {
+                            if path_params.show_curve {
+                                path::dispatch_preview_mask(
+                                    gpu,
+                                    pool,
+                                    &preview_mask_key,
+                                    resolution,
+                                    &path_value,
+                                );
+                            } else {
+                                gpu.fill_rgba8(pool, &preview_mask_key, resolution, [0, 0, 0, 255]);
+                            }
+                        }
+                        Some(stamp_key) => {
+                            // Stamps composite over a separate scratch
+                            // texture, not `preview_mask_key` directly —
+                            // the stamp shader reads its own "base" while
+                            // writing the real output, so they can't be
+                            // the same key.
+                            let outline_key = format!("{preview_mask_key}__outline_scratch");
+                            if path_params.show_curve {
+                                path::dispatch_preview_mask(
+                                    gpu,
+                                    pool,
+                                    &outline_key,
+                                    resolution,
+                                    &path_value,
+                                );
+                            } else {
+                                gpu.fill_rgba8(pool, &outline_key, resolution, [0, 0, 0, 255]);
+                            }
+                            let instances = path::stamp_instances(
+                                &path_value,
+                                path_params.stamp_spacing as f64,
+                                path_params.stamp_align_to_curve,
+                                path_params.stamp_rotation_deg.to_radians(),
+                            );
+                            path::dispatch_stamp(
+                                gpu,
+                                pool,
+                                &stamp_key,
+                                &outline_key,
+                                &preview_mask_key,
+                                resolution,
+                                &instances,
+                                path_params.stamp_size,
+                                path_value.wrap,
+                            );
+                        }
+                    }
                 }
                 "knit" => {
                     let height_key = texture_key(id, "height");
@@ -636,6 +681,62 @@ mod tests {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
         let mut pool = mc_gpu::TexturePool::default();
         evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+    }
+
+    /// The owner's own exact workflow: a Shape node wired into Path's own
+    /// Stamp input should change Path's output — the graph-level version
+    /// of `path::tests::dispatch_stamp_composites_the_stamp_texture_over_the_base`,
+    /// confirming the NodeDef/registry wiring actually reaches it, not
+    /// just the raw GPU call.
+    #[test]
+    fn shape_wired_into_paths_stamp_input_changes_its_output() {
+        fn build_graph() -> (mc_core::Graph, mc_core::NodeId, mc_core::NodeId) {
+            let mut graph = mc_core::Graph::new();
+            let shape_node = graph.add_node(crate::defs::node_def("shape").unwrap().instantiate());
+            let path_node = graph.add_node(crate::defs::node_def("path").unwrap().instantiate());
+            let line_path = mc_core::Path {
+                subpaths: vec![mc_core::SubPath::new(
+                    vec![
+                        mc_core::Point::new([0.1, 0.5]),
+                        mc_core::Point::new([0.9, 0.5]),
+                    ],
+                    false,
+                )],
+                wrap: true,
+            };
+            graph
+                .set_param(path_node, "path", mc_core::ParamValue::Path(line_path))
+                .unwrap();
+            graph.settings.resolution = 64;
+            (graph, shape_node, path_node)
+        }
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+
+        let (mut graph, _shape, path_node) = build_graph();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates without a stamp wired");
+        let without_stamp = gpu.read_rgba8(
+            pool.texture(&texture_key(path_node, "preview_mask"))
+                .unwrap(),
+            64,
+        );
+
+        let (mut graph, shape_node, path_node) = build_graph();
+        graph
+            .connect(shape_node, "output", path_node, "stamp")
+            .unwrap();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates with a stamp wired");
+        let with_stamp = gpu.read_rgba8(
+            pool.texture(&texture_key(path_node, "preview_mask"))
+                .unwrap(),
+            64,
+        );
+
+        assert_ne!(
+            without_stamp, with_stamp,
+            "wiring a Shape into Path's Stamp input should change its output"
+        );
     }
 
     /// CLAUDE.md's M2 acceptance check: a 3-node graph (Noise → Levels →

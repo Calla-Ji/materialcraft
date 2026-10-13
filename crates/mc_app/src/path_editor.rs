@@ -234,12 +234,19 @@ impl PathEditorState {
     }
 }
 
+/// What the editor should show/edit — delegates to the same resolution
+/// `mc_nodes::registry`'s own dispatch uses (this node's own data, or the
+/// Reference input's fallback if empty), so the editor and the Preview
+/// Mask it's drawn over never disagree about what the curve currently is.
+/// The very first edit to a reference-sourced curve writes a full copy
+/// into this node's own `"path"` param via the usual `commit_path_change`
+/// path (every mutation here reads through this function, then writes
+/// back through that one) — "forking" it, same as every other optional
+/// input in this codebase falls back to a connected source until the
+/// node's own data takes over.
 fn current_path(graph: &mc_core::Graph, node_id: mc_core::NodeId) -> Option<mc_core::Path> {
-    graph
-        .node(node_id)
-        .and_then(|n| n.params.get("path"))
-        .and_then(ParamValue::as_path)
-        .cloned()
+    graph.node(node_id)?;
+    Some(mc_nodes::path::resolve_effective_path(graph, node_id))
 }
 
 /// `(a, b)` if the selection is exactly two endpoints [`perform_join`] can
