@@ -67,6 +67,15 @@ pub enum ParamSpecKind {
     /// unlike every other kind, there's no meaningful static default beyond
     /// "nothing loaded yet" (`ImageRef::default()`).
     ImagePath,
+    /// Freeform single-line text. First used by Knit's custom stitch chart
+    /// — unlike [`ParamSpecKind::Enum`], there's no fixed option list to
+    /// validate against; whatever the node's own `from_graph` does with a
+    /// malformed value needs to degrade gracefully rather than panic
+    /// (CLAUDE.md §12: "No `unwrap()`/`expect()` in app or library code
+    /// paths a user can trigger").
+    Text {
+        default: &'static str,
+    },
 }
 
 impl ParamSpec {
@@ -81,6 +90,7 @@ impl ParamSpec {
             ParamSpecKind::Gradient { default } => ParamValue::Gradient(default.to_vec()),
             ParamSpecKind::Vec2 { default, .. } => ParamValue::Vec2(default),
             ParamSpecKind::ImagePath => ParamValue::Image(mc_core::ImageRef::default()),
+            ParamSpecKind::Text { default } => ParamValue::Text(default.to_string()),
         }
     }
 }
@@ -378,6 +388,26 @@ pub fn param_is_relevant(
             "fibers_per_ply" | "fiber_depth" => fiber_mode != Some("None"),
             _ => true,
         };
+    }
+    if node_kind == "knit" {
+        if param_name == "courses" {
+            let auto_courses = current_params
+                .get("auto_courses")
+                .and_then(ParamValue::as_bool)
+                .unwrap_or(true);
+            return !auto_courses;
+        }
+        if matches!(param_name, "rib_depth" | "rib_compaction") {
+            // Whether the rib rule actually fires depends on the chart's
+            // own content (any chart, including a hand-typed custom one),
+            // not on which named preset is picked — resolve() already does
+            // exactly that detection, so reuse it rather than re-deriving
+            // "is this a rib preset" from the preset name here too.
+            let params = crate::knit::KnitParams::from_graph(current_params);
+            let g = crate::knit::resolve(&params);
+            return g.is_rib || g.is_links;
+        }
+        return true;
     }
     if node_kind != "shape" {
         return true;
@@ -1104,6 +1134,222 @@ static NODE_DEFS: &[NodeDef] = &[
                 display_name: "Seed",
                 tooltip: "Changes each thread row's own twist phase so stacked rows don't \
                           line up.",
+                kind: ParamSpecKind::Seed { default: 1 },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "knit",
+        display_name: "Knit",
+        category: "Generators/Patterns",
+        tooltip: "Weft-knitted fabric built from real loop geometry \u{2014} jersey, ribs, \
+                  purl and interlock, with up to 4 plies twisted along each loop.",
+        // No Colour input/output: KNIT_NODE_SPEC.md §7 has one (per-stitch
+        // pixelated sampling, jacquard/intarsia), but the owner cut it as
+        // redundant with Uniform Color + Blend + a generic Color output
+        // already covering the same ground more flexibly — not worth a
+        // dedicated pin on every Knit node.
+        inputs: &[],
+        // Height stays first, same reasoning as Thread's own outputs list
+        // above (mc_nodes::registry::resolve_texture_key's "first declared
+        // output" default).
+        outputs: &[
+            PortSpec {
+                name: "height",
+                display_name: "Height",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "mask",
+                display_name: "Mask",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "ply_id",
+                display_name: "Ply ID",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "stitch_id",
+                display_name: "Stitch ID",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "stitch_type",
+                display_name: "Stitch Type",
+                port_type: PortType::Gray,
+            },
+        ],
+        params: &[
+            ParamSpec {
+                name: "preset",
+                display_name: "Preset",
+                tooltip: "Which stitch chart to knit. Editing Chart below switches this to \
+                          Custom.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::knit::KnitPreset::NAMES,
+                    default: "Jersey",
+                },
+            },
+            ParamSpec {
+                name: "chart",
+                display_name: "Chart",
+                tooltip: "A custom stitch chart: rows of K/P, top to bottom, separated by /. \
+                          For example KKPP/PPKK. Leave empty to use the Preset's own chart.",
+                kind: ParamSpecKind::Text { default: "" },
+            },
+            ParamSpec {
+                name: "side",
+                display_name: "Side",
+                tooltip: "Back swaps every K and P in the chart \u{2014} the reverse side of \
+                          the same fabric.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::knit::Side::NAMES,
+                    default: "Front",
+                },
+            },
+            ParamSpec {
+                name: "wales",
+                display_name: "Wales",
+                tooltip: "Stitches across the tile (one per needle). Snapped to a multiple of \
+                          the chart's own width.",
+                kind: ParamSpecKind::Int {
+                    min: 2,
+                    max: 64,
+                    default: 8,
+                },
+            },
+            ParamSpec {
+                name: "auto_courses",
+                display_name: "Auto Courses",
+                tooltip: "Keeps the natural stitch shape (course spacing set from the wale \
+                          width and Loop Height). Turn off to set Courses by hand.",
+                kind: ParamSpecKind::Bool { default: true },
+            },
+            ParamSpec {
+                name: "courses",
+                display_name: "Courses",
+                tooltip: "Rows down the tile. Snapped to a multiple of the chart's own \
+                          height. Only used while Auto Courses is off.",
+                kind: ParamSpecKind::Int {
+                    min: 2,
+                    max: 96,
+                    default: 11,
+                },
+            },
+            ParamSpec {
+                name: "tension",
+                display_name: "Tension",
+                tooltip: "How much yarn per loop relative to its own thickness. Sets both \
+                          Thickness and Loop Height unless either is overridden below.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::knit::Tension::NAMES,
+                    default: "Normal",
+                },
+            },
+            ParamSpec {
+                name: "thickness",
+                display_name: "Thickness",
+                tooltip: "Advanced: yarn radius as a fraction of course spacing, overriding \
+                          Tension. 0 = derive from Tension.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.26,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "loop_height",
+                display_name: "Loop Height",
+                tooltip: "Advanced: loop half-height as a multiple of course spacing, \
+                          overriding Tension. 0 = derive from Tension.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.5,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "roundness",
+                display_name: "Roundness",
+                tooltip: "0 is a flat sine wave; higher rounds the loop into the \u{3a9}-shaped \
+                          neck real knit stitches have.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 2.0,
+                    default: 1.5,
+                },
+            },
+            ParamSpec {
+                name: "depth",
+                display_name: "Depth",
+                tooltip: "How far the yarn dips in and out of the fabric plane, as a multiple \
+                          of its own radius.",
+                kind: ParamSpecKind::Float {
+                    min: 0.5,
+                    max: 2.0,
+                    default: 1.25,
+                },
+            },
+            ParamSpec {
+                name: "plies",
+                display_name: "Plies",
+                tooltip: "How many strands are twisted together into the yarn. 1 is a single \
+                          (unplied) yarn.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 4,
+                    default: 1,
+                },
+            },
+            ParamSpec {
+                name: "ply_direction",
+                display_name: "Ply Twist",
+                tooltip: "Which way the plies spiral (textile S/Z-twist terms), same meaning \
+                          as the Thread node's own Ply Twist.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::thread_shape::TwistDirection::NAMES,
+                    default: "S",
+                },
+            },
+            ParamSpec {
+                name: "twist_angle",
+                display_name: "Twist Angle",
+                tooltip: "The ply helix angle, same meaning as the Thread node's own Twist \
+                          Angle.",
+                kind: ParamSpecKind::Float {
+                    min: 10.0,
+                    max: 50.0,
+                    default: 30.0,
+                },
+            },
+            ParamSpec {
+                name: "rib_depth",
+                display_name: "Rib Depth",
+                tooltip: "How far purl wales (or courses, for purl/links-links fabric) recede \
+                          behind the knit ones, as a multiple of yarn radius. Only visible on \
+                          ribs and purl.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 3.0,
+                    default: 1.5,
+                },
+            },
+            ParamSpec {
+                name: "rib_compaction",
+                display_name: "Rib Compaction",
+                tooltip: "How much narrower a rib's purl wales are than its knit ones. \
+                          Higher can hide the purl wale almost entirely. Ribs only.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.8,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the per-stitch Stitch ID pattern.",
                 kind: ParamSpecKind::Seed { default: 1 },
             },
         ],

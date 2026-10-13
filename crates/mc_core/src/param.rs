@@ -55,6 +55,10 @@ pub enum ParamValue {
     Seed(u32),
     Gradient(Vec<GradientStop>),
     Image(ImageRef),
+    /// Freeform text — first used by the Knit node's custom stitch chart
+    /// (`KKPP/PPKK`), unlike [`ParamValue::Enum`]'s closed, node-declared
+    /// choice list.
+    Text(String),
 }
 
 impl std::hash::Hash for ParamValue {
@@ -76,6 +80,7 @@ impl std::hash::Hash for ParamValue {
                 image.path.hash(state);
                 image.embedded_base64.hash(state);
             }
+            ParamValue::Text(v) => v.hash(state),
         }
     }
 }
@@ -119,6 +124,13 @@ impl ParamValue {
     pub fn as_image(&self) -> Option<&ImageRef> {
         match self {
             ParamValue::Image(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            ParamValue::Text(v) => Some(v.as_str()),
             _ => None,
         }
     }

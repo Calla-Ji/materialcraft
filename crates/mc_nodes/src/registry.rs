@@ -13,9 +13,9 @@ use crate::{
     curve, data_corrupt, directional_blur, directional_warp, dither_pattern, edge_detect,
     fabric_generator, fractal_sum, gradient_linear, gradient_map, gradient_radial,
     grayscale_conversion, height_to_ao, height_to_normal, histogram_scan, hsl_adjust, image_import,
-    invert, levels, ordered_dither, palette_dither, perlin, scanline_jitter, shape, simplex_noise,
-    slope_blur, thread_shape, threshold, tile_generator, transform2d, uniform_color, voronoi, warp,
-    white_noise,
+    invert, knit, levels, ordered_dither, palette_dither, perlin, scanline_jitter, shape,
+    simplex_noise, slope_blur, thread_shape, threshold, tile_generator, transform2d, uniform_color,
+    voronoi, warp, white_noise,
 };
 
 /// The default output port name every single-output `NodeDef` uses.
@@ -23,8 +23,8 @@ pub const DEFAULT_OUTPUT_PORT: &str = "output";
 
 /// The texture pool key a node's output `port` is stored under. Every
 /// single-output node (the overwhelming majority) always passes
-/// [`DEFAULT_OUTPUT_PORT`] here; a multi-output node (currently just
-/// Thread) stores each of its named outputs under its own key.
+/// [`DEFAULT_OUTPUT_PORT`] here; a multi-output node (Thread, Knit) stores
+/// each of its named outputs under its own key.
 pub fn texture_key(id: mc_core::NodeId, port: &str) -> String {
     format!("node_{}_{}", id.0, port)
 }
@@ -181,6 +181,27 @@ pub fn evaluate(
                             ply_id: &ply_id_key,
                             fiber: &fiber_key,
                             mask: &mask_key,
+                        },
+                        resolution,
+                        &params,
+                    );
+                }
+                "knit" => {
+                    let height_key = texture_key(id, "height");
+                    let mask_key = texture_key(id, "mask");
+                    let ply_id_key = texture_key(id, "ply_id");
+                    let stitch_id_key = texture_key(id, "stitch_id");
+                    let stitch_type_key = texture_key(id, "stitch_type");
+                    let params = knit::KnitParams::from_graph(&node.params);
+                    knit::dispatch(
+                        gpu,
+                        pool,
+                        knit::KnitOutputKeys {
+                            height: &height_key,
+                            mask: &mask_key,
+                            ply_id: &ply_id_key,
+                            stitch_id: &stitch_id_key,
+                            stitch_type: &stitch_type_key,
                         },
                         resolution,
                         &params,
@@ -523,6 +544,60 @@ mod tests {
             height_pixels, mask_pixels,
             "an Output node fed by Mask should not show Height's pixels"
         );
+    }
+
+    /// Knit's own version of the test above: a graph-level (not just
+    /// `knit::dispatch`-level) check that wiring two of its outputs into
+    /// separate Output nodes shows each one's own pixels, not a repeat of
+    /// whichever output happens to be declared first.
+    #[test]
+    fn knit_output_node_shows_the_specific_upstream_port_it_is_wired_to() {
+        let mut graph = mc_core::Graph::new();
+        let knit_node = graph.add_node(crate::defs::node_def("knit").unwrap().instantiate());
+        let height_out = graph.add_node(mc_core::Node::new("output_height"));
+        let stitch_id_out = graph.add_node(mc_core::Node::new("output_height"));
+        graph
+            .connect(knit_node, "height", height_out, "input")
+            .unwrap();
+        graph
+            .connect(knit_node, "stitch_id", stitch_id_out, "input")
+            .unwrap();
+        graph.settings.resolution = 32;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let height_key = resolve_texture_key(&graph, height_out).unwrap();
+        let stitch_id_key = resolve_texture_key(&graph, stitch_id_out).unwrap();
+        assert_eq!(height_key, texture_key(knit_node, "height"));
+        assert_eq!(stitch_id_key, texture_key(knit_node, "stitch_id"));
+
+        let height_pixels = gpu.read_rgba8(pool.texture(&height_key).unwrap(), 32);
+        let stitch_id_pixels = gpu.read_rgba8(pool.texture(&stitch_id_key).unwrap(), 32);
+        assert_ne!(
+            height_pixels, stitch_id_pixels,
+            "an Output node fed by Stitch ID should not show Height's pixels"
+        );
+    }
+
+    /// Every param `knit::defs::NodeDef::instantiate` sets as a fresh
+    /// node's default should round-trip through `KnitParams::from_graph`
+    /// and evaluate without panicking — the same contract every other node
+    /// gets implicitly by being drag-and-droppable onto the canvas.
+    #[test]
+    fn knit_default_instantiation_evaluates() {
+        let mut graph = mc_core::Graph::new();
+        let knit_node = graph.add_node(crate::defs::node_def("knit").unwrap().instantiate());
+        let height_out = graph.add_node(mc_core::Node::new("output_height"));
+        graph
+            .connect(knit_node, "height", height_out, "input")
+            .unwrap();
+        graph.settings.resolution = 32;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
     }
 
     /// CLAUDE.md's M2 acceptance check: a 3-node graph (Noise → Levels →

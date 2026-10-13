@@ -13,3 +13,11 @@ mc_export = { version = "0.1.0", path = "../mc_export" }
 mc_gpu = { version = "0.1.0", path = "../mc_gpu" }
 thiserror = "2.0.21"
 wgpu = "30.0.1"
+
+[dev-dependencies]
+# Test-only: golden curve data for the Knit node's curve builder
+# (golden/curves.json, embedded via include_str!) is large nested JSON —
+# parsing it by hand would be its own source of bugs. Already an approved,
+# in-use workspace dependency (mc_core); this just wires it into mc_nodes
+# too, and only for tests.
+serde_json = "1.0.151"

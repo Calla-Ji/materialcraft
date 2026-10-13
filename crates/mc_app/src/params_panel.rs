@@ -8,22 +8,107 @@
 /// frame (CLAUDE.md §9).
 pub type DragState = Option<(mc_core::NodeId, String, mc_core::ParamValue)>;
 
+/// One SplitMix64 step: advances `state` and returns a well-distributed
+/// 64-bit output. Shared by [`random_seed`] (one output) and
+/// [`randomize_all_params`] (a whole stream of them, one call per param) —
+/// no `rand` dependency needed for UI convenience features that aren't
+/// security-sensitive.
+fn splitmix64_next(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 /// A new seed for the dice button — previously just `value.wrapping_add(1)`,
 /// which isn't random at all (confirmed bug report: it "just adds one more
-/// number"). Mixes the current wall-clock time through a SplitMix64-style
-/// finalizer for a well-distributed, visually "random" result each click, no
-/// `rand` dependency needed for a UI convenience button that isn't
-/// security-sensitive.
+/// number"). Seeded from the current wall-clock time for a visually
+/// "random" result each click.
 fn random_seed() -> u32 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or_default();
-    let mut z = nanos.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    (z ^ (z >> 31)) as u32
+    splitmix64_next(&mut nanos.wrapping_add(1)) as u32
+}
+
+/// Upgrades the Seed dice button into a full "randomize everything" action,
+/// for *any* node with a Seed param, not a Knit/Thread-specific hack: every
+/// node's own `NodeDef` already carries the min/max/options each
+/// `ParamSpecKind` needs to pick a sane random value, the same metadata
+/// this whole panel already renders sliders from (this file's own doc
+/// comment: "no per-node-kind UI code here"). Owner's explicit call after
+/// Seed turned out to only touch Stitch ID on Knit (and only a ply phase
+/// offset on Thread): "I want it to touch all available parameters in the
+/// node and return random results to the user" — every slider gets
+/// reassigned, not just Seed itself.
+///
+/// `Gradient`/`ImagePath` are left untouched (no sane random gradient, and
+/// nothing to randomly pick for a file path). `Text` resets to its own
+/// declared default rather than being randomized — Knit's own Chart is the
+/// motivating case: leftover custom chart text silently overrides whatever
+/// Preset this same randomize pass just picked, which would make Preset
+/// look broken, not random; resetting to blank (its default — "use the
+/// preset's own chart") avoids that, and the same reasoning is sound for
+/// any future Text param in the same situation.
+fn randomize_all_params(
+    def: &'static mc_nodes::defs::NodeDef,
+    seed_param_name: &str,
+    new_seed: u32,
+) -> Vec<(&'static str, mc_core::ParamValue)> {
+    let mut state = (new_seed as u64) ^ 0x2545_F491_4F6C_DD1D;
+    let next_unit_f32 = |state: &mut u64| -> f32 {
+        // Top 24 bits -> [0, 1): plenty of precision for a UI slider.
+        ((splitmix64_next(state) >> 40) as f32) / (1u64 << 24) as f32
+    };
+
+    let mut out = Vec::new();
+    for param in def.params {
+        if param.name == seed_param_name {
+            continue; // the new seed itself is set by the caller
+        }
+        let value = match &param.kind {
+            mc_nodes::defs::ParamSpecKind::Float { min, max, .. } => {
+                let t = next_unit_f32(&mut state);
+                mc_core::ParamValue::Float(min + t * (max - min))
+            }
+            mc_nodes::defs::ParamSpecKind::Int { min, max, .. } => {
+                let span = (*max - *min + 1).max(1) as u64;
+                let v = *min + (splitmix64_next(&mut state) % span) as i32;
+                mc_core::ParamValue::Int(v)
+            }
+            mc_nodes::defs::ParamSpecKind::Bool { .. } => {
+                mc_core::ParamValue::Bool(splitmix64_next(&mut state).is_multiple_of(2))
+            }
+            mc_nodes::defs::ParamSpecKind::Enum { options, .. } => {
+                let idx = (splitmix64_next(&mut state) as usize) % options.len();
+                mc_core::ParamValue::Enum(options[idx].to_string())
+            }
+            mc_nodes::defs::ParamSpecKind::Color { .. } => mc_core::ParamValue::Color([
+                next_unit_f32(&mut state),
+                next_unit_f32(&mut state),
+                next_unit_f32(&mut state),
+                1.0,
+            ]),
+            mc_nodes::defs::ParamSpecKind::Vec2 { min, max, .. } => {
+                let x = min + next_unit_f32(&mut state) * (max - min);
+                let y = min + next_unit_f32(&mut state) * (max - min);
+                mc_core::ParamValue::Vec2([x, y])
+            }
+            mc_nodes::defs::ParamSpecKind::Seed { .. } => {
+                mc_core::ParamValue::Seed(splitmix64_next(&mut state) as u32)
+            }
+            mc_nodes::defs::ParamSpecKind::Text { default } => {
+                mc_core::ParamValue::Text(default.to_string())
+            }
+            mc_nodes::defs::ParamSpecKind::Gradient { .. }
+            | mc_nodes::defs::ParamSpecKind::ImagePath => continue,
+        };
+        out.push((param.name, value));
+    }
+    out
 }
 
 /// An explanatory aside under a param — e.g. "this only matters once X is
@@ -104,6 +189,93 @@ fn thread_seed_hint(
     }
 }
 
+/// `knit_reference.py`'s own fallback for `plies <= 1`: Ply ID reads
+/// exactly the same as Mask (there's only one strand, so "which strand is
+/// on top" has nothing to distinguish) — confirmed by `mc_nodes::knit`'s
+/// own `ply_id_matches_mask_for_a_single_ply` test. Without this, a user
+/// wiring up Ply ID at the default Plies 1 sees what looks like a second
+/// copy of Mask and reasonably assumes something's broken (reported
+/// exactly that way: "Ply ID... does not work").
+fn knit_ply_id_hint(
+    ui: &mut egui::Ui,
+    node_kind: &str,
+    param_name: &str,
+    current_params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+) {
+    if node_kind != "knit" || param_name != "plies" {
+        return;
+    }
+    let plies = current_params
+        .get("plies")
+        .and_then(mc_core::ParamValue::as_int)
+        .unwrap_or(1);
+    if plies <= 1 {
+        param_comment(
+            ui,
+            "At Plies 1, Ply ID reads identically to Mask \u{2014} there's only one strand \
+             to tell apart. Try Plies 2+ to see each one colored separately.",
+        );
+    }
+}
+
+/// Stitch Type is 1 (white) for every Knit stitch, 0 (black) for every
+/// Purl one — so a chart that's entirely one or the other (Jersey's `K`,
+/// Reverse Jersey's `P`) reads as a flat, uninterrupted color, not a flaw
+/// in the output. Shown right under Preset, the most common place that
+/// chart gets picked (editing Chart directly has the same effect, but
+/// doesn't need its own copy of this hint — a user already typing a chart
+/// by hand is already thinking about which stitches are which).
+fn knit_stitch_type_hint(
+    ui: &mut egui::Ui,
+    node_kind: &str,
+    param_name: &str,
+    current_params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+) {
+    if node_kind != "knit" || param_name != "preset" {
+        return;
+    }
+    let params = mc_nodes::knit::KnitParams::from_graph(current_params);
+    let g = mc_nodes::knit::resolve(&params);
+    let all_knit = g.chart.iter().all(|row| row.iter().all(|&cell| cell));
+    let all_purl = g.chart.iter().all(|row| row.iter().all(|&cell| !cell));
+    if all_knit || all_purl {
+        param_comment(
+            ui,
+            "This chart is all one stitch type, so Stitch Type reads as a flat color (no \
+             flaw \u{2014} try a Rib or Purl preset to see knit/purl contrast).",
+        );
+    }
+}
+
+/// `knit_reference.py`'s own `course_tubes()` returns the plain centerline
+/// untouched for `plies <= 1` — the rotation-minimizing-frame math Ply
+/// Twist and Twist Angle feed into never runs, so neither one changes the
+/// render at all until there's a second strand to arrange (verified:
+/// rendering the same tile at Plies 2 with Ply Twist S vs Z differs in
+/// about two-thirds of the image's bytes; at Plies 1 the two are
+/// byte-identical). Same root cause as Ply ID reading as Mask above.
+fn knit_ply_arrangement_hint(
+    ui: &mut egui::Ui,
+    node_kind: &str,
+    param_name: &str,
+    current_params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+) {
+    if node_kind != "knit" || !matches!(param_name, "ply_direction" | "twist_angle") {
+        return;
+    }
+    let plies = current_params
+        .get("plies")
+        .and_then(mc_core::ParamValue::as_int)
+        .unwrap_or(1);
+    if plies <= 1 {
+        param_comment(
+            ui,
+            "No effect at Plies 1 \u{2014} a single yarn has no ply arrangement for this to \
+             change. Try Plies 2+.",
+        );
+    }
+}
+
 /// A dropdown of common named yarn constructions (values confirmed against
 /// the owner's own screenshots of each one actually rendered, per
 /// `mc_nodes::thread_shape::PRESETS`'s own doc comment) that set several of
@@ -177,6 +349,121 @@ fn thread_preset_picker(
     }
 }
 
+/// Knit's own version of [`thread_preset_picker`], one load-bearing
+/// difference: `preset` is a real, ongoing field `mc_nodes::knit::resolve`
+/// reads every frame (it picks the chart and its stagger/thickness/
+/// loop-height modifiers), not a one-shot template with no lasting
+/// identity the way Thread's presets are — so this *does* show which one
+/// is currently selected (`selected_text`), and renders in place of the
+/// generic Enum widget the per-param loop would otherwise give "Preset"
+/// (skipped there specifically for Knit — see the `continue` in the main
+/// loop below). Picking one resets Wales to that preset's own
+/// `canonical_wales()` and every other construction slider back to
+/// `KnitParams::default`'s own values (plus clearing Chart, so a leftover
+/// custom chart can't silently keep overriding the preset just picked) —
+/// regardless of whatever those sliders previously held, including a
+/// prior "randomize everything" roll. Side and Seed are left alone, same
+/// reasoning as Thread's own table: Side is orthogonal to "which chart",
+/// Seed is the artist's own choice, not part of "what kind of fabric is
+/// this."
+fn knit_preset_picker(
+    ui: &mut egui::Ui,
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    id: mc_core::NodeId,
+    node_kind: &str,
+    current_params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+) {
+    if node_kind != "knit" {
+        return;
+    }
+    let current = match current_params.get("preset") {
+        Some(mc_core::ParamValue::Enum(s)) => s.clone(),
+        _ => "Jersey".to_string(),
+    };
+    let mut chosen = None;
+    egui::ComboBox::from_label("Preset")
+        .selected_text(current)
+        .show_ui(ui, |ui| {
+            for name in mc_nodes::knit::KnitPreset::NAMES {
+                if ui.selectable_label(false, name).clicked() {
+                    chosen = Some(name);
+                }
+            }
+        });
+    if let Some(name) = chosen {
+        let preset = mc_nodes::knit::KnitPreset::from_name(name)
+            .expect("KnitPreset::NAMES/from_name always agree");
+        let defaults = mc_nodes::knit::KnitParams::default();
+        commit_once_multi(
+            graph,
+            history,
+            id,
+            &[
+                ("preset", mc_core::ParamValue::Enum(name.to_string())),
+                ("chart", mc_core::ParamValue::Text(String::new())),
+                (
+                    "wales",
+                    mc_core::ParamValue::Int(preset.canonical_wales() as i32),
+                ),
+                ("auto_courses", mc_core::ParamValue::Bool(true)),
+                (
+                    "roundness",
+                    mc_core::ParamValue::Float(defaults.roundness as f32),
+                ),
+                ("depth", mc_core::ParamValue::Float(defaults.depth as f32)),
+                (
+                    "tension",
+                    mc_core::ParamValue::Enum(defaults.tension.name().to_string()),
+                ),
+                ("thickness", mc_core::ParamValue::Float(0.0)),
+                ("loop_height", mc_core::ParamValue::Float(0.0)),
+                ("plies", mc_core::ParamValue::Int(defaults.plies as i32)),
+                (
+                    "ply_direction",
+                    mc_core::ParamValue::Enum(defaults.ply_direction.name().to_string()),
+                ),
+                (
+                    "twist_angle",
+                    mc_core::ParamValue::Float(defaults.twist_angle as f32),
+                ),
+                (
+                    "rib_depth",
+                    mc_core::ParamValue::Float(defaults.rib_depth as f32),
+                ),
+                (
+                    "rib_compaction",
+                    mc_core::ParamValue::Float(defaults.rib_compaction as f32),
+                ),
+            ],
+        );
+    }
+}
+
+/// KNIT_NODE_SPEC.md §8 item 6: "snapping shown live in the panel (for
+/// example '12 wales x 13 courses')" — Wales/Courses both get rounded up to
+/// a multiple of the chart's own width/height (`mc_nodes::knit::resolve`),
+/// so what a slider shows isn't necessarily the number actually used.
+/// Recomputes `resolve()` from the current param snapshot every frame
+/// (cheap — plain CPU math, no GPU dispatch) rather than caching, so it's
+/// never stale by even one frame behind whatever's currently on the
+/// sliders.
+fn knit_resolved_hint(
+    ui: &mut egui::Ui,
+    node_kind: &str,
+    current_params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+) {
+    if node_kind != "knit" {
+        return;
+    }
+    let params = mc_nodes::knit::KnitParams::from_graph(current_params);
+    let g = mc_nodes::knit::resolve(&params);
+    ui.weak(format!(
+        "Resolved: {} wales \u{d7} {} courses",
+        g.wales, g.courses
+    ));
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     graph: &mut mc_core::Graph,
@@ -187,7 +474,17 @@ pub fn show(
     egui::Frame::new()
         .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
-            show_inner(ui, graph, history, selected, dragging);
+            // A node with a long param list (Knit, Thread) can need more
+            // vertical room than a squeezed/small window has to give —
+            // scrollable so every control stays reachable instead of
+            // clipping off the bottom with no way back to it (same
+            // reasoning as the 3D View drawer's own ScrollArea).
+            egui::ScrollArea::vertical()
+                .id_salt("params_panel_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    show_inner(ui, graph, history, selected, dragging);
+                });
         });
 }
 
@@ -219,6 +516,8 @@ fn show_inner(
     ui.weak(def.tooltip);
 
     thread_preset_picker(ui, graph, history, id, &node_kind);
+    knit_preset_picker(ui, graph, history, id, &node_kind, &current_params);
+    knit_resolved_hint(ui, &node_kind, &current_params);
 
     // A connected-vs-fallback status line for inputs where that's genuinely
     // ambiguous from the rendered result alone (e.g. a connected Fiber using
@@ -316,6 +615,11 @@ fn show_inner(
         if hide_thread_width && param.name == "thread_width" {
             continue;
         }
+        // Rendered by knit_preset_picker above instead — a plain Enum
+        // widget here would duplicate it without the multi-slider reset.
+        if node_kind == "knit" && param.name == "preset" {
+            continue;
+        }
         if !mc_nodes::defs::param_is_relevant(&node_kind, param.name, &current_params) {
             continue;
         }
@@ -337,6 +641,7 @@ fn show_inner(
                     mc_core::ParamValue::Float(value),
                 );
                 thread_fiber_param_hint(ui, &node_kind, param.name);
+                knit_ply_arrangement_hint(ui, &node_kind, param.name, &current_params);
             }
             mc_nodes::defs::ParamSpecKind::Int { min, max, default } => {
                 let mut value = current.and_then(|v| v.as_int()).unwrap_or(*default);
@@ -354,6 +659,7 @@ fn show_inner(
                     mc_core::ParamValue::Int(value),
                 );
                 thread_fiber_param_hint(ui, &node_kind, param.name);
+                knit_ply_id_hint(ui, &node_kind, param.name, &current_params);
             }
             mc_nodes::defs::ParamSpecKind::Seed { default } => {
                 let mut value = current.and_then(|v| v.as_seed()).unwrap_or(*default);
@@ -374,14 +680,15 @@ fn show_inner(
                         &response,
                         mc_core::ParamValue::Seed(value),
                     );
-                    if ui.button("🎲").clicked() {
-                        commit_once(
-                            graph,
-                            history,
-                            id,
-                            param.name,
-                            mc_core::ParamValue::Seed(random_seed()),
-                        );
+                    if ui
+                        .button("🎲")
+                        .on_hover_text("Randomizes every parameter on this node, not just Seed.")
+                        .clicked()
+                    {
+                        let new_seed = random_seed();
+                        let mut changes = vec![(param.name, mc_core::ParamValue::Seed(new_seed))];
+                        changes.extend(randomize_all_params(def, param.name, new_seed));
+                        commit_once_multi(graph, history, id, &changes);
                     }
                 });
                 thread_seed_hint(ui, &node_kind, param.name, &current_params);
@@ -411,6 +718,8 @@ fn show_inner(
                     );
                 }
                 thread_fiber_param_hint(ui, &node_kind, param.name);
+                knit_stitch_type_hint(ui, &node_kind, param.name, &current_params);
+                knit_ply_arrangement_hint(ui, &node_kind, param.name, &current_params);
             }
             mc_nodes::defs::ParamSpecKind::Color { default } => {
                 let mut value = match &current {
@@ -445,6 +754,52 @@ fn show_inner(
                         param.name,
                         mc_core::ParamValue::Bool(value),
                     );
+                }
+            }
+            mc_nodes::defs::ParamSpecKind::Text { default } => {
+                let mut value = current
+                    .and_then(|v| v.as_text().map(str::to_string))
+                    .unwrap_or_else(|| default.to_string());
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    ui.label(param.display_name);
+                    let response = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut value)
+                                .hint_text(param.tooltip)
+                                .desired_width(f32::INFINITY),
+                        )
+                        .on_hover_text(param.tooltip);
+                    changed = response.changed();
+                });
+                if changed {
+                    if node_kind == "knit" && param.name == "chart" {
+                        // Spec: "editing switches the preset to Custom" —
+                        // committed together as one undo step, same as
+                        // Pattern Generator's linked Tile Count above.
+                        commit_once_multi(
+                            graph,
+                            history,
+                            id,
+                            &[
+                                ("chart", mc_core::ParamValue::Text(value)),
+                                (
+                                    "preset",
+                                    mc_core::ParamValue::Enum(
+                                        mc_nodes::knit::KnitPreset::Custom.name().to_string(),
+                                    ),
+                                ),
+                            ],
+                        );
+                    } else {
+                        commit_once(
+                            graph,
+                            history,
+                            id,
+                            param.name,
+                            mc_core::ParamValue::Text(value),
+                        );
+                    }
                 }
             }
             mc_nodes::defs::ParamSpecKind::Vec2 { min, max, default } => {
@@ -682,5 +1037,313 @@ fn commit_once_multi(
     }
     if !inverse.is_empty() {
         history.record_applied(inverse);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn knit_def() -> &'static mc_nodes::defs::NodeDef {
+        mc_nodes::defs::node_def("knit").expect("knit is a registered node kind")
+    }
+
+    fn thread_def() -> &'static mc_nodes::defs::NodeDef {
+        mc_nodes::defs::node_def("thread_shape").expect("thread_shape is a registered node kind")
+    }
+
+    #[test]
+    fn randomize_all_params_never_touches_seed_itself() {
+        let def = knit_def();
+        let out = randomize_all_params(def, "seed", 42);
+        assert!(
+            out.iter().all(|(name, _)| *name != "seed"),
+            "the caller sets the new seed value itself; randomize_all_params shouldn't \
+             duplicate it"
+        );
+    }
+
+    #[test]
+    fn randomize_all_params_stays_within_every_declared_range() {
+        for def in [knit_def(), thread_def()] {
+            for seed in [0u32, 1, 42, u32::MAX, 123456] {
+                let out = randomize_all_params(def, "seed", seed);
+                for (name, value) in &out {
+                    let spec = def
+                        .params
+                        .iter()
+                        .find(|p| p.name == *name)
+                        .unwrap_or_else(|| panic!("{name} not declared on {}", def.kind));
+                    match (&spec.kind, value) {
+                        (
+                            mc_nodes::defs::ParamSpecKind::Float { min, max, .. },
+                            mc_core::ParamValue::Float(v),
+                        ) => {
+                            assert!(
+                                v >= min && v <= max,
+                                "{}.{name}: {v} outside [{min}, {max}]",
+                                def.kind
+                            );
+                        }
+                        (
+                            mc_nodes::defs::ParamSpecKind::Int { min, max, .. },
+                            mc_core::ParamValue::Int(v),
+                        ) => {
+                            assert!(
+                                v >= min && v <= max,
+                                "{}.{name}: {v} outside [{min}, {max}]",
+                                def.kind
+                            );
+                        }
+                        (
+                            mc_nodes::defs::ParamSpecKind::Enum { options, .. },
+                            mc_core::ParamValue::Enum(v),
+                        ) => {
+                            assert!(
+                                options.contains(&v.as_str()),
+                                "{}.{name}: {v:?} not one of {options:?}",
+                                def.kind
+                            );
+                        }
+                        (
+                            mc_nodes::defs::ParamSpecKind::Vec2 { min, max, .. },
+                            mc_core::ParamValue::Vec2(v),
+                        ) => {
+                            assert!(
+                                v.iter().all(|c| c >= min && c <= max),
+                                "{}.{name}: {v:?} outside [{min}, {max}]",
+                                def.kind
+                            );
+                        }
+                        (
+                            mc_nodes::defs::ParamSpecKind::Bool { .. },
+                            mc_core::ParamValue::Bool(_),
+                        )
+                        | (
+                            mc_nodes::defs::ParamSpecKind::Seed { .. },
+                            mc_core::ParamValue::Seed(_),
+                        )
+                        | (
+                            mc_nodes::defs::ParamSpecKind::Color { .. },
+                            mc_core::ParamValue::Color(_),
+                        )
+                        | (
+                            mc_nodes::defs::ParamSpecKind::Text { .. },
+                            mc_core::ParamValue::Text(_),
+                        ) => {}
+                        (_, value) => {
+                            panic!(
+                                "{}.{name}: unexpected value {value:?} for its declared kind",
+                                def.kind
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn randomize_all_params_resets_text_to_its_declared_default() {
+        let def = knit_def();
+        let out = randomize_all_params(def, "seed", 7);
+        let chart = out
+            .iter()
+            .find(|(name, _)| *name == "chart")
+            .map(|(_, v)| v.clone());
+        assert_eq!(chart, Some(mc_core::ParamValue::Text(String::new())));
+    }
+
+    #[test]
+    fn randomize_all_params_is_deterministic_for_the_same_seed() {
+        let def = knit_def();
+        let a = randomize_all_params(def, "seed", 99);
+        let b = randomize_all_params(def, "seed", 99);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn randomize_all_params_varies_with_the_seed() {
+        let def = knit_def();
+        let a = randomize_all_params(def, "seed", 1);
+        let b = randomize_all_params(def, "seed", 2);
+        assert_ne!(a, b);
+    }
+
+    /// Reproduces "randomize, then apply a named preset" at the data layer
+    /// (no `egui::Ui` needed — `thread_preset_picker`'s own commit call is
+    /// exactly `commit_once_multi` with a preset's field values, so this
+    /// exercises the same path it would on a real click) to check whether
+    /// Thread's preset system genuinely fails to overwrite a prior
+    /// randomized value, or whether it already works at this layer and
+    /// the reported issue is specific to live UI interaction.
+    #[test]
+    fn applying_a_thread_preset_after_randomizing_lands_on_its_exact_values() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        let id = graph.add_node(thread_def().instantiate());
+
+        // Simulate a prior "randomize everything" click.
+        let randomized = randomize_all_params(thread_def(), "seed", 7);
+        commit_once_multi(&mut graph, &mut history, id, &randomized);
+
+        // Now simulate clicking the "4-Ply Cable" preset.
+        let preset = mc_nodes::thread_shape::PRESETS
+            .iter()
+            .find(|p| p.name == "4-Ply Cable")
+            .expect("4-Ply Cable preset exists");
+        commit_once_multi(
+            &mut graph,
+            &mut history,
+            id,
+            &[
+                ("threads", mc_core::ParamValue::Int(preset.threads as i32)),
+                ("thickness", mc_core::ParamValue::Float(preset.thickness)),
+                ("plies", mc_core::ParamValue::Int(preset.plies as i32)),
+                (
+                    "ply_direction",
+                    mc_core::ParamValue::Enum(preset.ply_direction.name().to_string()),
+                ),
+                (
+                    "twist_angle",
+                    mc_core::ParamValue::Float(preset.twist_angle),
+                ),
+                (
+                    "fiber_mode",
+                    mc_core::ParamValue::Enum(preset.fiber_mode.name().to_string()),
+                ),
+                (
+                    "fibers_per_ply",
+                    mc_core::ParamValue::Int(preset.fibers_per_ply as i32),
+                ),
+                (
+                    "fiber_depth",
+                    mc_core::ParamValue::Float(preset.fiber_depth),
+                ),
+                (
+                    "cable_groups",
+                    mc_core::ParamValue::Int(preset.cable_groups as i32),
+                ),
+                (
+                    "cable_angle",
+                    mc_core::ParamValue::Float(preset.cable_angle),
+                ),
+            ],
+        );
+
+        let node = graph.node(id).expect("node still exists");
+        assert_eq!(
+            node.params.get("threads"),
+            Some(&mc_core::ParamValue::Int(preset.threads as i32))
+        );
+        assert_eq!(
+            node.params.get("plies"),
+            Some(&mc_core::ParamValue::Int(preset.plies as i32))
+        );
+        assert_eq!(
+            node.params.get("cable_groups"),
+            Some(&mc_core::ParamValue::Int(preset.cable_groups as i32))
+        );
+        assert_eq!(
+            node.params.get("fiber_mode"),
+            Some(&mc_core::ParamValue::Enum(
+                preset.fiber_mode.name().to_string()
+            ))
+        );
+    }
+
+    /// Same shape as the Thread test above, for Knit's own preset system —
+    /// picking "2x2 Rib" after randomizing everything (including a
+    /// leftover custom Chart string) should land exactly on that preset's
+    /// canonical numbers, not some mix of random and reset values.
+    #[test]
+    fn applying_a_knit_preset_after_randomizing_lands_on_its_canonical_values() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        let id = graph.add_node(knit_def().instantiate());
+
+        let randomized = randomize_all_params(knit_def(), "seed", 13);
+        commit_once_multi(&mut graph, &mut history, id, &randomized);
+        // A leftover custom chart specifically, since that's the case the
+        // picker's own Chart-clearing exists to guard against.
+        commit_once(
+            &mut graph,
+            &mut history,
+            id,
+            "chart",
+            mc_core::ParamValue::Text("KP/PK".to_string()),
+        );
+
+        let preset = mc_nodes::knit::KnitPreset::Rib2x2;
+        let defaults = mc_nodes::knit::KnitParams::default();
+        commit_once_multi(
+            &mut graph,
+            &mut history,
+            id,
+            &[
+                (
+                    "preset",
+                    mc_core::ParamValue::Enum(preset.name().to_string()),
+                ),
+                ("chart", mc_core::ParamValue::Text(String::new())),
+                (
+                    "wales",
+                    mc_core::ParamValue::Int(preset.canonical_wales() as i32),
+                ),
+                ("auto_courses", mc_core::ParamValue::Bool(true)),
+                (
+                    "roundness",
+                    mc_core::ParamValue::Float(defaults.roundness as f32),
+                ),
+                ("depth", mc_core::ParamValue::Float(defaults.depth as f32)),
+                (
+                    "tension",
+                    mc_core::ParamValue::Enum(defaults.tension.name().to_string()),
+                ),
+                ("thickness", mc_core::ParamValue::Float(0.0)),
+                ("loop_height", mc_core::ParamValue::Float(0.0)),
+                ("plies", mc_core::ParamValue::Int(defaults.plies as i32)),
+                (
+                    "ply_direction",
+                    mc_core::ParamValue::Enum(defaults.ply_direction.name().to_string()),
+                ),
+                (
+                    "twist_angle",
+                    mc_core::ParamValue::Float(defaults.twist_angle as f32),
+                ),
+                (
+                    "rib_depth",
+                    mc_core::ParamValue::Float(defaults.rib_depth as f32),
+                ),
+                (
+                    "rib_compaction",
+                    mc_core::ParamValue::Float(defaults.rib_compaction as f32),
+                ),
+            ],
+        );
+
+        let node = graph.node(id).expect("node still exists");
+        assert_eq!(
+            node.params.get("preset"),
+            Some(&mc_core::ParamValue::Enum("2x2 Rib".to_string()))
+        );
+        assert_eq!(
+            node.params.get("chart"),
+            Some(&mc_core::ParamValue::Text(String::new())),
+            "a leftover custom chart should be cleared, or it would silently keep \
+             overriding the preset just picked"
+        );
+        assert_eq!(
+            node.params.get("wales"),
+            Some(&mc_core::ParamValue::Int(12))
+        );
+        assert_eq!(
+            node.params.get("auto_courses"),
+            Some(&mc_core::ParamValue::Bool(true))
+        );
+        assert_eq!(
+            node.params.get("rib_depth"),
+            Some(&mc_core::ParamValue::Float(1.5))
+        );
     }
 }

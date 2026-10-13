@@ -81,6 +81,10 @@ fn embedded_source(file_name: &str) -> &'static str {
         "ordered_dither.wgsl" => include_str!("../shaders/ordered_dither.wgsl"),
         "palette_dither.wgsl" => include_str!("../shaders/palette_dither.wgsl"),
         "data_corrupt.wgsl" => include_str!("../shaders/data_corrupt.wgsl"),
+        "fabric_generator.wgsl" => include_str!("../shaders/fabric_generator.wgsl"),
+        "thread_shape.wgsl" => include_str!("../shaders/thread_shape.wgsl"),
+        "tube_raster.wgsl" => include_str!("../shaders/tube_raster.wgsl"),
+        "knit_stitch_info.wgsl" => include_str!("../shaders/knit_stitch_info.wgsl"),
         other => panic!("mc_nodes: unknown shader file {other:?}"),
     }
 }

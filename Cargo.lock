@@ -1717,6 +1717,7 @@ dependencies = [
  "mc_core",
  "mc_export",
  "mc_gpu",
+ "serde_json",
  "thiserror 2.0.21",
  "wgpu",
 ]
