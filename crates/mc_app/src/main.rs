@@ -56,6 +56,14 @@ struct MaterialCreatorApp {
     thumbnail_ids: HashMap<mc_core::NodeId, egui::TextureId>,
 
     selected: Option<mc_core::NodeId>,
+    /// Which of `selected`'s own output ports to preview in the 2D View,
+    /// for a node with more than one (currently just Thread) — tagged with
+    /// the node it was set for, so switching to a *different* node
+    /// automatically falls back to that node's own default/first output
+    /// instead of silently reusing a stale port name that might not even
+    /// exist on it. Set by clicking an output pin in the node graph (see
+    /// `canvas::show`'s own doc comment on that pin's click handling).
+    preview_port: Option<(mc_core::NodeId, String)>,
     add_node_menu: Option<add_node_menu::AddNodeMenu>,
     pending_wire_connect: Option<canvas::DroppedWire>,
     param_drag: params_panel::DragState,
@@ -221,6 +229,7 @@ impl eframe::App for MaterialCreatorApp {
             canvas,
             thumbnail_ids,
             selected,
+            preview_port,
             param_drag,
             viewport3d,
             viewport_panels,
@@ -621,6 +630,7 @@ impl eframe::App for MaterialCreatorApp {
                         history,
                         canvas,
                         selected,
+                        preview_port,
                         gpu,
                         pool,
                         render_state,
@@ -842,10 +852,29 @@ impl MaterialCreatorApp {
     }
 
     /// The selected node's resolved output texture, registered/updated as an
-    /// egui texture for the 2D view.
+    /// egui texture for the 2D view. Prefers `preview_port` (a specific
+    /// output someone clicked on, for a multi-output node) when it's
+    /// actually still valid for `id` — still checked against the node's own
+    /// `NodeDef` here rather than trusted outright, since `preview_port`
+    /// can outlive the node selection that set it (e.g. undo recreating the
+    /// node with the same id but a different kind is extremely unlikely,
+    /// but a stale port name silently resolving to *some other* node's
+    /// texture under the same key format would be a confusing bug to hit).
     fn preview_texture(&mut self) -> Option<egui::TextureId> {
         let id = self.selected?;
-        let key = mc_nodes::registry::resolve_texture_key(&self.graph, id)?;
+        let key = match &self.preview_port {
+            Some((port_node, port_name)) if *port_node == id => {
+                let kind = &self.graph.node(id)?.kind;
+                let is_valid = mc_nodes::defs::node_def(kind)
+                    .is_some_and(|def| def.outputs.iter().any(|p| p.name == port_name));
+                if is_valid {
+                    mc_nodes::registry::texture_key(id, port_name)
+                } else {
+                    mc_nodes::registry::resolve_texture_key(&self.graph, id)?
+                }
+            }
+            _ => mc_nodes::registry::resolve_texture_key(&self.graph, id)?,
+        };
         // Node textures are linear; egui never decodes what it's given, so
         // this view has to already be sRGB-encoded or the preview reads too
         // dark/off relative to the 3D viewport and an exported PNG — see
@@ -1097,6 +1126,7 @@ fn main() -> eframe::Result<()> {
                 canvas: CanvasState::default(),
                 thumbnail_ids: HashMap::new(),
                 selected: None,
+                preview_port: None,
                 add_node_menu: None,
                 pending_wire_connect: None,
                 param_drag: None,

@@ -412,6 +412,7 @@ pub fn show(
     history: &mut mc_core::History,
     canvas: &mut CanvasState,
     selected: &mut Option<NodeId>,
+    preview_port: &mut Option<(NodeId, String)>,
     gpu: &mut mc_gpu::Context,
     pool: &mut mc_gpu::TexturePool,
     render_state: &egui_wgpu::RenderState,
@@ -761,8 +762,11 @@ pub fn show(
                 p,
                 port.port_type,
                 port.display_name,
-                false,
                 zoom,
+                PinStyle {
+                    is_output: false,
+                    is_previewed: false,
+                },
             );
             let pin_id = ui.id().with(("mc_pin_in", id, i));
             let pin_rect = Rect::from_center_size(p, Vec2::splat(PIN_HIT_RADIUS * zoom * 2.0));
@@ -778,16 +782,67 @@ pub fn show(
             }
         }
         let node_kind = graph.node(id).map(|n| n.kind.clone()).unwrap_or_default();
+        // Which output is actually shown in the 2D View right now for this
+        // node: whichever `preview_port` names, if that's still a real
+        // output of this node, else the first/default one
+        // `preview_texture`'s own fallback would use — so the highlight
+        // below never lies about what's on screen, including before anyone
+        // has clicked an output pin at all.
+        // Owned (not borrowed from `preview_port`) specifically so the
+        // click handler below is free to write back into `*preview_port`
+        // within the same loop that reads this.
+        let effective_preview_port: Option<String> = match &preview_port {
+            Some((pid, name))
+                if *pid == id && def.outputs.iter().any(|p| p.name == name.as_str()) =>
+            {
+                Some(name.clone())
+            }
+            _ => def.outputs.first().map(|p| p.name.to_string()),
+        };
         for (i, port) in def.outputs.iter().enumerate() {
             let p = pin_pos(rect, true, i, zoom);
             let port_type =
                 mc_nodes::defs::effective_output_type(graph, id, &node_kind, port.port_type);
-            draw_pin(ui, &painter, p, port_type, port.display_name, true, zoom);
+            // Only worth highlighting which output is active when there's
+            // more than one to choose from — a single-output node's pin
+            // changing color for no reason would just be visual noise.
+            let is_previewed =
+                def.outputs.len() > 1 && effective_preview_port.as_deref() == Some(port.name);
+            draw_pin(
+                ui,
+                &painter,
+                p,
+                port_type,
+                port.display_name,
+                zoom,
+                PinStyle {
+                    is_output: true,
+                    is_previewed,
+                },
+            );
             let pin_id = ui.id().with(("mc_pin_out", id, i));
             let pin_rect = Rect::from_center_size(p, Vec2::splat(PIN_HIT_RADIUS * zoom * 2.0));
-            let pin_resp = ui.interact(pin_rect, pin_id, Sense::click_and_drag());
+            let pin_resp = ui
+                .interact(pin_rect, pin_id, Sense::click_and_drag())
+                .on_hover_text(if def.outputs.len() > 1 {
+                    "Drag to connect \u{2014} click to show in the 2D View"
+                } else {
+                    "Drag to connect"
+                });
             if pin_resp.drag_started_by(egui::PointerButton::Primary) {
                 canvas.wire_drag = Some(PinRef::Output { node: id, index: i });
+            }
+            // A plain click (not a drag) previews this specific output
+            // instead of wiring it — the same gesture the node header's
+            // own preview dot uses for "show this node", just scoped to
+            // one of its several outputs. `Sense::click_and_drag`'s own
+            // `clicked()` already only fires for an actual click (no
+            // meaningful pointer movement), the same way the input pins
+            // above already rely on `drag_started_by` alone to mean a real
+            // drag — no extra guard needed to tell the two gestures apart.
+            if pin_resp.clicked() {
+                *selected = Some(id);
+                *preview_port = Some((id, port.name.to_string()));
             }
         }
 
@@ -803,7 +858,16 @@ pub fn show(
             Pos2::new(rect.min.x + BODY_PADDING * zoom, body_top),
             Vec2::splat(THUMBNAIL_SIZE * zoom),
         );
-        if let Some(key) = mc_nodes::registry::resolve_texture_key(graph, id) {
+        // Mirrors whatever the 2D View is showing for this node (see
+        // `effective_preview_port` above) rather than always the default
+        // output — otherwise clicking "Mask" to preview it would leave
+        // this node's own thumbnail still showing Height, which would
+        // read as the click not having done anything.
+        let thumbnail_key = match &effective_preview_port {
+            Some(port_name) => Some(mc_nodes::registry::texture_key(id, port_name)),
+            None => mc_nodes::registry::resolve_texture_key(graph, id),
+        };
+        if let Some(key) = thumbnail_key {
             // Thumbnails are node output, which is linear — see
             // `display_encode.rs` for why this has to be a real encode pass,
             // not just handing egui the raw (linear) texture view.
@@ -968,15 +1032,29 @@ pub fn show(
     output
 }
 
+/// Bundles `draw_pin`'s two booleans (which otherwise pushed it past
+/// clippy's argument-count limit) — "is this an output pin" and "is this
+/// specific output the one currently shown in the 2D View" are different
+/// questions (the latter only ever true for one of possibly several
+/// outputs), so this stays two fields rather than collapsing into one.
+struct PinStyle {
+    is_output: bool,
+    is_previewed: bool,
+}
+
 fn draw_pin(
     ui: &egui::Ui,
     painter: &egui::Painter,
     pos: Pos2,
     port_type: PortType,
     label: &str,
-    is_output: bool,
     zoom: f32,
+    style: PinStyle,
 ) {
+    let PinStyle {
+        is_output,
+        is_previewed,
+    } = style;
     painter.circle_filled(pos, PIN_RADIUS * zoom, port_color(port_type));
     let offset = (PIN_RADIUS + 4.0) * zoom;
     let (anchor, text_pos) = if is_output {
@@ -984,12 +1062,22 @@ fn draw_pin(
     } else {
         (egui::Align2::LEFT_CENTER, pos + Vec2::new(offset, 0.0))
     };
+    // Same accent color the node-header preview dot uses for "this is what
+    // the 2D View is currently showing" — only ever true for an output
+    // pin, and only when that node has more than one (so a normal
+    // single-output node's label never changes color for no visible
+    // reason).
+    let color = if is_previewed {
+        crate::theme::SUPERNOVA_LIGHT
+    } else {
+        ui.visuals().text_color()
+    };
     painter.text(
         text_pos,
         anchor,
         label,
         egui::FontId::proportional(12.0 * zoom),
-        ui.visuals().text_color(),
+        color,
     );
 }
 
