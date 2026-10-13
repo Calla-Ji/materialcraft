@@ -59,6 +59,12 @@ pub enum ParamValue {
     /// (`KKPP/PPKK`), unlike [`ParamValue::Enum`]'s closed, node-declared
     /// choice list.
     Text(String),
+    /// Vector path data (PATH_NODE_SPEC.md §1-2) — the Path node's own
+    /// output *is* its params, so this is both what the node stores and
+    /// what flows across a `PortType::Path` connection (see
+    /// `mc_core::PortType::Path`'s own doc comment for why that bypasses
+    /// the texture pool).
+    Path(crate::Path),
 }
 
 impl std::hash::Hash for ParamValue {
@@ -81,6 +87,7 @@ impl std::hash::Hash for ParamValue {
                 image.embedded_base64.hash(state);
             }
             ParamValue::Text(v) => v.hash(state),
+            ParamValue::Path(p) => p.hash(state),
         }
     }
 }
@@ -131,6 +138,13 @@ impl ParamValue {
     pub fn as_text(&self) -> Option<&str> {
         match self {
             ParamValue::Text(v) => Some(v.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn as_path(&self) -> Option<&crate::Path> {
+        match self {
+            ParamValue::Path(v) => Some(v),
             _ => None,
         }
     }

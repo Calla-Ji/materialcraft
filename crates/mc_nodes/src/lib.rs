@@ -40,6 +40,7 @@ pub mod knit;
 pub mod levels;
 pub mod ordered_dither;
 pub mod palette_dither;
+pub mod path;
 pub mod perlin;
 pub mod registry;
 pub mod scanline_jitter;

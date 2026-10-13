@@ -1713,6 +1713,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "image",
+ "kurbo",
  "log",
  "mc_core",
  "mc_export",

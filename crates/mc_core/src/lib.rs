@@ -12,6 +12,7 @@ mod graph;
 mod id;
 mod node;
 mod param;
+mod path;
 mod port;
 
 pub use command::{Command, History, Transaction};
@@ -20,4 +21,5 @@ pub use graph::{Graph, GraphError, GraphSettings, LoadError, NormalFormat, FORMA
 pub use id::NodeId;
 pub use node::Node;
 pub use param::{GradientStop, ImageRef, ParamValue};
+pub use path::{Path, Point, PointKind, SubPath};
 pub use port::PortType;

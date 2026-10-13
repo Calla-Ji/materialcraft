@@ -13,4 +13,11 @@ pub enum PortType {
     Gray,
     /// RGBA (RGBA16Float on the GPU).
     Color,
+    /// Vector path data (PATH_NODE_SPEC.md §1) — not a texture at all.
+    /// Connections of this type bypass the GPU texture pool entirely: a
+    /// downstream node reads the upstream Path node's own stored params
+    /// directly (see `mc_nodes::registry`'s handling of the Stitch node's
+    /// `path` input). Only ever compatible with another `Path` port — no
+    /// broadcast to/from Gray or Color, unlike Gray->Color.
+    Path,
 }

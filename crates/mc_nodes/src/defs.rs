@@ -168,8 +168,16 @@ pub fn node_def(kind: &str) -> Option<&'static NodeDef> {
 /// `to`-typed input (CLAUDE.md §5): Gray broadcasts implicitly into Color,
 /// but Color needs an explicit Grayscale Conversion node to become Gray —
 /// which doesn't exist yet, so that direction is simply blocked for now.
+/// `Path` is its own thing entirely (vector data, not a texture — see
+/// `mc_core::PortType::Path`'s own doc comment): only Path-to-Path is
+/// ever valid, no broadcast either direction the way Gray/Color have.
 pub fn ports_compatible(from: PortType, to: PortType) -> bool {
-    !matches!((from, to), (PortType::Color, PortType::Gray))
+    match (from, to) {
+        (PortType::Path, PortType::Path) => true,
+        (PortType::Path, _) | (_, PortType::Path) => false,
+        (PortType::Color, PortType::Gray) => false,
+        _ => true,
+    }
 }
 
 /// Node kinds whose single "input"/"output" pair behaves identically
@@ -3287,5 +3295,20 @@ mod tests {
             PortType::Gray,
             "toggling grayscale on should switch the effective output type to Gray"
         );
+    }
+
+    /// PATH_NODE_SPEC.md §1: Path wires only ever connect to another Path
+    /// port — no broadcast to/from Gray or Color the way Gray->Color works.
+    #[test]
+    fn path_ports_only_connect_to_each_other() {
+        use super::ports_compatible;
+        assert!(ports_compatible(PortType::Path, PortType::Path));
+        assert!(!ports_compatible(PortType::Path, PortType::Gray));
+        assert!(!ports_compatible(PortType::Path, PortType::Color));
+        assert!(!ports_compatible(PortType::Gray, PortType::Path));
+        assert!(!ports_compatible(PortType::Color, PortType::Path));
+        // Existing Gray/Color rules stay intact.
+        assert!(ports_compatible(PortType::Gray, PortType::Color));
+        assert!(!ports_compatible(PortType::Color, PortType::Gray));
     }
 }

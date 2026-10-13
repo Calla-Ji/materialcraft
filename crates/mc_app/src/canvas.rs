@@ -167,6 +167,7 @@ fn port_color(port_type: PortType) -> Color32 {
     match port_type {
         PortType::Gray => Color32::from_gray(200),
         PortType::Color => crate::theme::PINK_DWARF,
+        PortType::Path => crate::theme::PATH_CYAN,
     }
 }
 

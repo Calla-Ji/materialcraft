@@ -28,6 +28,12 @@ pub const TWINKLING_GREY: Color32 = Color32::from_rgb(0xE0, 0xD1, 0xD4);
 /// Color-type port pins and wires in the node graph — replaces the generic
 /// orange those conventionally use elsewhere with a brand color instead.
 pub const PINK_DWARF: Color32 = Color32::from_rgb(0xFF, 0x99, 0xD8);
+/// Path-type port pins and wires (PATH_NODE_SPEC.md §1: "Path wires get
+/// their own colour in the graph UI"). Not sourced from the owner's brand
+/// guide, which has no entry for this — a clearly-distinct placeholder
+/// (same "easy to swap for a real one later" status as `category_color`'s
+/// own unassigned-category fallback below).
+pub const PATH_CYAN: Color32 = Color32::from_rgb(0x6E, 0xE7, 0xE0);
 
 /// One accent color per node category (`mc_nodes::defs`'s 9 category
 /// strings), for the Node Library panel's grouping and each node card's

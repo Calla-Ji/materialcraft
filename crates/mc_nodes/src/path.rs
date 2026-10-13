@@ -1,0 +1,820 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//! Generators / Patterns / Path — Step 1 of PATH_NODE_SPEC.md's staged
+//! build: the data geometry, CPU-only, no editor UI and no GPU yet.
+//!
+//! Ported 1:1 from `path_reference.py` (the owner's ground-truth script,
+//! itself the authority over PATH_NODE_SPEC.md's own prose per that
+//! document's rule 1), using `kurbo` for every piece of Bezier math the
+//! spec names explicitly rather than hand-rolling it: [`segments`] builds
+//! `kurbo::CubicBez`s directly from [`mc_core::SubPath`]'s control-point
+//! formula; [`insert_point`] uses `CubicBez::subsegment` (an exact
+//! de Casteljau-equivalent split, not Python's own hand-written
+//! `split_segment`); [`nearest_on_path`] uses `ParamCurveNearest::nearest`
+//! (Python's own `nearest_on_path` calls itself "a coarse stand-in" for
+//! exactly this); [`sections`] uses `ParamCurveArclen::arclen` for true
+//! arc length, not Python's dense-sample chord-length approximation.
+//! Tangents are the one place this module deliberately matches Python's
+//! own *method*, not just its result: `Section.tan` is a finite-difference
+//! estimate ([`gradient_1d`]), not the analytic derivative — see that
+//! function's own doc comment for why swapping in the (more "correct")
+//! analytic derivative actually fails this step's own tolerance right at
+//! a section's first/last sample.
+//!
+//! Internally f64 throughout (`mc_core::Point`'s own `pos`/`h_in`/`h_out`
+//! fields already are), matching Python's own float64 and this step's own
+//! acceptance bar: sections within `1e-5` tile units, JSON round-trip
+//! within `1e-9` (`golden/path_geometry.json`, `golden/demo_path.json`).
+
+use mc_core::{Path, Point, PointKind, SubPath};
+
+fn to_arr(v: kurbo::Vec2) -> [f64; 2] {
+    [v.x, v.y]
+}
+
+fn vec_len(v: [f64; 2]) -> f64 {
+    (v[0] * v[0] + v[1] * v[1]).sqrt()
+}
+
+/// Segment `i`'s control polygon, exactly PATH_NODE_SPEC.md §2's formula:
+/// `P0 = p[i].pos`, `P1 = p[i].pos + p[i].h_out`, `P2 = p[i+1].pos +
+/// p[i+1].h_in`, `P3 = p[i+1].pos` — and, for a closed subpath, one more
+/// segment running from the last point back to the first.
+pub fn segments(sp: &SubPath) -> Vec<kurbo::CubicBez> {
+    let pts = &sp.points;
+    let n = pts.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let count = if sp.closed { n } else { n - 1 };
+    (0..count)
+        .map(|i| {
+            let a = &pts[i];
+            let b = &pts[(i + 1) % n];
+            let p0 = kurbo::Point::new(a.pos[0], a.pos[1]);
+            let p1 = kurbo::Point::new(a.pos[0] + a.h_out[0], a.pos[1] + a.h_out[1]);
+            let p2 = kurbo::Point::new(b.pos[0] + b.h_in[0], b.pos[1] + b.h_in[1]);
+            let p3 = kurbo::Point::new(b.pos[0], b.pos[1]);
+            kurbo::CubicBez::new(p0, p1, p2, p3)
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------
+// Handle constraints (PATH_NODE_SPEC.md §3 / path_reference.py's
+// `drag_handle`/`set_kind`) — what the editor enforces while dragging.
+// ---------------------------------------------------------------------
+
+/// Which of a point's two handles is being dragged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandleSide {
+    In,
+    Out,
+}
+
+/// Move one handle of a point and apply its kind's constraint to the
+/// other: `Corner` leaves the other handle untouched, `Smooth` rotates it
+/// to stay exactly opposite (keeping its own length), `Symmetric` mirrors
+/// it exactly (same length). `break_link` (Alt/Option-drag) converts the
+/// point to a corner first, so only the dragged handle moves.
+pub fn drag_handle(pt: &Point, which: HandleSide, new: [f64; 2], break_link: bool) -> Point {
+    let kind = if break_link {
+        PointKind::Corner
+    } else {
+        pt.kind
+    };
+    let (mut h_in, mut h_out) = (pt.h_in, pt.h_out);
+    let other = match which {
+        HandleSide::Out => {
+            h_out = new;
+            h_in
+        }
+        HandleSide::In => {
+            h_in = new;
+            h_out
+        }
+    };
+    let l_new = vec_len(new);
+    let o = if kind == PointKind::Smooth && l_new > 1e-12 {
+        let l_other = vec_len(other);
+        [-new[0] / l_new * l_other, -new[1] / l_new * l_other]
+    } else if kind == PointKind::Symmetric {
+        [-new[0], -new[1]]
+    } else {
+        other
+    };
+    match which {
+        HandleSide::Out => h_in = o,
+        HandleSide::In => h_out = o,
+    }
+    Point {
+        pos: pt.pos,
+        h_in,
+        h_out,
+        kind,
+        width: pt.width,
+    }
+}
+
+/// Convert a point's kind. To `Corner`: handles unchanged. To `Smooth`:
+/// both handles align to the direction `h_out - h_in`, each keeping its
+/// own length. To `Symmetric`: same as `Smooth`, then both lengths are set
+/// to their average. If both handles are zero, they stay zero (the user
+/// then drags them out) — matches `path_reference.py`'s `set_kind` exactly,
+/// including that zero-handle short-circuit.
+pub fn set_kind(pt: &Point, kind: PointKind) -> Point {
+    if kind == PointKind::Corner {
+        return Point { kind, ..*pt };
+    }
+    let (hi, ho) = (pt.h_in, pt.h_out);
+    let (mut li, mut lo) = (vec_len(hi), vec_len(ho));
+    let d = [ho[0] - hi[0], ho[1] - hi[1]];
+    let ld = vec_len(d);
+    if ld < 1e-12 {
+        return Point { kind, ..*pt };
+    }
+    let u = [d[0] / ld, d[1] / ld];
+    if kind == PointKind::Symmetric {
+        let avg = 0.5 * (li + lo);
+        li = avg;
+        lo = avg;
+    }
+    Point {
+        pos: pt.pos,
+        h_in: [-u[0] * li, -u[1] * li],
+        h_out: [u[0] * lo, u[1] * lo],
+        kind,
+        width: pt.width,
+    }
+}
+
+/// Insert a point on segment `seg_index` at parameter `t` without changing
+/// the curve's shape (`CubicBez::subsegment` is an exact split, the same
+/// result de Casteljau subdivision would give). The neighbours' adjacent
+/// handles shorten to match; the new point is `Smooth` if both its new
+/// handles are nonzero (built from a genuinely curved split), else
+/// `Corner` (a straight-line segment with zero handles splits into two
+/// straight pieces, still zero). Width is interpolated linearly between
+/// the two original neighbours.
+pub fn insert_point(sp: &SubPath, seg_index: usize, t: f64) -> SubPath {
+    use kurbo::ParamCurve;
+
+    let n = sp.points.len();
+    let segs = segments(sp);
+    let c = segs[seg_index];
+    let left = c.subsegment(0.0..t);
+    let right = c.subsegment(t..1.0);
+
+    let a_idx = seg_index;
+    let b_idx = (seg_index + 1) % n;
+
+    let mut pts = sp.points.clone();
+    pts[a_idx].h_out = to_arr(left.p1 - left.p0);
+    pts[b_idx].h_in = to_arr(right.p2 - right.p3);
+
+    let h_in = to_arr(left.p2 - left.p3);
+    let h_out = to_arr(right.p1 - right.p0);
+    let kind = if vec_len(h_in) > 1e-12 && vec_len(h_out) > 1e-12 {
+        PointKind::Smooth
+    } else {
+        PointKind::Corner
+    };
+    let w = pts[a_idx].width * (1.0 - t as f32) + pts[b_idx].width * t as f32;
+    let new_point = Point {
+        pos: [left.p3.x, left.p3.y],
+        h_in,
+        h_out,
+        kind,
+        width: w,
+    };
+    pts.insert(seg_index + 1, new_point);
+    SubPath::new(pts, sp.closed)
+}
+
+/// Remove a point. Neighbours keep their handles — nothing is refitted. A
+/// closed subpath with fewer than 3 points left becomes open (a subpath
+/// with fewer than 2 points at all is the caller's concern, same as
+/// `path_reference.py`'s own doc comment notes).
+pub fn delete_point(sp: &SubPath, index: usize) -> SubPath {
+    let mut pts = sp.points.clone();
+    pts.remove(index);
+    let closed = sp.closed && pts.len() >= 3;
+    SubPath::new(pts, closed)
+}
+
+/// `(segment_index, t, distance)` of the closest point on the subpath to
+/// `q`, via `kurbo::ParamCurveNearest` — PATH_NODE_SPEC.md §6 explicitly
+/// calls out `path_reference.py`'s own `nearest_on_path` as "a coarse
+/// stand-in" for this. Used for "click on a segment inserts a point."
+pub fn nearest_on_path(sp: &SubPath, q: [f64; 2]) -> (usize, f64, f64) {
+    use kurbo::ParamCurveNearest;
+    let q_pt = kurbo::Point::new(q[0], q[1]);
+    let segs = segments(sp);
+    let mut best = (0usize, 0.0f64, f64::INFINITY);
+    for (i, seg) in segs.iter().enumerate() {
+        let nearest = seg.nearest(q_pt, 1e-9);
+        let dist = nearest.distance_sq.max(0.0).sqrt();
+        if dist < best.2 {
+            best = (i, nearest.t, dist);
+        }
+    }
+    best
+}
+
+// ---------------------------------------------------------------------
+// What the Stitch node consumes: arc-length sections
+// (path_reference.py's `Section`/`sections`)
+// ---------------------------------------------------------------------
+
+/// A run of the path between two breaks (sharp corners or open-path ends),
+/// tabulated densely against arc length `s` so a stitch rule can ask
+/// "where is the path at distance `s` along this section?" via [`at`].
+pub struct Section {
+    /// Cumulative arc length, tile units, `s[0] = 0`.
+    pub s: Vec<f64>,
+    pub p: Vec<[f64; 2]>,
+    pub tan: Vec<[f64; 2]>,
+    pub width: Vec<f32>,
+    /// Unit bisector normal at a corner start, for satin mitres — `None`
+    /// if the section's own start isn't a break (an open path's first
+    /// point, or a point whose tangent didn't actually turn sharply).
+    pub start_corner: Option<[f64; 2]>,
+    pub end_corner: Option<[f64; 2]>,
+    /// A whole closed subpath with no breaks at all (one closed section,
+    /// e.g. the demo's circle) rather than a run between two breaks.
+    pub closed: bool,
+}
+
+impl Section {
+    pub fn length(&self) -> f64 {
+        self.s.last().copied().unwrap_or(0.0)
+    }
+
+    /// Position, unit tangent and width at arc length `s_query` along this
+    /// section (clamped to `[0, length]`), linearly interpolated between
+    /// the nearest table samples — `path_reference.py`'s own `Section.at`.
+    pub fn at(&self, s_query: f64) -> ([f64; 2], [f64; 2], f32) {
+        let n = self.s.len();
+        if n == 0 {
+            return ([0.0, 0.0], [1.0, 0.0], 1.0);
+        }
+        if n == 1 {
+            return (self.p[0], self.tan[0], self.width[0]);
+        }
+        let s_query = s_query.clamp(0.0, self.length());
+        let i = match self
+            .s
+            .binary_search_by(|v| v.partial_cmp(&s_query).unwrap())
+        {
+            Ok(i) => i.min(n - 2),
+            Err(i) => i.saturating_sub(1).min(n - 2),
+        };
+        let (s0, s1) = (self.s[i], self.s[i + 1]);
+        let t = if (s1 - s0).abs() > 1e-15 {
+            (s_query - s0) / (s1 - s0)
+        } else {
+            0.0
+        };
+        let lerp2 = |a: [f64; 2], b: [f64; 2]| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        let p = lerp2(self.p[i], self.p[i + 1]);
+        let raw_tan = lerp2(self.tan[i], self.tan[i + 1]);
+        let norm = vec_len(raw_tan).max(1e-15);
+        let tan = [raw_tan[0] / norm, raw_tan[1] / norm];
+        let w = self.width[i] as f64 + (self.width[i + 1] as f64 - self.width[i] as f64) * t;
+        (p, tan, w as f32)
+    }
+}
+
+fn turn_angle_deg(din: kurbo::Vec2, dout: kurbo::Vec2) -> f64 {
+    let a = din.y.atan2(din.x);
+    let b = dout.y.atan2(dout.x);
+    let d = (b - a + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI)
+        - std::f64::consts::PI;
+    d.abs().to_degrees()
+}
+
+/// Unit tangent direction at a segment's start/end, falling back to the
+/// chord between the relevant control points for a zero handle (and to the
+/// segment's own chord if that's also zero) — `path_reference.py`'s own
+/// `seg_dir` closure inside `sections`.
+fn seg_dir(c: &kurbo::CubicBez, end: bool) -> kurbo::Vec2 {
+    use kurbo::{ParamCurve, ParamCurveDeriv};
+    let t = if end { 1.0 } else { 0.0 };
+    let d = c.deriv().eval(t).to_vec2();
+    let d = if d.hypot() < 1e-12 {
+        let d2 = if end { c.p3 - c.p2 } else { c.p1 - c.p0 };
+        if d2.hypot() < 1e-12 {
+            c.p3 - c.p0
+        } else {
+            d2
+        }
+    } else {
+        d
+    };
+    d / (d.hypot() + 1e-15)
+}
+
+/// `n + 1` uniform-`t` samples of one segment: arc length *from this
+/// segment's own start* (via `kurbo::ParamCurveArclen`, not a chord-length
+/// approximation) and position. Tangents are deliberately *not* computed
+/// here — `path_reference.py`'s own `Section.tan` isn't the analytic
+/// derivative, it's a finite-difference estimate ([`gradient_1d`])
+/// computed once over each *whole section's* concatenated `(s, p)` table,
+/// which measurably differs from the analytic derivative right at a
+/// section's own first/last sample (a one-sided estimate there, not
+/// centered) — close enough everywhere else, but outside this step's
+/// `1e-5` tolerance at the edges if skipped. Matched here, not "improved
+/// on," per rule 1: the code is ground truth.
+fn sample_segment(c: &kurbo::CubicBez, n: usize) -> (Vec<f64>, Vec<kurbo::Point>) {
+    use kurbo::{ParamCurve, ParamCurveArclen};
+    let mut s = vec![0.0f64; n + 1];
+    let mut p = Vec::with_capacity(n + 1);
+    for i in 0..=n {
+        let t = i as f64 / n as f64;
+        p.push(c.eval(t));
+        if i > 0 {
+            let t0 = (i - 1) as f64 / n as f64;
+            s[i] = s[i - 1] + c.subsegment(t0..t).arclen(1e-7);
+        }
+    }
+    (s, p)
+}
+
+/// `numpy.gradient(p, s, axis=0, edge_order=1)`, ported exactly: a
+/// one-sided difference at each end, and the standard second-order-accurate
+/// non-uniform-spacing central difference at every interior sample. Not
+/// normalized — `sections()` normalizes afterward, same order of
+/// operations as the Python reference.
+fn gradient_1d(p: &[[f64; 2]], s: &[f64]) -> Vec<[f64; 2]> {
+    let n = p.len();
+    if n < 2 {
+        return vec![[0.0, 0.0]; n];
+    }
+    let mut out = vec![[0.0, 0.0]; n];
+    let ds0 = s[1] - s[0];
+    out[0] = [(p[1][0] - p[0][0]) / ds0, (p[1][1] - p[0][1]) / ds0];
+    let dsn = s[n - 1] - s[n - 2];
+    out[n - 1] = [
+        (p[n - 1][0] - p[n - 2][0]) / dsn,
+        (p[n - 1][1] - p[n - 2][1]) / dsn,
+    ];
+    for i in 1..n - 1 {
+        let dx1 = s[i] - s[i - 1];
+        let dx2 = s[i + 1] - s[i];
+        let a = -dx2 / (dx1 * (dx1 + dx2));
+        let b = (dx2 - dx1) / (dx1 * dx2);
+        let c = dx1 / (dx2 * (dx1 + dx2));
+        out[i] = [
+            a * p[i - 1][0] + b * p[i][0] + c * p[i + 1][0],
+            a * p[i - 1][1] + b * p[i][1] + c * p[i + 1][1],
+        ];
+    }
+    out
+}
+
+const SAMPLES_PER_SEGMENT: usize = 400;
+
+/// Split every subpath into [`Section`]s at breaks (PATH_NODE_SPEC.md §7):
+/// a break is a `Corner`-kind point where the tangent turns by more than
+/// `corner_threshold_deg` (a `Corner` point whose handles happen to line
+/// up isn't a break; `Smooth`/`Symmetric` points never break). Open path
+/// ends are always section ends. A closed subpath with no breaks at all
+/// becomes a single closed section.
+pub fn sections(path: &Path, corner_threshold_deg: f64) -> Vec<Section> {
+    let mut out = Vec::new();
+    for sp in &path.subpaths {
+        let segs = segments(sp);
+        if segs.is_empty() {
+            continue;
+        }
+        let n_pts = sp.points.len();
+
+        let mut breaks: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        let mut bisect: std::collections::HashMap<usize, kurbo::Vec2> =
+            std::collections::HashMap::new();
+        for k in 0..n_pts {
+            if !sp.closed && (k == 0 || k == n_pts - 1) {
+                continue;
+            }
+            let prev_seg = &segs[(k + segs.len() - 1) % segs.len()];
+            let next_seg = &segs[k % segs.len()];
+            let din = seg_dir(prev_seg, true);
+            let dout = seg_dir(next_seg, false);
+            if sp.points[k].kind == PointKind::Corner
+                && turn_angle_deg(din, dout) > corner_threshold_deg
+            {
+                breaks.insert(k);
+                let mut b = din - dout;
+                if b.hypot() < 1e-9 {
+                    b = kurbo::Vec2::new(-din.y, din.x);
+                }
+                bisect.insert(k, b / b.hypot());
+            }
+        }
+
+        let order: Vec<usize> = if sp.closed && !breaks.is_empty() {
+            let first = *breaks.iter().next().unwrap();
+            (0..segs.len()).map(|i| (first + i) % segs.len()).collect()
+        } else {
+            (0..segs.len()).collect()
+        };
+
+        fn finish_section(
+            s: Vec<f64>,
+            p: Vec<[f64; 2]>,
+            width: Vec<f32>,
+            start_corner: Option<[f64; 2]>,
+            end_corner: Option<[f64; 2]>,
+            closed: bool,
+        ) -> Section {
+            let raw_tan = gradient_1d(&p, &s);
+            let tan: Vec<[f64; 2]> = raw_tan
+                .iter()
+                .map(|t| {
+                    let n = vec_len(*t) + 1e-15;
+                    [t[0] / n, t[1] / n]
+                })
+                .collect();
+            Section {
+                s,
+                p,
+                tan,
+                width,
+                start_corner,
+                end_corner,
+                closed,
+            }
+        }
+
+        let mut cur_s: Vec<f64> = Vec::new();
+        let mut cur_p: Vec<[f64; 2]> = Vec::new();
+        let mut cur_width: Vec<f32> = Vec::new();
+        let mut run_offset = 0.0f64;
+        let mut start_pt = order[0];
+
+        for &idx in &order {
+            let c = segs[idx];
+            let a = &sp.points[idx];
+            let b = &sp.points[(idx + 1) % n_pts];
+            let (local_s, pos) = sample_segment(&c, SAMPLES_PER_SEGMENT);
+            let skip_first = !cur_s.is_empty();
+            let start_i = usize::from(skip_first);
+            for i in start_i..=SAMPLES_PER_SEGMENT {
+                let t = i as f64 / SAMPLES_PER_SEGMENT as f64;
+                let w = a.width + (b.width - a.width) * t as f32;
+                cur_s.push(run_offset + local_s[i]);
+                cur_p.push([pos[i].x, pos[i].y]);
+                cur_width.push(w);
+            }
+            run_offset += local_s[SAMPLES_PER_SEGMENT];
+
+            let end_pt = (idx + 1) % n_pts;
+            let is_break_end = breaks.contains(&end_pt);
+            let is_open_path_end = !sp.closed && end_pt == n_pts - 1;
+            if is_break_end || is_open_path_end {
+                out.push(finish_section(
+                    std::mem::take(&mut cur_s),
+                    std::mem::take(&mut cur_p),
+                    std::mem::take(&mut cur_width),
+                    bisect.get(&start_pt).map(|v| to_arr(*v)),
+                    if is_break_end {
+                        bisect.get(&end_pt).map(|v| to_arr(*v))
+                    } else {
+                        None
+                    },
+                    false,
+                ));
+                run_offset = 0.0;
+                start_pt = end_pt;
+            }
+        }
+        if !cur_s.is_empty() {
+            let end_pt_for_bisect = if sp.closed { start_pt } else { n_pts - 1 };
+            out.push(finish_section(
+                cur_s,
+                cur_p,
+                cur_width,
+                bisect.get(&start_pt).map(|v| to_arr(*v)),
+                bisect.get(&end_pt_for_bisect).map(|v| to_arr(*v)),
+                sp.closed && breaks.is_empty(),
+            ));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DEMO_PATH_JSON: &str = include_str!("../../../tests/golden/path/demo_path.json");
+    const PATH_GEOMETRY_JSON: &str = include_str!("../../../tests/golden/path/path_geometry.json");
+
+    fn demo_path() -> Path {
+        serde_json::from_str(DEMO_PATH_JSON).expect("golden demo_path.json should parse")
+    }
+
+    fn arr(v: &serde_json::Value) -> [f64; 2] {
+        [v[0].as_f64().unwrap(), v[1].as_f64().unwrap()]
+    }
+
+    fn assert_close2(actual: [f64; 2], expected: [f64; 2], tol: f64, context: &str) {
+        for i in 0..2 {
+            assert!(
+                (actual[i] - expected[i]).abs() <= tol,
+                "{context}[{i}]: actual={} expected={}",
+                actual[i],
+                expected[i]
+            );
+        }
+    }
+
+    // --- JSON round-trip ---
+
+    #[test]
+    fn demo_path_round_trips_through_json_within_1e9() {
+        let path = demo_path();
+        let reserialized = serde_json::to_value(&path).unwrap();
+        let original: serde_json::Value = serde_json::from_str(DEMO_PATH_JSON).unwrap();
+
+        fn assert_value_close(a: &serde_json::Value, b: &serde_json::Value, path: &str) {
+            match (a, b) {
+                (serde_json::Value::Number(x), serde_json::Value::Number(y)) => {
+                    let (x, y) = (x.as_f64().unwrap(), y.as_f64().unwrap());
+                    // `width` is f32 in mc_core::Point (PATH_NODE_SPEC.md §2's
+                    // own stated type), unlike pos/h_in/h_out which are f64 —
+                    // f32 round-trips at ~1e-7 relative precision, not 1e-9.
+                    let tol = if path.ends_with(".width") { 1e-6 } else { 1e-9 };
+                    assert!((x - y).abs() < tol, "{path}: {x} vs {y}");
+                }
+                (serde_json::Value::Array(xs), serde_json::Value::Array(ys)) => {
+                    assert_eq!(xs.len(), ys.len(), "{path}: array length");
+                    for (i, (x, y)) in xs.iter().zip(ys).enumerate() {
+                        assert_value_close(x, y, &format!("{path}[{i}]"));
+                    }
+                }
+                (serde_json::Value::Object(xs), serde_json::Value::Object(ys)) => {
+                    for key in xs.keys() {
+                        assert_value_close(
+                            &xs[key],
+                            ys.get(key)
+                                .unwrap_or_else(|| panic!("{path}.{key} missing")),
+                            &format!("{path}.{key}"),
+                        );
+                    }
+                }
+                _ => assert_eq!(a, b, "{path}"),
+            }
+        }
+        assert_value_close(&reserialized, &original, "$");
+    }
+
+    // --- sections() ---
+
+    #[test]
+    fn sections_match_golden_geometry() {
+        let path = demo_path();
+        let secs = sections(&path, 30.0);
+        let golden: serde_json::Value = serde_json::from_str(PATH_GEOMETRY_JSON).unwrap();
+        let golden_secs = golden["sections"].as_array().unwrap();
+
+        assert_eq!(secs.len(), golden_secs.len(), "section count");
+        for (i, (got, want)) in secs.iter().zip(golden_secs).enumerate() {
+            let ctx = format!("section {i}");
+            assert!(
+                (got.length() - want["length"].as_f64().unwrap()).abs() < 1e-5,
+                "{ctx}: length {} vs {}",
+                got.length(),
+                want["length"]
+            );
+            assert_eq!(
+                got.start_corner.is_some(),
+                want["start_corner"].as_bool().unwrap(),
+                "{ctx}: start_corner"
+            );
+            assert_eq!(
+                got.end_corner.is_some(),
+                want["end_corner"].as_bool().unwrap(),
+                "{ctx}: end_corner"
+            );
+            assert_eq!(
+                got.closed,
+                want["closed"].as_bool().unwrap(),
+                "{ctx}: closed"
+            );
+
+            let samples = want["samples"].as_array().unwrap();
+            assert_eq!(samples.len(), 11, "{ctx}: golden sample count");
+            let length = got.length();
+            for (j, sample) in samples.iter().enumerate() {
+                let s_query = j as f64 / 10.0 * length;
+                let (p, tan, _w) = got.at(s_query);
+                assert_close2(p, arr(&sample["p"]), 1e-5, &format!("{ctx} sample {j} p"));
+                assert_close2(
+                    tan,
+                    arr(&sample["tangent"]),
+                    1e-5,
+                    &format!("{ctx} sample {j} tangent"),
+                );
+            }
+        }
+    }
+
+    // --- insert_point ---
+
+    #[test]
+    fn insert_point_matches_golden() {
+        let path = demo_path();
+        let golden: serde_json::Value = serde_json::from_str(PATH_GEOMETRY_JSON).unwrap();
+        let case = &golden["insert_point"];
+        let subpath_idx = case["subpath"].as_u64().unwrap() as usize;
+        let seg_index = case["segment"].as_u64().unwrap() as usize;
+        let t = case["t"].as_f64().unwrap();
+
+        let result = insert_point(&path.subpaths[subpath_idx], seg_index, t);
+        let want = case["result"].as_array().unwrap();
+        assert_eq!(result.points.len(), want.len());
+        for (i, (got, want)) in result.points.iter().zip(want).enumerate() {
+            let ctx = format!("point {i}");
+            assert_close2(got.pos, arr(&want["pos"]), 1e-6, &format!("{ctx} pos"));
+            assert_close2(got.h_in, arr(&want["h_in"]), 1e-6, &format!("{ctx} h_in"));
+            assert_close2(
+                got.h_out,
+                arr(&want["h_out"]),
+                1e-6,
+                &format!("{ctx} h_out"),
+            );
+            assert_eq!(
+                serde_json::to_value(got.kind).unwrap(),
+                want["kind"],
+                "{ctx} kind"
+            );
+            assert!(
+                (got.width - want["width"].as_f64().unwrap() as f32).abs() < 1e-5,
+                "{ctx} width"
+            );
+        }
+    }
+
+    // --- drag_handle ---
+
+    fn point_from_json(v: &serde_json::Value) -> Point {
+        Point {
+            pos: arr(&v["pos"]),
+            h_in: arr(&v["h_in"]),
+            h_out: arr(&v["h_out"]),
+            kind: match v["kind"].as_str().unwrap() {
+                "corner" => PointKind::Corner,
+                "smooth" => PointKind::Smooth,
+                "symmetric" => PointKind::Symmetric,
+                other => panic!("unknown kind {other:?}"),
+            },
+            width: v["width"].as_f64().unwrap() as f32,
+        }
+    }
+
+    fn assert_point_matches(got: &Point, want: &serde_json::Value, ctx: &str) {
+        assert_close2(got.pos, arr(&want["pos"]), 1e-9, &format!("{ctx} pos"));
+        assert_close2(got.h_in, arr(&want["h_in"]), 1e-9, &format!("{ctx} h_in"));
+        assert_close2(
+            got.h_out,
+            arr(&want["h_out"]),
+            1e-9,
+            &format!("{ctx} h_out"),
+        );
+        assert_eq!(
+            serde_json::to_value(got.kind).unwrap(),
+            want["kind"],
+            "{ctx} kind"
+        );
+    }
+
+    #[test]
+    fn drag_handle_matches_golden() {
+        let golden: serde_json::Value = serde_json::from_str(PATH_GEOMETRY_JSON).unwrap();
+        let case = &golden["drag_handle"];
+        let pt = point_from_json(&case["point"]);
+        let which = match case["which"].as_str().unwrap() {
+            "out" => HandleSide::Out,
+            "in" => HandleSide::In,
+            other => panic!("unknown which {other:?}"),
+        };
+        let new = arr(&case["new"]);
+
+        let smooth_pt = Point {
+            kind: PointKind::Smooth,
+            ..pt
+        };
+        assert_point_matches(
+            &drag_handle(&smooth_pt, which, new, false),
+            &case["smooth"],
+            "smooth",
+        );
+
+        let symmetric_pt = Point {
+            kind: PointKind::Symmetric,
+            ..pt
+        };
+        assert_point_matches(
+            &drag_handle(&symmetric_pt, which, new, false),
+            &case["symmetric"],
+            "symmetric",
+        );
+
+        assert_point_matches(
+            &drag_handle(&pt, which, new, true),
+            &case["corner_via_alt"],
+            "corner_via_alt",
+        );
+    }
+
+    // --- set_kind ---
+
+    #[test]
+    fn set_kind_matches_golden() {
+        let golden: serde_json::Value = serde_json::from_str(PATH_GEOMETRY_JSON).unwrap();
+        let case = &golden["set_kind"];
+        let pt = point_from_json(&case["point"]);
+
+        assert_point_matches(&set_kind(&pt, PointKind::Smooth), &case["smooth"], "smooth");
+        assert_point_matches(
+            &set_kind(&pt, PointKind::Symmetric),
+            &case["symmetric"],
+            "symmetric",
+        );
+    }
+
+    #[test]
+    fn set_kind_to_corner_leaves_handles_unchanged() {
+        let pt = Point {
+            pos: [0.0, 0.0],
+            h_in: [-0.1, 0.05],
+            h_out: [0.2, -0.03],
+            kind: PointKind::Smooth,
+            width: 1.0,
+        };
+        let corner = set_kind(&pt, PointKind::Corner);
+        assert_eq!(corner.h_in, pt.h_in);
+        assert_eq!(corner.h_out, pt.h_out);
+        assert_eq!(corner.kind, PointKind::Corner);
+    }
+
+    #[test]
+    fn set_kind_leaves_zero_handles_zero() {
+        let pt = Point::new([0.3, 0.3]);
+        let smooth = set_kind(&pt, PointKind::Smooth);
+        assert_eq!(smooth.h_in, [0.0, 0.0]);
+        assert_eq!(smooth.h_out, [0.0, 0.0]);
+    }
+
+    // --- delete_point / nearest_on_path: not in the golden file, sanity only ---
+
+    #[test]
+    fn delete_point_removes_exactly_one_point_and_keeps_others_handles() {
+        let path = demo_path();
+        let sp = &path.subpaths[0];
+        let before = sp.points.len();
+        let deleted = delete_point(sp, 1);
+        assert_eq!(deleted.points.len(), before - 1);
+        assert_eq!(deleted.points[0], sp.points[0]);
+        assert_eq!(deleted.points[1], sp.points[2]);
+    }
+
+    #[test]
+    fn delete_point_opens_a_closed_subpath_once_it_drops_below_3_points() {
+        let sp = SubPath::new(
+            vec![
+                Point::new([0.0, 0.0]),
+                Point::new([1.0, 0.0]),
+                Point::new([0.5, 1.0]),
+            ],
+            true,
+        );
+        let after = delete_point(&sp, 0);
+        assert_eq!(after.points.len(), 2);
+        assert!(!after.closed, "a 2-point subpath can't stay closed");
+    }
+
+    #[test]
+    fn nearest_on_path_finds_a_point_actually_on_the_curve() {
+        let path = demo_path();
+        let sp = &path.subpaths[0];
+        let segs = segments(sp);
+        // A point we know is exactly ON segment 0 at t=0.5.
+        let on_curve = {
+            use kurbo::ParamCurve;
+            segs[0].eval(0.5)
+        };
+        let (seg_index, t, dist) = nearest_on_path(sp, [on_curve.x, on_curve.y]);
+        assert_eq!(seg_index, 0);
+        assert!((t - 0.5).abs() < 1e-6, "t={t}");
+        assert!(dist < 1e-9, "dist={dist}");
+    }
+
+    #[test]
+    fn segments_counts_one_more_for_a_closed_subpath() {
+        let open = SubPath::new(vec![Point::new([0.0, 0.0]), Point::new([1.0, 0.0])], false);
+        let closed = SubPath::new(open.points.clone(), true);
+        assert_eq!(segments(&open).len(), 1);
+        assert_eq!(segments(&closed).len(), 2);
+    }
+}
