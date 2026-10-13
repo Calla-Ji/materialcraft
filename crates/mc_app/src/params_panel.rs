@@ -52,21 +52,25 @@ fn param_comment(ui: &mut egui::Ui, text: &str) {
 }
 
 /// Fiber Depth carves relative to a *ply's own* radius, but Height
-/// normalizes against the whole thread row's radius — so the more that
-/// radius gets subdivided (more Threads stacked, Cable Groups turned on),
-/// the smaller a fraction of the final image one ply's own groove covers,
-/// and the harder the fiber detail is to see. Not a bug (confirmed against
-/// the owner's own reference renderer, same formula at every nesting level)
-/// but easy to mistake for one, having mistaken it for one once already —
-/// a quiet hint here beats a second round of "why doesn't this do
-/// anything?".
+/// normalizes against the whole bundle's radius — so how much of Height's
+/// own 0..1 range the groove can ever reach is capped at
+/// `Fiber Depth * (ply radius / bundle radius)`, and that ratio is set by
+/// Plies and Cable Groups (packing() 's own fixed ratios), *not* Threads —
+/// confirmed by rendering the same comparison at Threads 1 and Threads 4
+/// and getting an identical difference, after an earlier version of this
+/// hint claimed Threads mattered here too. The full, undiluted groove
+/// pattern is always in the Fiber output itself (its whole point, per the
+/// spec — wire it in as a separate roughness/AO detail instead of judging
+/// Fiber Twist from Height alone).
 fn thread_fiber_param_hint(ui: &mut egui::Ui, node_kind: &str, param_name: &str) {
-    if node_kind == "thread_shape" && matches!(param_name, "fibers_per_ply" | "fiber_depth") {
+    if node_kind == "thread_shape"
+        && matches!(param_name, "fibers_per_ply" | "fiber_depth" | "fiber_mode")
+    {
         param_comment(
             ui,
-            "Most visible with Threads at 1 and Cable Groups off \u{2014} more stacked \
-             threads/cable layers shrink how much of the final image one ply's own groove \
-             covers.",
+            "How visible this is in Height (not in the Fiber output itself) is capped by \
+             Plies/Cable Groups, not Threads \u{2014} for the full pattern, use the Fiber \
+             output directly.",
         );
     }
 }
@@ -331,6 +335,7 @@ fn show_inner(
                         mc_core::ParamValue::Enum(new_value),
                     );
                 }
+                thread_fiber_param_hint(ui, &node_kind, param.name);
             }
             mc_nodes::defs::ParamSpecKind::Color { default } => {
                 let mut value = match &current {

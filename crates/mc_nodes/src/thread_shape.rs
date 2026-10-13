@@ -772,6 +772,54 @@ mod tests {
         );
     }
 
+    /// Balanced vs. Crepe is dramatic in the Fiber output (the full,
+    /// undiluted groove pattern) but only a small difference in Height —
+    /// not a bug, Height intentionally normalizes against the whole
+    /// bundle's radius while the groove only ever carves relative to a
+    /// ply's own radius. Reported by the owner as "no visible change"
+    /// (she was judging it from Height, where it genuinely is subtle).
+    /// Also confirms a correction to this file's own earlier assumption:
+    /// an earlier version of the in-app hint claimed Threads affected how
+    /// visible this is — rendering the identical comparison at Threads 1
+    /// and Threads 4 and getting the *same* Height difference both times
+    /// disproved that (packing()'s ply-radius/bundle-radius ratio depends
+    /// on Plies and Cable Groups, not Threads).
+    #[test]
+    fn balanced_vs_crepe_is_dramatic_in_fiber_but_subtle_in_height() {
+        let render_with = |threads: u32, mode: FiberMode| {
+            render_at(
+                &ThreadShapeParams {
+                    threads,
+                    plies: 3,
+                    twist_angle: 30.0,
+                    fiber_mode: mode,
+                    ..ThreadShapeParams::default()
+                },
+                512,
+            )
+        };
+        let max_diff =
+            |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
+
+        let balanced4 = render_with(4, FiberMode::Balanced);
+        let crepe4 = render_with(4, FiberMode::Crepe);
+        assert!(
+            max_diff(&balanced4.fiber, &crepe4.fiber) > 200,
+            "Balanced vs Crepe should be dramatically different in the Fiber output itself"
+        );
+        let height_diff_at_4_threads = max_diff(&balanced4.height, &crepe4.height);
+
+        let balanced1 = render_with(1, FiberMode::Balanced);
+        let crepe1 = render_with(1, FiberMode::Crepe);
+        let height_diff_at_1_thread = max_diff(&balanced1.height, &crepe1.height);
+
+        assert_eq!(
+            height_diff_at_4_threads, height_diff_at_1_thread,
+            "the Height difference between fiber modes should be set by Plies/Cable Groups, \
+             not by Threads"
+        );
+    }
+
     // --- ply ID ---
 
     #[test]
