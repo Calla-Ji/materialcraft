@@ -447,8 +447,24 @@ pub fn evaluate(
 pub fn resolve_texture_key(graph: &mc_core::Graph, node: mc_core::NodeId) -> Option<String> {
     let kind = &graph.node(node)?.kind;
     if kind.starts_with("output_") {
-        let upstream = graph.upstream(node, "input")?;
-        resolve_texture_key(graph, upstream)
+        // Which *port* fed this Output node's input matters now that a
+        // node can have more than one (Thread) — `upstream` alone would
+        // discard that and fall through to whatever the upstream node's
+        // own default/first output is, showing Height no matter which of
+        // Thread's four outputs was actually wired in (confirmed bug: the
+        // owner wired Ply ID, Fiber, and Mask into three separate Output
+        // nodes and all three showed Height). An Output node is never
+        // itself a multi-output node, so if the *upstream* one is, follow
+        // its specific port directly instead of recursing into the
+        // single-output branch below, which would re-derive the wrong
+        // (first/default) port all over again.
+        let (upstream, upstream_port) = graph.upstream_from(node, "input")?;
+        let upstream_kind = &graph.node(upstream)?.kind;
+        if upstream_kind.starts_with("output_") {
+            resolve_texture_key(graph, upstream)
+        } else {
+            Some(texture_key(upstream, &upstream_port))
+        }
     } else {
         let port = crate::defs::node_def(kind)
             .and_then(|def| def.outputs.first())
@@ -460,7 +476,54 @@ pub fn resolve_texture_key(graph: &mc_core::Graph, node: mc_core::NodeId) -> Opt
 
 #[cfg(test)]
 mod tests {
-    use super::{evaluate, resolve_texture_key};
+    use super::{evaluate, resolve_texture_key, texture_key};
+
+    /// Regression test for a real bug the owner hit: wiring Thread's Ply
+    /// ID, Fiber, and Mask outputs each into their own Output node, and
+    /// all three showing Height instead. Root cause: `resolve_texture_key`
+    /// recursed into a multi-output upstream node without carrying along
+    /// *which* of its outputs the connection actually used, silently
+    /// falling back to that node's first/default output every time.
+    #[test]
+    fn an_output_node_shows_the_specific_upstream_port_it_is_wired_to() {
+        let mut graph = mc_core::Graph::new();
+        let thread = graph.add_node(mc_core::Node::new("thread_shape"));
+        let height_out = graph.add_node(mc_core::Node::new("output_height"));
+        let ply_id_out = graph.add_node(mc_core::Node::new("output_height"));
+        let mask_out = graph.add_node(mc_core::Node::new("output_height"));
+        graph
+            .connect(thread, "height", height_out, "input")
+            .unwrap();
+        graph
+            .connect(thread, "ply_id", ply_id_out, "input")
+            .unwrap();
+        graph.connect(thread, "mask", mask_out, "input").unwrap();
+        graph.settings.resolution = 32;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let height_key = resolve_texture_key(&graph, height_out).unwrap();
+        let ply_id_key = resolve_texture_key(&graph, ply_id_out).unwrap();
+        let mask_key = resolve_texture_key(&graph, mask_out).unwrap();
+
+        assert_eq!(height_key, texture_key(thread, "height"));
+        assert_eq!(ply_id_key, texture_key(thread, "ply_id"));
+        assert_eq!(mask_key, texture_key(thread, "mask"));
+
+        let height_pixels = gpu.read_rgba8(pool.texture(&height_key).unwrap(), 32);
+        let ply_id_pixels = gpu.read_rgba8(pool.texture(&ply_id_key).unwrap(), 32);
+        let mask_pixels = gpu.read_rgba8(pool.texture(&mask_key).unwrap(), 32);
+        assert_ne!(
+            height_pixels, ply_id_pixels,
+            "an Output node fed by Ply ID should not show Height's pixels"
+        );
+        assert_ne!(
+            height_pixels, mask_pixels,
+            "an Output node fed by Mask should not show Height's pixels"
+        );
+    }
 
     /// CLAUDE.md's M2 acceptance check: a 3-node graph (Noise → Levels →
     /// Output) evaluates headlessly.

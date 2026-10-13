@@ -764,6 +764,18 @@ mod tests {
         );
     }
 
+    /// Mask is meant to be a hard cutout (e.g. for Blend's mask input or an
+    /// alpha source), not a soft/antialiased edge — every pixel should be
+    /// exactly 0 or exactly 255, nothing in between.
+    #[test]
+    fn mask_is_strictly_binary_not_antialiased() {
+        let r = render(&ThreadShapeParams::default());
+        assert!(
+            r.mask.iter().step_by(4).all(|&v| v == 0 || v == 255),
+            "every Mask pixel should be exactly 0 or 255"
+        );
+    }
+
     #[test]
     fn height_is_zero_wherever_mask_is_zero() {
         let r = render(&ThreadShapeParams::default());
