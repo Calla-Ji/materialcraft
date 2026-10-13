@@ -353,20 +353,26 @@ mod tests {
         crate::thread_shape::dispatch(
             &mut gpu,
             &mut pool,
-            "thread",
+            crate::thread_shape::ThreadOutputKeys {
+                height: "thread_height",
+                ply_id: "thread_ply_id",
+                fiber: "thread_fiber",
+                mask: "thread_mask",
+            },
             RESOLUTION,
             &crate::thread_shape::ThreadShapeParams {
-                ply_count: 2,
+                threads: 1,
+                plies: 2,
                 thickness: 0.73,
-                roundness: 0.32,
-                twist_cycles: 2,
-                twist_direction: crate::thread_shape::TwistDirection::Z,
+                twist_angle: 35.0,
+                ply_direction: crate::thread_shape::TwistDirection::Z,
+                ..crate::thread_shape::ThreadShapeParams::default()
             },
         );
         dispatch(
             &mut gpu,
             &mut pool,
-            Some("thread"),
+            Some("thread_height"),
             "with_thread",
             RESOLUTION,
             &TileGeneratorParams::default(),

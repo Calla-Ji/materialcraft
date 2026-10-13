@@ -18,9 +18,15 @@ use crate::{
     white_noise,
 };
 
-/// The texture pool key a node's own output is stored under.
-pub fn texture_key(id: mc_core::NodeId) -> String {
-    format!("node_{}", id.0)
+/// The default output port name every single-output `NodeDef` uses.
+pub const DEFAULT_OUTPUT_PORT: &str = "output";
+
+/// The texture pool key a node's output `port` is stored under. Every
+/// single-output node (the overwhelming majority) always passes
+/// [`DEFAULT_OUTPUT_PORT`] here; a multi-output node (currently just
+/// Thread) stores each of its named outputs under its own key.
+pub fn texture_key(id: mc_core::NodeId, port: &str) -> String {
+    format!("node_{}_{}", id.0, port)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -77,26 +83,31 @@ pub fn evaluate(
         // A required input: missing entirely, or wired to a node that
         // itself failed to evaluate this pass, are the same "can't run this
         // node right now" condition — either way there's no real texture to
-        // dispatch with.
-        let resolve_input = |port: &str| -> Result<mc_core::NodeId, EvalError> {
-            let input_id = graph
-                .upstream(id, port)
+        // dispatch with. Returns the texture key for the *specific upstream
+        // output port* this input is wired to, not just "the" upstream
+        // node's texture — needed now that a node (Thread) can have more
+        // than one named output.
+        let resolve_input = |port: &str| -> Result<String, EvalError> {
+            let (input_id, from_port) = graph
+                .upstream_from(id, port)
                 .ok_or_else(|| EvalError::MissingInput(id, port.to_string()))?;
             if failed.contains(&input_id) {
                 return Err(EvalError::MissingInput(id, port.to_string()));
             }
-            Ok(input_id)
+            Ok(texture_key(input_id, &from_port))
         };
         // An optional input (e.g. Blend's mask): absent is a supported
         // state on its own, so a failed upstream degrades to "absent"
         // rather than failing this node too.
-        let resolve_optional_input = |port: &str| -> Option<mc_core::NodeId> {
-            graph
-                .upstream(id, port)
-                .filter(|input_id| !failed.contains(input_id))
+        let resolve_optional_input = |port: &str| -> Option<String> {
+            let (input_id, from_port) = graph.upstream_from(id, port)?;
+            if failed.contains(&input_id) {
+                return None;
+            }
+            Some(texture_key(input_id, &from_port))
         };
 
-        let key = texture_key(id);
+        let key = texture_key(id, DEFAULT_OUTPUT_PORT);
         let result: Result<(), EvalError> = (|| {
             match node.kind.as_str() {
                 "perlin_noise" => {
@@ -104,14 +115,14 @@ pub fn evaluate(
                     perlin::dispatch(gpu, pool, &key, resolution, &params);
                 }
                 "levels" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = levels::LevelsParams::from_graph(&node.params);
                     levels::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "blend" => {
-                    let base_key = texture_key(resolve_input("base")?);
-                    let blend_key = texture_key(resolve_input("blend")?);
-                    let mask_key = resolve_optional_input("mask").map(texture_key);
+                    let base_key = resolve_input("base")?;
+                    let blend_key = resolve_input("blend")?;
+                    let mask_key = resolve_optional_input("mask");
                     let params = blend::BlendParams::from_graph(&node.params);
                     blend::dispatch(
                         gpu,
@@ -133,7 +144,7 @@ pub fn evaluate(
                     fractal_sum::dispatch(gpu, pool, &key, resolution, &params);
                 }
                 "tile_generator" => {
-                    let shape_key = resolve_optional_input("shape").map(texture_key);
+                    let shape_key = resolve_optional_input("shape");
                     let params = tile_generator::TileGeneratorParams::from_graph(&node.params);
                     tile_generator::dispatch(
                         gpu,
@@ -145,7 +156,7 @@ pub fn evaluate(
                     );
                 }
                 "fabric_generator" => {
-                    let fiber_key = resolve_optional_input("fiber").map(texture_key);
+                    let fiber_key = resolve_optional_input("fiber");
                     let params = fabric_generator::FabricGeneratorParams::from_graph(&node.params);
                     fabric_generator::dispatch(
                         gpu,
@@ -157,8 +168,23 @@ pub fn evaluate(
                     );
                 }
                 "thread_shape" => {
+                    let height_key = texture_key(id, "height");
+                    let ply_id_key = texture_key(id, "ply_id");
+                    let fiber_key = texture_key(id, "fiber");
+                    let mask_key = texture_key(id, "mask");
                     let params = thread_shape::ThreadShapeParams::from_graph(&node.params);
-                    thread_shape::dispatch(gpu, pool, &key, resolution, &params);
+                    thread_shape::dispatch(
+                        gpu,
+                        pool,
+                        thread_shape::ThreadOutputKeys {
+                            height: &height_key,
+                            ply_id: &ply_id_key,
+                            fiber: &fiber_key,
+                            mask: &mask_key,
+                        },
+                        resolution,
+                        &params,
+                    );
                 }
                 "shape" => {
                     let params = shape::ShapeParams::from_graph(&node.params);
@@ -181,27 +207,27 @@ pub fn evaluate(
                     image_import::dispatch(gpu, pool, &key, resolution, &params);
                 }
                 "invert" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     invert::dispatch(gpu, pool, &input_key, &key, resolution);
                 }
                 "histogram_scan" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = histogram_scan::HistogramScanParams::from_graph(&node.params);
                     histogram_scan::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "blur" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = blur::BlurParams::from_graph(&node.params);
                     blur::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "bevel" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = bevel::BevelParams::from_graph(&node.params);
                     bevel::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "warp" => {
-                    let input_key = texture_key(resolve_input("input")?);
-                    let intensity_key = texture_key(resolve_input("intensity")?);
+                    let input_key = resolve_input("input")?;
+                    let intensity_key = resolve_input("intensity")?;
                     let params = warp::WarpParams::from_graph(&node.params);
                     warp::dispatch(
                         gpu,
@@ -214,27 +240,27 @@ pub fn evaluate(
                     );
                 }
                 "transform2d" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = transform2d::Transform2DParams::from_graph(&node.params);
                     transform2d::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "height_to_normal" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = height_to_normal::HeightToNormalParams::from_graph(&node.params);
                     height_to_normal::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "clamp" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = clamp::ClampParams::from_graph(&node.params);
                     clamp::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "threshold" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = threshold::ThresholdParams::from_graph(&node.params);
                     threshold::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "grayscale_conversion" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     grayscale_conversion::dispatch(gpu, pool, &input_key, &key, resolution);
                 }
                 "checker" => {
@@ -246,18 +272,18 @@ pub fn evaluate(
                     dither_pattern::dispatch(gpu, pool, &key, resolution, &params);
                 }
                 "ordered_dither" => {
-                    let image_key = texture_key(resolve_input("image")?);
+                    let image_key = resolve_input("image")?;
                     let params = ordered_dither::OrderedDitherParams::from_graph(&node.params);
                     ordered_dither::dispatch(gpu, pool, &image_key, &key, resolution, &params);
                 }
                 "palette_dither" => {
-                    let image_key = texture_key(resolve_input("image")?);
+                    let image_key = resolve_input("image")?;
                     let params = palette_dither::PaletteDitherParams::from_graph(&node.params);
                     palette_dither::dispatch(gpu, pool, &image_key, &key, resolution, &params);
                 }
                 "channel_split" => {
-                    let image_key = texture_key(resolve_input("image")?);
-                    let mask_key = resolve_optional_input("mask").map(texture_key);
+                    let image_key = resolve_input("image")?;
+                    let mask_key = resolve_optional_input("mask");
                     let params = channel_split::ChannelSplitParams::from_graph(&node.params);
                     channel_split::dispatch(
                         gpu,
@@ -270,8 +296,8 @@ pub fn evaluate(
                     );
                 }
                 "block_shift" => {
-                    let image_key = texture_key(resolve_input("image")?);
-                    let mask_key = resolve_optional_input("mask").map(texture_key);
+                    let image_key = resolve_input("image")?;
+                    let mask_key = resolve_optional_input("mask");
                     let params = block_shift::BlockShiftParams::from_graph(&node.params);
                     block_shift::dispatch(
                         gpu,
@@ -284,8 +310,8 @@ pub fn evaluate(
                     );
                 }
                 "data_corrupt" => {
-                    let image_key = texture_key(resolve_input("image")?);
-                    let mask_key = resolve_optional_input("mask").map(texture_key);
+                    let image_key = resolve_input("image")?;
+                    let mask_key = resolve_optional_input("mask");
                     let params = data_corrupt::DataCorruptParams::from_graph(&node.params);
                     data_corrupt::dispatch(
                         gpu,
@@ -298,8 +324,8 @@ pub fn evaluate(
                     );
                 }
                 "scanline_jitter" => {
-                    let image_key = texture_key(resolve_input("image")?);
-                    let mask_key = resolve_optional_input("mask").map(texture_key);
+                    let image_key = resolve_input("image")?;
+                    let mask_key = resolve_optional_input("mask");
                     let params = scanline_jitter::ScanlineJitterParams::from_graph(&node.params);
                     scanline_jitter::dispatch(
                         gpu,
@@ -312,17 +338,17 @@ pub fn evaluate(
                     );
                 }
                 "hsl_adjust" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = hsl_adjust::HslAdjustParams::from_graph(&node.params);
                     hsl_adjust::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "curve" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = curve::CurveParams::from_graph(&node.params);
                     curve::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "gradient_map" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = gradient_map::GradientMapParams::from_graph(&node.params);
                     gradient_map::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
@@ -339,13 +365,13 @@ pub fn evaluate(
                     clouds::dispatch(gpu, pool, &key, resolution, &params);
                 }
                 "directional_blur" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = directional_blur::DirectionalBlurParams::from_graph(&node.params);
                     directional_blur::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "directional_warp" => {
-                    let input_key = texture_key(resolve_input("input")?);
-                    let intensity_key = texture_key(resolve_input("intensity")?);
+                    let input_key = resolve_input("input")?;
+                    let intensity_key = resolve_input("intensity")?;
                     let params = directional_warp::DirectionalWarpParams::from_graph(&node.params);
                     directional_warp::dispatch(
                         gpu,
@@ -358,13 +384,13 @@ pub fn evaluate(
                     );
                 }
                 "edge_detect" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = edge_detect::EdgeDetectParams::from_graph(&node.params);
                     edge_detect::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "slope_blur" => {
-                    let input_key = texture_key(resolve_input("input")?);
-                    let control_key = texture_key(resolve_input("control")?);
+                    let input_key = resolve_input("input")?;
+                    let control_key = resolve_input("control")?;
                     let params = slope_blur::SlopeBlurParams::from_graph(&node.params);
                     slope_blur::dispatch(
                         gpu,
@@ -377,12 +403,12 @@ pub fn evaluate(
                     );
                 }
                 "height_to_ao" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params = height_to_ao::HeightToAoParams::from_graph(&node.params);
                     height_to_ao::dispatch(gpu, pool, &input_key, &key, resolution, &params);
                 }
                 "curvature_from_normal" => {
-                    let input_key = texture_key(resolve_input("input")?);
+                    let input_key = resolve_input("input")?;
                     let params =
                         curvature_from_normal::CurvatureFromNormalParams::from_graph(&node.params);
                     curvature_from_normal::dispatch(
@@ -411,16 +437,24 @@ pub fn evaluate(
     }
 }
 
-/// The texture pool key actually holding `node`'s visible output. For most
-/// nodes that's just its own key; an Output node is a pass-through marker,
-/// so its "output" is whatever feeds its `input` port.
+/// The texture pool key actually holding `node`'s visible output — the one
+/// shown in its thumbnail, the 2D View, and the 3D viewport. For most nodes
+/// that's just its own (single) output; an Output node is a pass-through
+/// marker, so its "output" is whatever feeds its `input` port; a
+/// multi-output node (currently just Thread) shows its *first* declared
+/// output (Height, for Thread — deliberately kept first in its `NodeDef` so
+/// this falls out for free rather than needing a port picker).
 pub fn resolve_texture_key(graph: &mc_core::Graph, node: mc_core::NodeId) -> Option<String> {
     let kind = &graph.node(node)?.kind;
     if kind.starts_with("output_") {
         let upstream = graph.upstream(node, "input")?;
         resolve_texture_key(graph, upstream)
     } else {
-        Some(texture_key(node))
+        let port = crate::defs::node_def(kind)
+            .and_then(|def| def.outputs.first())
+            .map(|p| p.name)
+            .unwrap_or(DEFAULT_OUTPUT_PORT);
+        Some(texture_key(node, port))
     }
 }
 

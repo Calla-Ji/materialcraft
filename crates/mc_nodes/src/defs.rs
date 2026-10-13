@@ -365,17 +365,17 @@ pub fn param_is_relevant(
         };
     }
     if node_kind == "thread_shape" {
-        let ply_count = current_params
-            .get("ply_count")
-            .and_then(ParamValue::as_int)
-            .unwrap_or(1);
-        let twist_cycles = current_params
-            .get("twist_cycles")
+        let cable_groups = current_params
+            .get("cable_groups")
             .and_then(ParamValue::as_int)
             .unwrap_or(0);
+        let fiber_mode = current_params.get("fiber_mode").and_then(|v| match v {
+            ParamValue::Enum(name) => Some(name.as_str()),
+            _ => None,
+        });
         return match param_name {
-            "twist_cycles" => ply_count >= 2,
-            "twist_direction" => ply_count >= 2 && twist_cycles > 0,
+            "cable_angle" => cable_groups >= 2,
+            "fibers_per_ply" | "fiber_depth" => fiber_mode != Some("None"),
             _ => true,
         };
     }
@@ -898,18 +898,6 @@ static NODE_DEFS: &[NodeDef] = &[
                 },
             },
             ParamSpec {
-                name: "thread_roundness",
-                display_name: "Thread Roundness",
-                tooltip: "The fallback fiber's roundness (0 a flat ribbon, 1 round), shown \
-                          only while nothing's wired into Thread below. Never shown for \
-                          Stockinette, which doesn't use a thread cross-section at all.",
-                kind: ParamSpecKind::Float {
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.6,
-                },
-            },
-            ParamSpec {
                 name: "thread_group_size",
                 display_name: "Thread Group Size",
                 tooltip: "Plain Weave only: threads per group acting as one woven unit. 1 is a \
@@ -975,66 +963,148 @@ static NODE_DEFS: &[NodeDef] = &[
         kind: "thread_shape",
         display_name: "Thread",
         category: "Generators/Patterns",
-        tooltip: "A single fiber's cross-section and twist \u{2014} wire into Fabric \
-                  Generator's Thread input to control what its threads look like.",
+        tooltip: "Plied yarn built from real textile geometry \u{2014} wire Height into \
+                  Fabric Generator's Thread input to control what its threads look like.",
         inputs: &[],
-        outputs: &[PortSpec {
-            name: "output",
-            display_name: "Output",
-            port_type: PortType::Gray,
-        }],
+        // Height stays first so `mc_nodes::registry::resolve_texture_key`'s
+        // "first declared output" default keeps showing it in this node's
+        // own thumbnail/2D View/3D viewport, and so a Fabric Generator
+        // wired up before this rebuild keeps working once reconnected.
+        outputs: &[
+            PortSpec {
+                name: "height",
+                display_name: "Height",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "ply_id",
+                display_name: "Ply ID",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "fiber",
+                display_name: "Fiber",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "mask",
+                display_name: "Mask",
+                port_type: PortType::Gray,
+            },
+        ],
         params: &[
             ParamSpec {
-                name: "ply_count",
-                display_name: "Ply Count",
-                tooltip: "How many strands are twisted together. 1 is a plain single strand; \
-                          2-4 match 2-ply/3-ply/4-ply yarn.",
+                name: "threads",
+                display_name: "Threads",
+                tooltip: "How many threads stack across the tile.",
                 kind: ParamSpecKind::Int {
                     min: 1,
-                    max: 4,
-                    default: 1,
+                    max: 32,
+                    default: 4,
                 },
             },
             ParamSpec {
                 name: "thickness",
                 display_name: "Thickness",
-                tooltip: "How much of the tile's height the whole fiber bundle fills.",
+                tooltip: "Thread diameter as a fraction of its own row height. Gaps between \
+                          rows show the background.",
                 kind: ParamSpecKind::Float {
-                    min: 0.0,
+                    min: 0.2,
                     max: 1.0,
-                    default: 0.5,
+                    default: 0.8,
                 },
             },
             ParamSpec {
-                name: "roundness",
-                display_name: "Roundness",
-                tooltip: "0 is a flat ribbon, 1 is a round cross-section (per strand).",
-                kind: ParamSpecKind::Float {
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.3,
-                },
-            },
-            ParamSpec {
-                name: "twist_cycles",
-                display_name: "Twist Cycles",
-                tooltip: "2+ plies only: how many full twist rotations repeat along the \
-                          thread. 0 is straight, untwisted parallel plies.",
+                name: "plies",
+                display_name: "Plies",
+                tooltip: "How many round strands are twisted together. 1 is a single \
+                          (unplied) yarn; 2-6 match 2-ply through 6-ply.",
                 kind: ParamSpecKind::Int {
-                    min: 0,
-                    max: 8,
+                    min: 1,
+                    max: 6,
                     default: 2,
                 },
             },
             ParamSpec {
-                name: "twist_direction",
-                display_name: "Twist Direction",
-                tooltip: "Which way the plies spiral (standard textile S/Z-twist terms) \u{2014} \
-                          only visible with 2+ plies and at least 1 twist cycle.",
+                name: "ply_direction",
+                display_name: "Ply Twist",
+                tooltip: "Which way the plies spiral (textile S/Z-twist terms). Most spun \
+                          singles are Z, so the ply twist is usually S.",
                 kind: ParamSpecKind::Enum {
                     options: &crate::thread_shape::TwistDirection::NAMES,
-                    default: "Z",
+                    default: "S",
                 },
+            },
+            ParamSpec {
+                name: "twist_angle",
+                display_name: "Twist Angle",
+                tooltip: "The ply helix angle. Low (\u{2248}15\u{b0}) is bulky and soft, high \
+                          (\u{2248}45\u{b0}) is smooth and dense.",
+                kind: ParamSpecKind::Float {
+                    min: 5.0,
+                    max: 60.0,
+                    default: 30.0,
+                },
+            },
+            ParamSpec {
+                name: "fiber_mode",
+                display_name: "Fiber Twist",
+                tooltip: "Balanced (the normal case): fibers twist opposite the ply, so they \
+                          read as nearly parallel to the thread. Crepe: same direction, \
+                          over-twisted, kinky. None: smooth, no visible fibers.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::thread_shape::FiberMode::NAMES,
+                    default: "Balanced",
+                },
+            },
+            ParamSpec {
+                name: "fibers_per_ply",
+                display_name: "Fibers per Ply",
+                tooltip: "How many visible fiber grooves wrap each ply.",
+                kind: ParamSpecKind::Int {
+                    min: 3,
+                    max: 24,
+                    default: 7,
+                },
+            },
+            ParamSpec {
+                name: "fiber_depth",
+                display_name: "Fiber Depth",
+                tooltip: "Groove depth, as a fraction of a ply's own radius.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.4,
+                    default: 0.12,
+                },
+            },
+            ParamSpec {
+                name: "cable_groups",
+                display_name: "Cable Groups",
+                tooltip: "0 is off. 2+ twists that many already-plied groups together again \
+                          (a helix of helices) \u{2014} a 4-ply cable, say, as 2 groups of 2-ply.",
+                kind: ParamSpecKind::Int {
+                    min: 0,
+                    max: 4,
+                    default: 0,
+                },
+            },
+            ParamSpec {
+                name: "cable_angle",
+                display_name: "Cable Angle",
+                tooltip: "The cable twist's own helix angle \u{2014} only visible with Cable \
+                          Groups 2+.",
+                kind: ParamSpecKind::Float {
+                    min: 5.0,
+                    max: 60.0,
+                    default: 25.0,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes each thread row's own twist phase so stacked rows don't \
+                          line up.",
+                kind: ParamSpecKind::Seed { default: 1 },
             },
         ],
     },

@@ -210,6 +210,18 @@ impl Graph {
             .map(|c| c.from_node)
     }
 
+    /// Same as [`upstream`](Self::upstream), but also returns *which* of the
+    /// upstream node's own output ports feeds this input — needed once a
+    /// node can have more than one output (e.g. Thread's Height/Ply
+    /// ID/Fiber/Mask), where "the upstream node" alone isn't enough to know
+    /// which of its textures to read.
+    pub fn upstream_from(&self, to_node: NodeId, to_port: &str) -> Option<(NodeId, String)> {
+        self.connections
+            .iter()
+            .find(|c| c.to_node == to_node && c.to_port == to_port)
+            .map(|c| (c.from_node, c.from_port.clone()))
+    }
+
     /// A deterministic evaluation order (every node after everything it
     /// depends on). Graphs built through `connect` can never contain a
     /// cycle, but a hand-edited or corrupted `.mcgraph` file in principle

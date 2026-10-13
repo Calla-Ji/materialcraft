@@ -76,6 +76,23 @@ paper trail for that.
   [KinoGlitch](https://github.com/keijiro/KinoGlitch) (Keijiro Takahashi, MIT) for
   general glitch-node ideas, reimplemented in WGSL rather than ported.
 
+## Fabric & yarn
+
+- **Thread** (`mc_nodes::thread_shape`) — plied-yarn geometry (ply packing, the S/Z helix twist
+  convention, balanced-vs-crepe fiber twist, cable/helix-of-helices construction) derived from
+  the owner's own textile reference book's yarn-construction chapter, not from any other
+  software tool's node or source. The owner wrote a design brief (`THREAD_NODE_SPEC.md`) and a
+  small Python/numpy ground-truth reference renderer (`thread_reference.py`) deriving the exact
+  formulas from that book — both kept in the private notes repo (not this public one) alongside
+  `CLAUDE.md`. This project's WGSL implementation is an independent, from-scratch port of that
+  derivation: the per-pixel tube/plane-intersection quadratic (a tilted cylinder's cross-section
+  in a fixed plane is an ellipse — standard analytic geometry, independently derived rather than
+  taken from a graphics-literature source) and the top-surface-height occlusion test (the
+  highest tube wins at each pixel, the same idea general-purpose rendering calls a z-buffer) are
+  both original to this project. Verified by rendering all of the reference script's own test
+  cases and comparing pixel-for-pixel against its output (`crates/mc_cli/tests/thread_golden.rs`),
+  not just checked for internal consistency.
+
 ## 3D preview
 
 - **Tangent-space basis computation** (`compute_tangents` in `mc_app::viewport3d`) — Eric

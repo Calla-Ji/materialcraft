@@ -60,7 +60,6 @@ pub struct FabricGeneratorParams {
     pub rows: u32,
     pub columns: u32,
     pub thread_width: f32,
-    pub thread_roundness: f32,
     pub thread_group_size: u32,
     pub twill_count: u32,
     pub rib_width: u32,
@@ -79,7 +78,6 @@ impl Default for FabricGeneratorParams {
             rows: 24,
             columns: 24,
             thread_width: 0.85,
-            thread_roundness: 0.6,
             thread_group_size: 1,
             twill_count: 4,
             rib_width: 1,
@@ -117,7 +115,6 @@ impl FabricGeneratorParams {
             rows: int("rows", defaults.rows),
             columns: int("columns", defaults.columns),
             thread_width: float("thread_width", defaults.thread_width),
-            thread_roundness: float("thread_roundness", defaults.thread_roundness),
             thread_group_size: int("thread_group_size", defaults.thread_group_size),
             twill_count: int("twill_count", defaults.twill_count),
             rib_width: int("rib_width", defaults.rib_width),
@@ -139,7 +136,10 @@ fn pack_params(resolution: u32, params: &FabricGeneratorParams) -> [u8; 48] {
     bytes[12..16].copy_from_slice(&params.seed.to_le_bytes());
     bytes[16..20].copy_from_slice(&params.weave_type.as_u32().to_le_bytes());
     bytes[20..24].copy_from_slice(&params.thread_width.to_le_bytes());
-    bytes[24..28].copy_from_slice(&params.thread_roundness.to_le_bytes());
+    // bytes[24..28] was `thread_roundness`, retired now that every Thread
+    // ply is a genuine round tube (no longer an adjustable flat-vs-round
+    // cross-section) — left as explicit padding rather than reflowing
+    // every field after it.
     bytes[28..32].copy_from_slice(&params.thread_group_size.to_le_bytes());
     bytes[32..36].copy_from_slice(&params.twill_count.to_le_bytes());
     bytes[36..40].copy_from_slice(&params.rib_width.to_le_bytes());
@@ -157,22 +157,31 @@ pub fn dispatch(
     params: &FabricGeneratorParams,
 ) {
     // No Thread wired in: render one internally from this node's own
-    // thread_width/thread_roundness, so Fabric Generator still works
-    // standalone with no setup — same "optional input defaults sensibly"
-    // convention as Blend's mask or Scanline Jitter's own mask above.
-    let default_fiber_key = format!("{output_key}__default_fiber");
+    // thread_width, so Fabric Generator still works standalone with no
+    // setup — same "optional input defaults sensibly" convention as
+    // Blend's mask or Scanline Jitter's own mask above. A single straight
+    // (untwisted, unplied) round strand filling one row — `threads: 1`
+    // makes Thread's own `thickness` mean "fraction of the whole tile
+    // height", matching what this fallback always meant.
+    let default_fiber_key = format!("{output_key}__default_fiber_height");
     let fiber_key = match fiber_key {
         Some(key) => key,
         None => {
             crate::thread_shape::dispatch(
                 gpu,
                 pool,
-                &default_fiber_key,
+                crate::thread_shape::ThreadOutputKeys {
+                    height: &default_fiber_key,
+                    ply_id: &format!("{output_key}__default_fiber_ply_id"),
+                    fiber: &format!("{output_key}__default_fiber_fiber"),
+                    mask: &format!("{output_key}__default_fiber_mask"),
+                },
                 resolution,
                 &crate::thread_shape::ThreadShapeParams {
-                    ply_count: 1,
+                    threads: 1,
                     thickness: params.thread_width,
-                    roundness: params.thread_roundness,
+                    plies: 1,
+                    fiber_mode: crate::thread_shape::FiberMode::None,
                     ..crate::thread_shape::ThreadShapeParams::default()
                 },
             );
@@ -400,19 +409,25 @@ mod tests {
         crate::thread_shape::dispatch(
             &mut gpu,
             &mut pool,
-            "thin_fiber",
+            crate::thread_shape::ThreadOutputKeys {
+                height: "thin_fiber_height",
+                ply_id: "thin_fiber_ply_id",
+                fiber: "thin_fiber_fiber",
+                mask: "thin_fiber_mask",
+            },
             RESOLUTION,
             &crate::thread_shape::ThreadShapeParams {
-                ply_count: 1,
+                threads: 1,
+                plies: 1,
                 thickness: 0.1,
-                roundness: 0.0,
+                fiber_mode: crate::thread_shape::FiberMode::None,
                 ..crate::thread_shape::ThreadShapeParams::default()
             },
         );
         dispatch(
             &mut gpu,
             &mut pool,
-            Some("thin_fiber"),
+            Some("thin_fiber_height"),
             "with_fiber",
             RESOLUTION,
             &params,
@@ -425,12 +440,15 @@ mod tests {
         );
     }
 
-    /// A twisted multi-ply Thread should actually show its twist in the
-    /// woven result, not just at the Thread node's own preview — end-to-end
-    /// proof the per-cell along-length sampling (`fiber_height`'s `along`
-    /// parameter) is wired up correctly.
+    /// A Thread's own Twist Angle should actually show up in the woven
+    /// result, not just at the Thread node's own preview — end-to-end proof
+    /// the per-cell along-length sampling (`fiber_height`'s `along`
+    /// parameter) is wired up correctly. There's no "untwisted" state in
+    /// the new tube-geometry model (`turns_from_angle` always returns at
+    /// least 1 full turn, same as real yarn always having *some* twist), so
+    /// this compares a loose vs. a tight twist angle instead.
     #[test]
-    fn a_twisted_fiber_changes_the_output_differently_than_an_untwisted_one() {
+    fn a_tighter_twist_angle_changes_the_output() {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
         let mut pool = mc_gpu::TexturePool::default();
         let params = FabricGeneratorParams {
@@ -443,31 +461,43 @@ mod tests {
         crate::thread_shape::dispatch(
             &mut gpu,
             &mut pool,
-            "straight",
+            crate::thread_shape::ThreadOutputKeys {
+                height: "loose_height",
+                ply_id: "loose_ply_id",
+                fiber: "loose_fiber",
+                mask: "loose_mask",
+            },
             RESOLUTION,
             &crate::thread_shape::ThreadShapeParams {
-                ply_count: 3,
-                twist_cycles: 0,
+                plies: 3,
+                twist_angle: 10.0,
                 thickness: 0.7,
+                fiber_mode: crate::thread_shape::FiberMode::None,
                 ..crate::thread_shape::ThreadShapeParams::default()
             },
         );
         crate::thread_shape::dispatch(
             &mut gpu,
             &mut pool,
-            "twisted",
+            crate::thread_shape::ThreadOutputKeys {
+                height: "tight_height",
+                ply_id: "tight_ply_id",
+                fiber: "tight_fiber",
+                mask: "tight_mask",
+            },
             RESOLUTION,
             &crate::thread_shape::ThreadShapeParams {
-                ply_count: 3,
-                twist_cycles: 3,
+                plies: 3,
+                twist_angle: 55.0,
                 thickness: 0.7,
+                fiber_mode: crate::thread_shape::FiberMode::None,
                 ..crate::thread_shape::ThreadShapeParams::default()
             },
         );
         dispatch(
             &mut gpu,
             &mut pool,
-            Some("straight"),
+            Some("loose_height"),
             "with_straight",
             RESOLUTION,
             &params,
@@ -475,7 +505,7 @@ mod tests {
         dispatch(
             &mut gpu,
             &mut pool,
-            Some("twisted"),
+            Some("tight_height"),
             "with_twisted",
             RESOLUTION,
             &params,

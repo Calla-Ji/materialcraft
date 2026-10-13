@@ -140,8 +140,7 @@ fn show_inner(
     // producing zero visible change). Stockinette is the one exception:
     // it never samples Thread at all (see fabric_generator.wgsl's own doc
     // comment), so Thread Width keeps governing its loop width regardless
-    // of whether something's connected; Thread Roundness is never used by
-    // Stockinette either way.
+    // of whether something's connected.
     let fabric_thread_connected =
         node_kind == "fabric_generator" && graph.upstream(id, "fiber").is_some();
     let fabric_weave_type = current_params
@@ -153,8 +152,6 @@ fn show_inner(
         .unwrap_or("Plain Weave");
     let fabric_is_stockinette = fabric_weave_type == "Stockinette";
     let hide_thread_width = fabric_thread_connected && !fabric_is_stockinette;
-    let hide_thread_roundness =
-        node_kind == "fabric_generator" && (fabric_thread_connected || fabric_is_stockinette);
 
     for param in def.params {
         if shape_connected && matches!(param.name, "rows" | "columns" | "gap" | "bevel") {
@@ -164,9 +161,6 @@ fn show_inner(
             continue;
         }
         if hide_thread_width && param.name == "thread_width" {
-            continue;
-        }
-        if hide_thread_roundness && param.name == "thread_roundness" {
             continue;
         }
         if !mc_nodes::defs::param_is_relevant(&node_kind, param.name, &current_params) {
