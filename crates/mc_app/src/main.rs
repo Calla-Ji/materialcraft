@@ -354,6 +354,7 @@ impl eframe::App for MaterialCreatorApp {
                                         path_editor::show(
                                             ui,
                                             image_rect,
+                                            content_rect,
                                             graph,
                                             history,
                                             id,

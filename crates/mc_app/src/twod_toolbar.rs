@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The 2D View's own left-edge icon rail — Tiling on top, a thin divider,
-//! then Pen (greyed out with an explanatory tooltip when no Path node is
-//! selected) — mirroring `viewport3d_panels`' own icon-button toolbar so
-//! the 2D and 3D panels read as one consistent app rather than two
-//! different UI styles. Room is left here for future Path-editor actions
-//! (SVG import, etc.) to join Pen in the same rail.
+//! then Pen and Join (each greyed out with an explanatory tooltip when
+//! they don't currently apply) — mirroring `viewport3d_panels`' own
+//! icon-button toolbar so the 2D and 3D panels read as one consistent app
+//! rather than two different UI styles. Room is left here for future
+//! Path-editor actions (SVG import, etc.) to join them in the same rail.
 
 const TOOLBAR_WIDTH: f32 = 38.0;
 const BUTTON_SIZE: f32 = 30.0;
@@ -12,7 +12,12 @@ const ICON_FONT_SIZE: f32 = 20.0;
 const TOP_PADDING: f32 = 8.0;
 
 const GRID_3X3_GLYPH: char = '\u{f015}';
-const EDIT_GLYPH: char = '\u{e3c9}'; // "edit" (pencil)
+// Codepoints confirmed against Google's own
+// MaterialIcons-Regular.codepoints file — shared across every style
+// variant (Filled/Outlined/Round/Sharp/Two-tone), only the drawn glyph
+// differs, so these render correctly against the bundled Round font.
+const ROUTE_GLYPH: char = '\u{eacd}'; // "route" — the owner's own pick over a plain pencil
+const JOIN_GLYPH: char = '\u{eaeb}'; // "join_full"
 
 /// Draws the rail into a fixed-width column at the left edge of
 /// `full_rect`, with a vertical divider matching the 3D viewport's own,
@@ -56,6 +61,7 @@ pub fn show(
             let path_node_id =
                 selected.filter(|&id| graph.node(id).is_some_and(|n| n.kind == "path"));
             pen_button(ui, path_editor, graph, history, path_node_id);
+            join_button(ui, path_editor, graph, history, path_node_id);
         });
     }
     ui.painter()
@@ -147,7 +153,7 @@ fn pen_button(
     let response = icon_button(
         ui,
         "two_d_toolbar_pen",
-        EDIT_GLYPH,
+        ROUTE_GLYPH,
         path_editor.pen_mode(),
         enabled,
         tooltip,
@@ -155,6 +161,39 @@ fn pen_button(
     if let Some(id) = path_node_id {
         if response.clicked() {
             path_editor.toggle_pen_mode(graph, history, id);
+        }
+    }
+}
+
+/// "Glows" (the same selected-style highlight the Pen/Tiling buttons use
+/// once active) the moment the current selection is a valid pair of
+/// endpoints to join — more immediate than only offering this in the
+/// Parameters panel, per the owner's own preference.
+fn join_button(
+    ui: &mut egui::Ui,
+    path_editor: &mut crate::path_editor::PathEditorState,
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    path_node_id: Option<mc_core::NodeId>,
+) {
+    let can_join = path_node_id.is_some_and(|id| path_editor.can_join(graph, id));
+    let tooltip = if can_join {
+        "Join the two selected endpoints with a new segment."
+    } else {
+        "Select two open-subpath endpoints (not already connected to anything on \
+         that side) to join them."
+    };
+    let response = icon_button(
+        ui,
+        "two_d_toolbar_join",
+        JOIN_GLYPH,
+        can_join,
+        can_join,
+        tooltip,
+    );
+    if let Some(id) = path_node_id {
+        if can_join && response.clicked() {
+            path_editor.join_selected(graph, history, id);
         }
     }
 }

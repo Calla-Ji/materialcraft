@@ -177,6 +177,42 @@ impl PathEditorState {
         self.selected = HashSet::from([(subpath, point)]);
     }
 
+    /// Deletes exactly one point, regardless of the current selection —
+    /// backs the Params panel's own per-row trash button, so removing a
+    /// point there doesn't depend on first selecting it in the 2D View
+    /// and pressing Delete, which this editor only ever handles while
+    /// hovering that view — hover the Params panel instead and the same
+    /// key would delete the whole node (see `main.rs`'s own Delete
+    /// handler), not just the point.
+    pub fn delete_point(
+        &mut self,
+        graph: &mut mc_core::Graph,
+        history: &mut mc_core::History,
+        node_id: mc_core::NodeId,
+        subpath: usize,
+        point: usize,
+    ) {
+        let Some(path) = current_path(graph, node_id) else {
+            return;
+        };
+        let Some(sp) = path.subpaths.get(subpath) else {
+            return;
+        };
+        if point >= sp.points.len() {
+            return;
+        }
+        let mut new_path = path.clone();
+        new_path.subpaths[subpath] = mc_nodes::path::delete_point(sp, point);
+        new_path.subpaths.retain(|sp| sp.points.len() >= 2);
+        // Indices may have shifted (a point removed, or a whole subpath
+        // pruned below 2 points) — simplest to just drop any in-progress
+        // selection/Pen-mode tracking rather than risk it now pointing at
+        // the wrong point.
+        self.selected.clear();
+        self.pen_subpath = None;
+        commit_path_change(graph, history, node_id, path.clone(), new_path);
+    }
+
     /// Whether the current selection is exactly two open-subpath endpoints
     /// — either two different subpaths' own ends, or one subpath's own
     /// first and last point — the condition [`join_selected`] acts on.
@@ -453,26 +489,24 @@ fn commit_path_change(
 
 /// Live-applies the in-progress drag every frame it moves, re-deriving
 /// from `active.base_path` each time rather than mutating incrementally.
-/// How far past the tile's own edge a drag is still allowed to go, in
-/// screen pixels — small room to pull a handle slightly past the border
-/// (useful groundwork for `Wrap`'s eventual ghost-copy preview), without
-/// letting it wander arbitrarily far. Without this, a fast drag could land
-/// a point or handle anywhere on screen — including under a neighboring
-/// panel's own toolbar, where nothing in the 2D View can ever pick it up
-/// again.
-const DRAG_OVERSHOOT_PX: f32 = 32.0;
-
+/// The pointer position is clamped to `content_rect` first — the 2D
+/// View's own actual drawable area — so a fast drag can never land a
+/// point or handle somewhere the 2D View itself can no longer reach it
+/// (under a neighboring panel's own toolbar, past its edge into the 3D
+/// View, anywhere off-screen): a hard stop at the one boundary this
+/// editor is actually guaranteed to still have a click region over,
+/// rather than an arbitrary margin around the tile itself.
 fn update_dragged(
     graph: &mut mc_core::Graph,
     node_id: mc_core::NodeId,
     active: &ActiveDrag,
     image_rect: egui::Rect,
+    content_rect: egui::Rect,
     cur: egui::Pos2,
 ) {
-    let bounds = image_rect.expand(DRAG_OVERSHOOT_PX);
     let clamped = egui::pos2(
-        cur.x.clamp(bounds.min.x, bounds.max.x),
-        cur.y.clamp(bounds.min.y, bounds.max.y),
+        cur.x.clamp(content_rect.min.x, content_rect.max.x),
+        cur.y.clamp(content_rect.min.y, content_rect.max.y),
     );
     let mut new_path = active.base_path.clone();
     apply_drag(
@@ -678,9 +712,11 @@ fn draw(
 /// so the two don't race for the same pointer input; the caller is
 /// responsible for *not* also applying it as a pan while a path node is
 /// selected.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &egui::Ui,
     image_rect: egui::Rect,
+    content_rect: egui::Rect,
     graph: &mut mc_core::Graph,
     history: &mut mc_core::History,
     node_id: mc_core::NodeId,
@@ -752,7 +788,7 @@ pub fn show(
 
     if response.dragged() {
         if let (Some(active), Some(cur)) = (&state.drag, response.interact_pointer_pos()) {
-            update_dragged(graph, node_id, active, image_rect, cur);
+            update_dragged(graph, node_id, active, image_rect, content_rect, cur);
         }
     }
     if response.drag_stopped() {
@@ -1332,7 +1368,7 @@ mod tests {
     }
 
     #[test]
-    fn update_dragged_clamps_far_off_pointer_positions_to_stay_near_the_tile() {
+    fn update_dragged_clamps_far_off_pointer_positions_to_the_content_rect() {
         let path = triangle_path();
         let (mut graph, id) = graph_with_path(path.clone());
         let rect = square_rect();
@@ -1345,15 +1381,72 @@ mod tests {
         // Far outside the rect entirely — simulates a fast drag toward a
         // neighboring panel.
         let far_away = egui::pos2(rect.min.x - 5000.0, rect.min.y - 5000.0);
-        update_dragged(&mut graph, id, &active, rect, far_away);
+        update_dragged(&mut graph, id, &active, rect, rect, far_away);
 
         let moved = path_of(&graph, id);
         let new_pos = moved.subpaths[0].points[0].pos;
         let new_screen = uv_to_screen(new_pos, rect);
-        let bounds = rect.expand(DRAG_OVERSHOOT_PX + 1.0); // +1 for float slack
+        // No margin at all now — `content_rect` is the hard boundary.
         assert!(
-            bounds.contains(new_screen),
-            "dragged point landed outside the clamp bounds: {new_screen:?}"
+            rect.expand(0.5).contains(new_screen), // 0.5px for float slack
+            "dragged point landed outside the content rect: {new_screen:?}"
         );
+    }
+
+    #[test]
+    fn delete_point_removes_just_that_point_regardless_of_selection() {
+        let path = triangle_path(); // 3 points
+        let (mut graph, id) = graph_with_path(path.clone());
+        let mut history = mc_core::History::new();
+        let mut state = PathEditorState {
+            selected: HashSet::from([(0, 0)]), // selection points elsewhere
+            ..Default::default()
+        };
+
+        state.delete_point(&mut graph, &mut history, id, 0, 1);
+
+        let after = path_of(&graph, id);
+        assert_eq!(after.subpaths[0].points.len(), 2);
+        assert_eq!(
+            after.subpaths[0].points[0].pos,
+            path.subpaths[0].points[0].pos
+        );
+        assert_eq!(
+            after.subpaths[0].points[1].pos,
+            path.subpaths[0].points[2].pos
+        );
+        assert!(state.selected.is_empty());
+    }
+
+    #[test]
+    fn delete_point_prunes_the_subpath_if_it_drops_below_two_points() {
+        let path = {
+            let mut p = mc_core::Path::default();
+            p.subpaths.push(SubPath::new(
+                vec![Point::new([0.0, 0.0]), Point::new([0.2, 0.0])],
+                false,
+            ));
+            p
+        };
+        let (mut graph, id) = graph_with_path(path);
+        let mut history = mc_core::History::new();
+        let mut state = PathEditorState::default();
+
+        state.delete_point(&mut graph, &mut history, id, 0, 0);
+
+        let after = path_of(&graph, id);
+        assert!(after.subpaths.is_empty());
+    }
+
+    #[test]
+    fn delete_point_does_nothing_for_an_out_of_range_index() {
+        let path = triangle_path();
+        let (mut graph, id) = graph_with_path(path.clone());
+        let mut history = mc_core::History::new();
+        let mut state = PathEditorState::default();
+
+        state.delete_point(&mut graph, &mut history, id, 0, 99);
+
+        assert_eq!(path_of(&graph, id), path);
     }
 }

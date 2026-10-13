@@ -1103,6 +1103,16 @@ fn path_point_list(
                     &y_response,
                     mc_core::ParamValue::Path(new_path),
                 );
+
+                let trash = ui
+                    .add(egui::Button::new(
+                        egui::RichText::new('\u{e872}'.to_string()) // "delete"
+                            .family(egui::FontFamily::Name("material_icons_round".into())),
+                    ))
+                    .on_hover_text("Delete this point.");
+                if trash.clicked() {
+                    path_editor.delete_point(graph, history, id, sp_i, pt_i);
+                }
             });
         }
     }
