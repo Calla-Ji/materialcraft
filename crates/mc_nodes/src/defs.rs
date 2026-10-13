@@ -1163,16 +1163,23 @@ static NODE_DEFS: &[NodeDef] = &[
                   to add a point, drag handles to curve it) or paste an SVG, then feed it \
                   into a Stitch node.",
         inputs: &[],
+        // Preview Mask stays first so `mc_nodes::registry::resolve_texture_key`'s
+        // "first declared output" default has an actual GPU texture to show —
+        // the Path port is never written into the texture pool at all (see
+        // `PortType::Path`'s own doc comment), so defaulting to it left the
+        // 2D View and this node's own thumbnail permanently blank
+        // ("(select a node to preview it)" even while selected). Same fix,
+        // same reasoning as `thread_shape`'s own Height-stays-first comment.
         outputs: &[
-            PortSpec {
-                name: "path",
-                display_name: "Path",
-                port_type: PortType::Path,
-            },
             PortSpec {
                 name: "preview_mask",
                 display_name: "Preview Mask",
                 port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "path",
+                display_name: "Path",
+                port_type: PortType::Path,
             },
         ],
         params: &[ParamSpec {
