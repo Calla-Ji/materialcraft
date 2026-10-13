@@ -86,6 +86,7 @@ fn embedded_source(file_name: &str) -> &'static str {
         "tube_raster.wgsl" => include_str!("../shaders/tube_raster.wgsl"),
         "path_stamp.wgsl" => include_str!("../shaders/path_stamp.wgsl"),
         "knit_stitch_info.wgsl" => include_str!("../shaders/knit_stitch_info.wgsl"),
+        "stitch_info.wgsl" => include_str!("../shaders/stitch_info.wgsl"),
         other => panic!("mc_nodes: unknown shader file {other:?}"),
     }
 }

@@ -727,6 +727,447 @@ pub fn drape(
     lines
 }
 
+// ---------------------------------------------------------------------
+// Plies and GPU raster (STITCH_NODE_SPEC.md §7 / `stitch_reference.py`'s
+// own `packing`/`render`) — reuses `crate::tube_raster` for Height/Mask/
+// Ply ID (per that spec section's own instruction: "do not write a second
+// rasterizer"), plus a small second pass (`stitch_info.wgsl`, mirroring
+// `crate::knit`'s own `knit_stitch_info.wgsl`) that decodes the raw tag
+// into Thread ID/Order/Direction and re-normalizes Height into Stitch's
+// own one-sided `height_range * thread` scale (tube_raster's own `height`
+// output is a *symmetric* clamp around z=0, the wrong shape for this).
+// ---------------------------------------------------------------------
+
+/// Ply packing radii: `a_p` (how far each ply's helix centre sits from the
+/// stitch's own centre line) and `r_p` (each ply's own tube radius) — so
+/// that `n` touching plies of radius `r_p` pack into an overall footprint
+/// of radius `R`. `n <= 1` has nothing to pack: the single "ply" just *is*
+/// the stitch's own full radius.
+fn packing(radius: f64, n: u32) -> (f64, f64) {
+    if n <= 1 {
+        return (0.0, radius);
+    }
+    let s = (std::f64::consts::PI / f64::from(n)).sin();
+    let r = radius / (1.0 + 1.0 / s);
+    (r / s, r)
+}
+
+fn normalize3_py(v: [f64; 3]) -> [f64; 3] {
+    // Matches `stitch_reference.py`'s own `v / (norm(v) + 1e-15)` — an
+    // epsilon added to the denominator, not a branch on near-zero input.
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() + 1e-15;
+    [v[0] / len, v[1] / len, v[2] / len]
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// `numpy.gradient(points, axis=0)` with its own default *uniform unit*
+/// spacing (no explicit `x` given) — one-sided differences at the ends,
+/// central difference (`/2`, not arc-length-weighted) in between. A
+/// different, simpler formula than [`crate::path`]'s own `gradient_1d`,
+/// which is for *non-uniform* arc-length spacing — Python's own `drape`
+/// output samples are at uniform `u` steps, not uniform arc length, but
+/// `render`'s own tangent-frame code still asks for the plain unit-spacing
+/// gradient, so this matches that exactly rather than reusing the 2D one.
+fn gradient_3d_unit_spacing(points: &[[f64; 3]]) -> Vec<[f64; 3]> {
+    let n = points.len();
+    let mut out = vec![[0.0; 3]; n];
+    if n < 2 {
+        return out;
+    }
+    for i in 0..n {
+        out[i] = if i == 0 {
+            sub3(points[1], points[0])
+        } else if i == n - 1 {
+            sub3(points[n - 1], points[n - 2])
+        } else {
+            let d = sub3(points[i + 1], points[i - 1]);
+            [d[0] / 2.0, d[1] / 2.0, d[2] / 2.0]
+        };
+    }
+    out
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn push_capsule_chain(
+    out: &mut Vec<crate::tube_raster::Segment>,
+    x: &[f64],
+    y: &[f64],
+    z: &[f64],
+    radius: f32,
+    tag: u32,
+) {
+    for i in 0..x.len().saturating_sub(1) {
+        out.push(crate::tube_raster::Segment {
+            p0: [x[i] as f32, y[i] as f32, z[i] as f32],
+            r0: radius,
+            p1: [x[i + 1] as f32, y[i + 1] as f32, z[i + 1] as f32],
+            r1: radius,
+            tag,
+        });
+    }
+}
+
+/// One capsule chain per ply per stitch (`stitch_reference.py`'s own
+/// `render`'s inner `tubes` loop) — tags packed `order * 8 + ply`, the
+/// same convention `crate::knit`'s own segments use and `tube_raster`'s
+/// own shader assumes universally for its `ply_id` output (`best_tag % 8`).
+fn build_tube_segments(
+    stitches: &[Stitch],
+    lines: &[ThreadLine],
+    resolved: &Resolved,
+    ply_direction_sgn: f64,
+    seed: u32,
+) -> Vec<crate::tube_raster::Segment> {
+    let (ap, rp) = packing(resolved.r, resolved.plies);
+    let mut segments = Vec::new();
+
+    for (st, line) in stitches.iter().zip(lines) {
+        let n = line.x.len();
+        let tag_base = st.order * 8;
+        if resolved.plies <= 1 {
+            push_capsule_chain(
+                &mut segments,
+                &line.x,
+                &line.y,
+                &line.z,
+                resolved.r as f32,
+                tag_base,
+            );
+            continue;
+        }
+
+        let p3: Vec<[f64; 3]> = (0..n).map(|i| [line.x[i], line.y[i], line.z[i]]).collect();
+        let tangents: Vec<[f64; 3]> = gradient_3d_unit_spacing(&p3)
+            .into_iter()
+            .map(normalize3_py)
+            .collect();
+        const UP: [f64; 3] = [0.0, 0.0, 1.0];
+        let normals: Vec<[f64; 3]> = tangents
+            .iter()
+            .map(|t| normalize3_py(cross3(UP, *t)))
+            .collect();
+        let binormals: Vec<[f64; 3]> = tangents
+            .iter()
+            .zip(&normals)
+            .map(|(t, nrm)| cross3(*t, *nrm))
+            .collect();
+
+        let mut s_arc = vec![0.0; n];
+        for i in 1..n {
+            let d = sub3(p3[i], p3[i - 1]);
+            s_arc[i] = s_arc[i - 1] + (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        }
+        let total_len = s_arc[n - 1];
+        let turns =
+            resolved.twist_deg.to_radians().tan() * total_len / (2.0 * std::f64::consts::PI * ap);
+        let phase = 2.0 * std::f64::consts::PI * hash01(st.order, 7, seed);
+        let total_len_guarded = total_len.max(1e-12);
+
+        for k in 0..resolved.plies {
+            let mut qx = vec![0.0; n];
+            let mut qy = vec![0.0; n];
+            let mut qz = vec![0.0; n];
+            for i in 0..n {
+                let th = ply_direction_sgn * 2.0 * std::f64::consts::PI * turns * s_arc[i]
+                    / total_len_guarded
+                    + 2.0 * std::f64::consts::PI * f64::from(k) / f64::from(resolved.plies)
+                    + phase;
+                let (cos_th, sin_th) = (th.cos(), th.sin());
+                qx[i] = p3[i][0] + ap * (cos_th * normals[i][0] + sin_th * binormals[i][0]);
+                qy[i] = p3[i][1] + ap * (cos_th * normals[i][1] + sin_th * binormals[i][1]);
+                qz[i] = p3[i][2] + ap * (cos_th * normals[i][2] + sin_th * binormals[i][2]);
+            }
+            push_capsule_chain(&mut segments, &qx, &qy, &qz, rp as f32, tag_base + k);
+        }
+    }
+    segments
+}
+
+/// This stitch's own thread direction angle (`stitch_reference.py`'s own
+/// `math.atan2(*wrap_delta(s.b - s.a, path.wrap)[::-1])` — the `[::-1]`
+/// reverses `[dx, dy]` to `[dy, dx]` before unpacking as `atan2`'s
+/// positional `(y, x)` args, i.e. this is just the ordinary
+/// `atan2(dy, dx)` convention).
+fn thread_angle(st: &Stitch, wrap: bool) -> f32 {
+    let dx = wrap_delta(st.b[0] - st.a[0], wrap);
+    let dy = wrap_delta(st.b[1] - st.a[1], wrap);
+    dy.atan2(dx) as f32
+}
+
+fn pack_f32_slice(values: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(values.len() * 4);
+    for v in values {
+        bytes.extend_from_slice(&v.to_le_bytes());
+    }
+    bytes
+}
+
+fn pack_stitch_info_params(
+    resolution: u32,
+    n_stitches: u32,
+    seed: u32,
+    zmax: f32,
+    height_norm: f32,
+) -> [u8; 20] {
+    let mut bytes = [0u8; 20];
+    bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
+    bytes[4..8].copy_from_slice(&n_stitches.to_le_bytes());
+    bytes[8..12].copy_from_slice(&seed.to_le_bytes());
+    bytes[12..16].copy_from_slice(&zmax.to_le_bytes());
+    bytes[16..20].copy_from_slice(&height_norm.to_le_bytes());
+    bytes
+}
+
+/// Where [`dispatch_render`] stores its six real outputs.
+pub struct RenderOutputKeys<'a> {
+    pub height: &'a str,
+    pub mask: &'a str,
+    pub ply_id: &'a str,
+    pub thread_id: &'a str,
+    pub order: &'a str,
+    pub direction: &'a str,
+}
+
+/// Generates, drapes and rasterizes `path` under `params` into `keys`' six
+/// output textures. A `path` whose own stitch rule produces no stitches at
+/// all (a degenerate, e.g. zero-length, curve) fills every output blank
+/// rather than dispatching a degenerate GPU pass, same fallback
+/// `dispatch_preview_mask` already uses.
+pub fn dispatch_render(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    keys: RenderOutputKeys,
+    path: &mc_core::Path,
+    params: &StitchParams,
+) {
+    let resolution = params.resolution;
+    let resolved = params.resolved();
+    let stitches = generate(path, params);
+
+    if stitches.is_empty() {
+        gpu.fill_rgba8(pool, keys.height, resolution, [0, 0, 0, 255]);
+        gpu.fill_rgba8(pool, keys.mask, resolution, [0, 0, 0, 255]);
+        gpu.fill_rgba8(pool, keys.ply_id, resolution, [0, 0, 0, 255]);
+        gpu.fill_rgba8(pool, keys.thread_id, resolution, [0, 0, 0, 255]);
+        gpu.fill_rgba8(pool, keys.order, resolution, [0, 0, 0, 255]);
+        gpu.fill_rgba8(pool, keys.direction, resolution, [128, 128, 128, 255]);
+        return;
+    }
+
+    let lines = drape(&stitches, params, path.wrap, resolution);
+    let ply_sgn = if params.ply_direction == PlyDirection::S {
+        1.0
+    } else {
+        -1.0
+    };
+    let segments = build_tube_segments(&stitches, &lines, &resolved, ply_sgn, params.seed);
+
+    // Generous enough that no real z value (bounded by MAX_LAYERS plus one
+    // sphere radius) ever actually clips against tube_raster's own
+    // symmetric clamp — it only needs to be invertible, not tight.
+    let zmax = (20.0 * resolved.r + 1.0) as f32;
+    let scratch_height_key = format!("{}__stitch_raw_height_scratch", keys.height);
+    let scratch_cell_key = format!("{}__stitch_cell_scratch", keys.height);
+    crate::tube_raster::dispatch(
+        gpu,
+        pool,
+        crate::tube_raster::RasterOutputKeys {
+            height: &scratch_height_key,
+            mask: keys.mask,
+            ply_id: keys.ply_id,
+            cell: &scratch_cell_key,
+        },
+        resolution,
+        &segments,
+        resolved.plies.max(1),
+        zmax,
+    );
+
+    let thread_angles: Vec<f32> = stitches
+        .iter()
+        .map(|st| thread_angle(st, path.wrap))
+        .collect();
+    let height_norm = (params.height_range * resolved.thread) as f32;
+
+    dispatch_stitch_info(
+        gpu,
+        pool,
+        &scratch_cell_key,
+        &scratch_height_key,
+        keys.height,
+        keys.thread_id,
+        keys.order,
+        keys.direction,
+        resolution,
+        &thread_angles,
+        params.seed,
+        zmax,
+        height_norm,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_stitch_info(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    cell_key: &str,
+    scratch_height_key: &str,
+    height_key: &str,
+    thread_id_key: &str,
+    order_key: &str,
+    direction_key: &str,
+    resolution: u32,
+    thread_angles: &[f32],
+    seed: u32,
+    zmax: f32,
+    height_norm: f32,
+) {
+    let shader_source = crate::shaders::full_source("stitch_info.wgsl");
+    let pipeline = gpu.compute_pipeline("stitch_info", &shader_source, "main");
+
+    let param_bytes = pack_stitch_info_params(
+        resolution,
+        thread_angles.len() as u32,
+        seed,
+        zmax,
+        height_norm,
+    );
+    let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("stitch_info_params"),
+        size: param_bytes.len() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue.write_buffer(&param_buffer, 0, &param_bytes);
+
+    let angles_bytes = pack_f32_slice(thread_angles);
+    let angles_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("stitch_info_thread_angles"),
+        size: (angles_bytes.len() as u64).max(4),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    if !angles_bytes.is_empty() {
+        gpu.queue.write_buffer(&angles_buffer, 0, &angles_bytes);
+    }
+
+    let cell_view = pool
+        .get_or_create(
+            &gpu.device,
+            cell_key,
+            resolution,
+            wgpu::TextureFormat::R32Uint,
+        )
+        .clone();
+    let scratch_height_view = pool
+        .get_or_create(
+            &gpu.device,
+            scratch_height_key,
+            resolution,
+            wgpu::TextureFormat::Rgba8Unorm,
+        )
+        .clone();
+    let height_view = pool
+        .get_or_create(
+            &gpu.device,
+            height_key,
+            resolution,
+            wgpu::TextureFormat::Rgba8Unorm,
+        )
+        .clone();
+    let thread_id_view = pool
+        .get_or_create(
+            &gpu.device,
+            thread_id_key,
+            resolution,
+            wgpu::TextureFormat::Rgba8Unorm,
+        )
+        .clone();
+    let order_view = pool
+        .get_or_create(
+            &gpu.device,
+            order_key,
+            resolution,
+            wgpu::TextureFormat::Rgba8Unorm,
+        )
+        .clone();
+    let direction_view = pool
+        .get_or_create(
+            &gpu.device,
+            direction_key,
+            resolution,
+            wgpu::TextureFormat::Rgba8Unorm,
+        )
+        .clone();
+
+    let bind_group_layout = pipeline.get_bind_group_layout(0);
+    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("stitch_info_bind_group"),
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: param_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: angles_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&cell_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&scratch_height_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&height_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(&thread_id_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&order_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(&direction_view),
+            },
+        ],
+    });
+
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("stitch_info_encoder"),
+        });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("stitch_info_pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        let workgroups = resolution.div_ceil(8);
+        pass.dispatch_workgroups(workgroups, workgroups, 1);
+    }
+    gpu.queue.submit(Some(encoder.finish()));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1034,5 +1475,187 @@ mod tests {
             "z[mid]={} should rest at r={r}",
             line.z[mid]
         );
+    }
+
+    fn back_hand_params(resolution: u32) -> StitchParams {
+        StitchParams {
+            stitch: StitchKind::Back,
+            look: Look::Hand,
+            resolution,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn dispatch_render_is_deterministic() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let path = demo_path();
+        let params = back_hand_params(128);
+
+        for suffix in ["a", "b"] {
+            dispatch_render(
+                &mut gpu,
+                &mut pool,
+                RenderOutputKeys {
+                    height: &format!("height_{suffix}"),
+                    mask: &format!("mask_{suffix}"),
+                    ply_id: &format!("ply_id_{suffix}"),
+                    thread_id: &format!("thread_id_{suffix}"),
+                    order: &format!("order_{suffix}"),
+                    direction: &format!("direction_{suffix}"),
+                },
+                &path,
+                &params,
+            );
+        }
+        let height_a = gpu.read_rgba8(pool.texture("height_a").unwrap(), 128);
+        let height_b = gpu.read_rgba8(pool.texture("height_b").unwrap(), 128);
+        assert_eq!(
+            height_a, height_b,
+            "two renders with the same inputs must be bit-identical"
+        );
+    }
+
+    #[test]
+    fn dispatch_render_tiles_seamlessly() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let path = demo_path();
+        let params = back_hand_params(128);
+
+        dispatch_render(
+            &mut gpu,
+            &mut pool,
+            RenderOutputKeys {
+                height: "seam_height",
+                mask: "seam_mask",
+                ply_id: "seam_ply_id",
+                thread_id: "seam_thread_id",
+                order: "seam_order",
+                direction: "seam_direction",
+            },
+            &path,
+            &params,
+        );
+        let res = 128usize;
+        let pixels = gpu.read_rgba8(pool.texture("seam_height").unwrap(), res as u32);
+        let at = |x: usize, y: usize| pixels[(y * res + x) * 4] as f32 / 255.0;
+
+        // STITCH_NODE_SPEC.md §11's own seam_ok: the mean difference across
+        // the tile edge must be no larger than 1.05x the largest mean step
+        // between neighboring *interior* columns/rows.
+        let col_diff = |x: usize| -> f32 {
+            (0..res)
+                .map(|y| (at(x, y) - at(x.wrapping_sub(1).min(res - 1), y)).abs())
+                .sum::<f32>()
+                / res as f32
+        };
+        let row_diff = |y: usize| -> f32 {
+            (0..res)
+                .map(|x| (at(x, y) - at(x, y.wrapping_sub(1).min(res - 1))).abs())
+                .sum::<f32>()
+                / res as f32
+        };
+        let max_interior_col = (1..res).map(col_diff).fold(0.0f32, f32::max);
+        let max_interior_row = (1..res).map(row_diff).fold(0.0f32, f32::max);
+        let seam_col = (0..res)
+            .map(|y| (at(0, y) - at(res - 1, y)).abs())
+            .sum::<f32>()
+            / res as f32;
+        let seam_row = (0..res)
+            .map(|x| (at(x, 0) - at(x, res - 1)).abs())
+            .sum::<f32>()
+            / res as f32;
+
+        assert!(
+            seam_col <= 1.05 * max_interior_col + 1e-4,
+            "column seam {seam_col} exceeds 1.05x the largest interior step {max_interior_col}"
+        );
+        assert!(
+            seam_row <= 1.05 * max_interior_row + 1e-4,
+            "row seam {seam_row} exceeds 1.05x the largest interior step {max_interior_row}"
+        );
+    }
+
+    /// Full end-to-end check against the reference package's own
+    /// `golden/back_hand_{height,mask}.png`, using STITCH_NODE_SPEC.md
+    /// §11's own acceptance thresholds — this is the one case (of the
+    /// package's 12) copied into the project; the others share the exact
+    /// same code path (just different stitch/look params), so this is
+    /// strong evidence for all of them, not proof of each individually.
+    #[test]
+    fn dispatch_render_matches_golden_png_for_back_hand() {
+        const HEIGHT_PNG: &[u8] =
+            include_bytes!("../../../tests/golden/stitch/back_hand_height.png");
+        const MASK_PNG: &[u8] = include_bytes!("../../../tests/golden/stitch/back_hand_mask.png");
+
+        fn load_luma16_normalized(bytes: &[u8]) -> Vec<f32> {
+            image::load_from_memory(bytes)
+                .expect("decode golden png")
+                .into_luma16()
+                .into_raw()
+                .iter()
+                .map(|&v| f32::from(v) / 65535.0)
+                .collect()
+        }
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let path = demo_path();
+        let params = back_hand_params(768);
+
+        dispatch_render(
+            &mut gpu,
+            &mut pool,
+            RenderOutputKeys {
+                height: "golden_height",
+                mask: "golden_mask",
+                ply_id: "golden_ply_id",
+                thread_id: "golden_thread_id",
+                order: "golden_order",
+                direction: "golden_direction",
+            },
+            &path,
+            &params,
+        );
+
+        let res = 768usize;
+        let actual_height = gpu.read_rgba8(pool.texture("golden_height").unwrap(), res as u32);
+        let actual_mask = gpu.read_rgba8(pool.texture("golden_mask").unwrap(), res as u32);
+        let golden_height = load_luma16_normalized(HEIGHT_PNG);
+        let golden_mask = load_luma16_normalized(MASK_PNG);
+        assert_eq!(golden_height.len(), res * res);
+
+        let mut abs_diffs = Vec::with_capacity(res * res);
+        for i in 0..res * res {
+            let actual = f32::from(actual_height[i * 4]) / 255.0;
+            abs_diffs.push((actual - golden_height[i]).abs());
+        }
+        let mad: f32 = abs_diffs.iter().sum::<f32>() / abs_diffs.len() as f32;
+        let off_by_a_lot = abs_diffs.iter().filter(|&&d| d > 0.1).count();
+        assert!(
+            mad < 0.02,
+            "height mean absolute difference {mad} exceeds 0.02"
+        );
+        assert!(
+            (off_by_a_lot as f32) < 0.01 * (res * res) as f32,
+            "{off_by_a_lot} pixels off by more than 0.1 (limit 1% of {})",
+            res * res
+        );
+
+        let (mut intersection, mut union) = (0usize, 0usize);
+        for i in 0..res * res {
+            let actual_on = actual_mask[i * 4] > 0;
+            let expected_on = golden_mask[i] > 0.5;
+            if actual_on && expected_on {
+                intersection += 1;
+            }
+            if actual_on || expected_on {
+                union += 1;
+            }
+        }
+        let iou = intersection as f32 / union.max(1) as f32;
+        assert!(iou > 0.97, "mask IoU {iou} is below 0.97");
     }
 }
