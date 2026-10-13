@@ -86,6 +86,46 @@ pub struct PathEditorState {
     pen_subpath: Option<usize>,
 }
 
+impl PathEditorState {
+    pub fn pen_mode(&self) -> bool {
+        self.pen_mode
+    }
+
+    /// Enter or leave Pen mode. Entering with exactly one point selected —
+    /// and it's the last point of an open subpath — resumes drawing that
+    /// subpath instead of starting a fresh one on the next click
+    /// (PATH_NODE_SPEC.md §4). Leaving always clears the selection too,
+    /// same as pressing Esc.
+    fn set_pen_mode(&mut self, path: &mc_core::Path, enabled: bool) {
+        self.pen_mode = enabled;
+        if enabled {
+            self.pen_subpath = single_selected_point(&self.selected)
+                .filter(|&key| is_last_point_of_an_open_subpath(path, key))
+                .map(|(sp_i, _)| sp_i);
+        } else {
+            self.pen_subpath = None;
+            self.selected.clear();
+        }
+    }
+
+    /// Flips Pen mode on/off for whichever Path node `node_id` refers to —
+    /// used by the 2D View's own Pen toggle button, which (unlike `show`'s
+    /// own P-key handler) doesn't already have that frame's `Path` value in
+    /// hand.
+    pub fn toggle_pen_mode(&mut self, graph: &mc_core::Graph, node_id: mc_core::NodeId) {
+        let Some(path) = graph
+            .node(node_id)
+            .and_then(|n| n.params.get("path"))
+            .and_then(ParamValue::as_path)
+            .cloned()
+        else {
+            return;
+        };
+        let enable = !self.pen_mode;
+        self.set_pen_mode(&path, enable);
+    }
+}
+
 fn uv_to_screen(uv: [f64; 2], image_rect: egui::Rect) -> egui::Pos2 {
     egui::pos2(
         image_rect.min.x + uv[0] as f32 * image_rect.width(),
@@ -462,19 +502,11 @@ pub fn show(
 
     if response.hovered() {
         if ui.input(|i| i.key_pressed(egui::Key::P)) {
-            state.pen_mode = !state.pen_mode;
-            state.pen_subpath = if state.pen_mode {
-                single_selected_point(&state.selected)
-                    .filter(|&key| is_last_point_of_an_open_subpath(&path, key))
-                    .map(|(sp_i, _)| sp_i)
-            } else {
-                None
-            };
+            let enable = !state.pen_mode;
+            state.set_pen_mode(&path, enable);
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            state.pen_mode = false;
-            state.pen_subpath = None;
-            state.selected.clear();
+            state.set_pen_mode(&path, false);
         }
     }
 

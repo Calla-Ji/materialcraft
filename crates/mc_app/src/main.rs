@@ -390,6 +390,49 @@ impl eframe::App for MaterialCreatorApp {
                         if icon_response.clicked() {
                             two_d_view.tiling_preview = !two_d_view.tiling_preview;
                         }
+
+                        // Pen toggle, top-left corner — a Path node's editor
+                        // has no other on-screen entry point, so without
+                        // this button Pen mode only exists as a keyboard
+                        // shortcut nobody looking at the app would discover.
+                        // Only shown in the single-tile view, matching where
+                        // the editor itself is actually interactive.
+                        if editing_path && !two_d_view.tiling_preview {
+                            if let Some(id) = *selected {
+                                const PEN_WIDTH: f32 = 46.0;
+                                let pen_rect = egui::Rect::from_min_size(
+                                    egui::pos2(full_rect.left() + 6.0, full_rect.top() + 6.0),
+                                    egui::vec2(PEN_WIDTH, ICON_SIZE),
+                                );
+                                let pen_response = ui.interact(
+                                    pen_rect,
+                                    ui.id().with("two_d_view_pen_toggle"),
+                                    egui::Sense::click(),
+                                );
+                                let pen_on = path_editor.pen_mode();
+                                let visuals = ui.style().interact_selectable(&pen_response, pen_on);
+                                let painter = ui.painter();
+                                if pen_on || pen_response.hovered() {
+                                    painter.rect_filled(pen_rect, 4.0, visuals.bg_fill);
+                                }
+                                painter.text(
+                                    pen_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    "Pen",
+                                    egui::FontId::proportional(13.0),
+                                    visuals.fg_stroke.color,
+                                );
+                                let pen_response = pen_response.on_hover_text(
+                                    "Draw new points on this curve — click empty space to \
+                                     append one, drag to pull out a handle, click the first \
+                                     point again to close. P also toggles this while \
+                                     hovering the view, Esc leaves it.",
+                                );
+                                if pen_response.clicked() {
+                                    path_editor.toggle_pen_mode(graph, id);
+                                }
+                            }
+                        }
                     }
                     None => {
                         ui.add_space(8.0);
