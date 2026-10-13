@@ -87,6 +87,13 @@ impl TwistDirection {
             _ => None,
         }
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TwistDirection::S => "S",
+            TwistDirection::Z => "Z",
+        }
+    }
 }
 
 /// How the fibers inside each ply twist relative to the ply itself
@@ -111,6 +118,14 @@ impl FiberMode {
             "Crepe" => Some(FiberMode::Crepe),
             "None" => Some(FiberMode::None),
             _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            FiberMode::Balanced => "Balanced",
+            FiberMode::Crepe => "Crepe",
+            FiberMode::None => "None",
         }
     }
 }
@@ -238,6 +253,105 @@ impl ThreadShapeParams {
         }
     }
 }
+
+/// Every value a named yarn-type preset sets at once — everything that
+/// defines the yarn's *construction* (packing, twist, fiber, cable). Seed
+/// is deliberately not part of a preset: it's the artist's own
+/// randomization choice, not something that defines "what kind of yarn is
+/// this," so applying a preset leaves whatever Seed is already dialed in
+/// untouched.
+pub struct ThreadPreset {
+    pub name: &'static str,
+    pub threads: u32,
+    pub thickness: f32,
+    pub plies: u32,
+    pub ply_direction: TwistDirection,
+    pub twist_angle: f32,
+    pub fiber_mode: FiberMode,
+    pub fibers_per_ply: u32,
+    pub fiber_depth: f32,
+    pub cable_groups: u32,
+    pub cable_angle: f32,
+}
+
+/// Common yarn constructions, as artist-facing starting points — exact
+/// values confirmed against the owner's own screenshots of each one
+/// actually rendered in the app (not just taken from the spec package's
+/// example cases sight-unseen). Picking a preset doesn't lock anything:
+/// every slider it sets stays live and editable afterward, same as any
+/// other param.
+///
+/// "4-Ply Cable" is Plies 2 + Cable Groups 2, not Plies 4 — a cable's
+/// total strand count is Plies * Cable Groups, so "4-ply" here means 2
+/// groups of 2-ply each, not 4 individual plies with cabling on top (which
+/// would build an 8-strand cable instead).
+pub const PRESETS: &[ThreadPreset] = &[
+    ThreadPreset {
+        name: "2-Ply",
+        threads: 4,
+        thickness: 0.8,
+        plies: 2,
+        ply_direction: TwistDirection::S,
+        twist_angle: 30.0,
+        fiber_mode: FiberMode::Balanced,
+        fibers_per_ply: 7,
+        fiber_depth: 0.12,
+        cable_groups: 0,
+        cable_angle: 25.0,
+    },
+    ThreadPreset {
+        name: "3-Ply",
+        threads: 4,
+        thickness: 0.8,
+        plies: 3,
+        ply_direction: TwistDirection::S,
+        twist_angle: 30.0,
+        fiber_mode: FiberMode::Balanced,
+        fibers_per_ply: 7,
+        fiber_depth: 0.12,
+        cable_groups: 0,
+        cable_angle: 25.0,
+    },
+    ThreadPreset {
+        name: "3-Ply Crepe",
+        threads: 4,
+        thickness: 0.8,
+        plies: 3,
+        ply_direction: TwistDirection::S,
+        twist_angle: 30.0,
+        fiber_mode: FiberMode::Crepe,
+        fibers_per_ply: 7,
+        fiber_depth: 0.12,
+        cable_groups: 0,
+        cable_angle: 25.0,
+    },
+    ThreadPreset {
+        name: "4-Ply",
+        threads: 4,
+        thickness: 0.8,
+        plies: 4,
+        ply_direction: TwistDirection::S,
+        twist_angle: 30.0,
+        fiber_mode: FiberMode::Balanced,
+        fibers_per_ply: 7,
+        fiber_depth: 0.12,
+        cable_groups: 0,
+        cable_angle: 25.0,
+    },
+    ThreadPreset {
+        name: "4-Ply Cable",
+        threads: 3,
+        thickness: 0.8,
+        plies: 2,
+        ply_direction: TwistDirection::S,
+        twist_angle: 35.0,
+        fiber_mode: FiberMode::Balanced,
+        fibers_per_ply: 5,
+        fiber_depth: 0.12,
+        cable_groups: 2,
+        cable_angle: 25.0,
+    },
+];
 
 /// Every value `dispatch` needs that isn't a direct, per-pixel-identical
 /// copy of an artist param — the one-time geometry solve
@@ -461,9 +575,50 @@ pub fn dispatch(
 mod tests {
     use super::{
         dispatch, packing, turns_from_angle, FiberMode, ThreadOutputKeys, ThreadShapeParams,
-        TwistDirection,
+        TwistDirection, PRESETS,
     };
     use crate::test_support::RESOLUTION;
+
+    #[test]
+    fn preset_names_are_unique() {
+        let mut names: Vec<&str> = PRESETS.iter().map(|p| p.name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), PRESETS.len(), "duplicate preset name");
+    }
+
+    /// "4-Ply Cable" means 2 groups of 2-ply (4 strands total via
+    /// cabling), not literally Plies 4 — regression test for exactly the
+    /// mix-up this preset's own doc comment warns about.
+    #[test]
+    fn four_ply_cable_preset_is_two_groups_of_two_plies() {
+        let preset = PRESETS
+            .iter()
+            .find(|p| p.name == "4-Ply Cable")
+            .expect("4-Ply Cable preset should exist");
+        assert_eq!(preset.plies, 2);
+        assert_eq!(preset.cable_groups, 2);
+    }
+
+    #[test]
+    fn every_preset_renders_without_panicking() {
+        for preset in PRESETS {
+            let params = ThreadShapeParams {
+                threads: preset.threads,
+                thickness: preset.thickness,
+                plies: preset.plies,
+                ply_direction: preset.ply_direction,
+                twist_angle: preset.twist_angle,
+                fiber_mode: preset.fiber_mode,
+                fibers_per_ply: preset.fibers_per_ply,
+                fiber_depth: preset.fiber_depth,
+                cable_groups: preset.cable_groups,
+                cable_angle: preset.cable_angle,
+                seed: 1,
+            };
+            let _ = render(&params);
+        }
+    }
 
     struct Rendered {
         height: Vec<u8>,

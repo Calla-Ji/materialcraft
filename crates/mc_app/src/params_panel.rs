@@ -104,6 +104,79 @@ fn thread_seed_hint(
     }
 }
 
+/// A dropdown of common named yarn constructions (values confirmed against
+/// the owner's own screenshots of each one actually rendered, per
+/// `mc_nodes::thread_shape::PRESETS`'s own doc comment) that set several of
+/// Thread's params at once — the same one-click-starting-point idea as
+/// Pattern Generator's own Shape input, just for an entire construction
+/// instead of one silhouette. Every param a preset touches stays a normal,
+/// live, editable slider afterward; this is a one-shot action, not a mode
+/// — there's deliberately no "which preset is currently active" indicator,
+/// since editing even one slider after applying a preset already makes
+/// that concept meaningless (the result isn't "that preset" anymore, it's
+/// just whatever the sliders currently say).
+fn thread_preset_picker(
+    ui: &mut egui::Ui,
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    id: mc_core::NodeId,
+    node_kind: &str,
+) {
+    if node_kind != "thread_shape" {
+        return;
+    }
+    let mut chosen = None;
+    egui::ComboBox::from_label("Preset")
+        .selected_text("Choose\u{2026}")
+        .show_ui(ui, |ui| {
+            for preset in mc_nodes::thread_shape::PRESETS {
+                if ui.selectable_label(false, preset.name).clicked() {
+                    chosen = Some(preset);
+                }
+            }
+        });
+    if let Some(preset) = chosen {
+        commit_once_multi(
+            graph,
+            history,
+            id,
+            &[
+                ("threads", mc_core::ParamValue::Int(preset.threads as i32)),
+                ("thickness", mc_core::ParamValue::Float(preset.thickness)),
+                ("plies", mc_core::ParamValue::Int(preset.plies as i32)),
+                (
+                    "ply_direction",
+                    mc_core::ParamValue::Enum(preset.ply_direction.name().to_string()),
+                ),
+                (
+                    "twist_angle",
+                    mc_core::ParamValue::Float(preset.twist_angle),
+                ),
+                (
+                    "fiber_mode",
+                    mc_core::ParamValue::Enum(preset.fiber_mode.name().to_string()),
+                ),
+                (
+                    "fibers_per_ply",
+                    mc_core::ParamValue::Int(preset.fibers_per_ply as i32),
+                ),
+                (
+                    "fiber_depth",
+                    mc_core::ParamValue::Float(preset.fiber_depth),
+                ),
+                (
+                    "cable_groups",
+                    mc_core::ParamValue::Int(preset.cable_groups as i32),
+                ),
+                (
+                    "cable_angle",
+                    mc_core::ParamValue::Float(preset.cable_angle),
+                ),
+            ],
+        );
+    }
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     graph: &mut mc_core::Graph,
@@ -144,6 +217,8 @@ fn show_inner(
 
     ui.heading(def.display_name);
     ui.weak(def.tooltip);
+
+    thread_preset_picker(ui, graph, history, id, &node_kind);
 
     // A connected-vs-fallback status line for inputs where that's genuinely
     // ambiguous from the rendered result alone (e.g. a connected Fiber using
