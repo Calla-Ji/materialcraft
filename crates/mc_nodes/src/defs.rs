@@ -76,6 +76,14 @@ pub enum ParamSpecKind {
     Text {
         default: &'static str,
     },
+    /// The Path node's own vector curve data (PATH_NODE_SPEC.md §1-2) — no
+    /// static default beyond `mc_core::Path::default()` (empty, Wrap on):
+    /// a fresh Path node starts blank for the user to draw into. `Wrap`
+    /// itself lives *inside* the stored `Path` value (its own field), not
+    /// as a separate param here, so there's exactly one source of truth
+    /// for what a Path node holds — the editor's own Wrap checkbox reads
+    /// and writes that same field.
+    Path,
 }
 
 impl ParamSpec {
@@ -91,6 +99,7 @@ impl ParamSpec {
             ParamSpecKind::Vec2 { default, .. } => ParamValue::Vec2(default),
             ParamSpecKind::ImagePath => ParamValue::Image(mc_core::ImageRef::default()),
             ParamSpecKind::Text { default } => ParamValue::Text(default.to_string()),
+            ParamSpecKind::Path => ParamValue::Path(mc_core::Path::default()),
         }
     }
 }
@@ -1145,6 +1154,33 @@ static NODE_DEFS: &[NodeDef] = &[
                 kind: ParamSpecKind::Seed { default: 1 },
             },
         ],
+    },
+    NodeDef {
+        kind: "path",
+        display_name: "Path",
+        category: "Generators/Patterns",
+        tooltip: "An editable vector curve — draw an ornament by hand (click a segment \
+                  to add a point, drag handles to curve it) or paste an SVG, then feed it \
+                  into a Stitch node.",
+        inputs: &[],
+        outputs: &[
+            PortSpec {
+                name: "path",
+                display_name: "Path",
+                port_type: PortType::Path,
+            },
+            PortSpec {
+                name: "preview_mask",
+                display_name: "Preview Mask",
+                port_type: PortType::Gray,
+            },
+        ],
+        params: &[ParamSpec {
+            name: "path",
+            display_name: "Path",
+            tooltip: "The curve's own point/handle data — edited in the 2D View, not here.",
+            kind: ParamSpecKind::Path,
+        }],
     },
     NodeDef {
         kind: "knit",

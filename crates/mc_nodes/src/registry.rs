@@ -13,7 +13,7 @@ use crate::{
     curve, data_corrupt, directional_blur, directional_warp, dither_pattern, edge_detect,
     fabric_generator, fractal_sum, gradient_linear, gradient_map, gradient_radial,
     grayscale_conversion, height_to_ao, height_to_normal, histogram_scan, hsl_adjust, image_import,
-    invert, knit, levels, ordered_dither, palette_dither, perlin, scanline_jitter, shape,
+    invert, knit, levels, ordered_dither, palette_dither, path, perlin, scanline_jitter, shape,
     simplex_noise, slope_blur, thread_shape, threshold, tile_generator, transform2d, uniform_color,
     voronoi, warp, white_noise,
 };
@@ -184,6 +184,26 @@ pub fn evaluate(
                         },
                         resolution,
                         &params,
+                    );
+                }
+                "path" => {
+                    // The "path" output isn't a texture at all (see
+                    // mc_core::PortType::Path's own doc comment) — nothing
+                    // to dispatch for it here. Only Preview Mask is a real
+                    // GPU raster.
+                    let preview_mask_key = texture_key(id, "preview_mask");
+                    let path_value = node
+                        .params
+                        .get("path")
+                        .and_then(mc_core::ParamValue::as_path)
+                        .cloned()
+                        .unwrap_or_default();
+                    path::dispatch_preview_mask(
+                        gpu,
+                        pool,
+                        &preview_mask_key,
+                        resolution,
+                        &path_value,
                     );
                 }
                 "knit" => {
@@ -592,6 +612,24 @@ mod tests {
         let height_out = graph.add_node(mc_core::Node::new("output_height"));
         graph
             .connect(knit_node, "height", height_out, "input")
+            .unwrap();
+        graph.settings.resolution = 32;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+    }
+
+    /// A fresh Path node (no points — the user hasn't drawn anything yet)
+    /// should still evaluate without panicking, same contract as every
+    /// other node's default instantiation.
+    #[test]
+    fn path_default_instantiation_evaluates() {
+        let mut graph = mc_core::Graph::new();
+        let path_node = graph.add_node(crate::defs::node_def("path").unwrap().instantiate());
+        let mask_out = graph.add_node(mc_core::Node::new("output_height"));
+        graph
+            .connect(path_node, "preview_mask", mask_out, "input")
             .unwrap();
         graph.settings.resolution = 32;
 

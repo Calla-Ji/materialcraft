@@ -502,6 +502,114 @@ pub fn sections(path: &Path, corner_threshold_deg: f64) -> Vec<Section> {
     out
 }
 
+// ---------------------------------------------------------------------
+// Step 2: Preview Mask — a thin 2px-wide raster of the whole path
+// (PATH_NODE_SPEC.md §1), reusing Knit's tube_raster rather than a
+// second rasterizer.
+// ---------------------------------------------------------------------
+
+/// Half the preview line's own width, in pixels (PATH_NODE_SPEC.md §1:
+/// "the curve drawn 2 px wide").
+const PREVIEW_HALF_WIDTH_PX: f32 = 1.0;
+
+/// Dense position-only samples of one subpath, directly from its own
+/// `CubicBez` segments — deliberately *not* [`sections`]'s arc-length
+/// table: Preview Mask needs no corner breaks, mitre bisectors, or exact
+/// arc length, just enough points for a smooth-looking line, and it
+/// re-renders on every frame of a drag gesture (an editor concern Step 1
+/// didn't have), so it stays far cheaper than `sections`'s exact-arclen
+/// tabulation at 400 samples/segment.
+fn preview_polyline(sp: &SubPath, samples_per_segment: usize) -> Vec<[f64; 2]> {
+    use kurbo::ParamCurve;
+    let segs = segments(sp);
+    let mut out = Vec::new();
+    for (i, c) in segs.iter().enumerate() {
+        let start = usize::from(i != 0); // skip the duplicate joint sample
+        for j in start..=samples_per_segment {
+            let t = j as f64 / samples_per_segment as f64;
+            let p = c.eval(t);
+            out.push([p.x, p.y]);
+        }
+    }
+    out
+}
+
+/// Renders `path` as a thin outline into `keys`' Preview Mask texture —
+/// every subpath's own polyline, as constant-radius capsules
+/// ([`crate::tube_raster`]), with wrap-around handled the same way Knit's
+/// own closing segments are (raw, possibly out-of-`[0,1)` coordinates;
+/// `tube_raster`'s minimum-image test does the rest). `path.wrap == false`
+/// isn't specially handled yet — Preview Mask always renders as if
+/// wrapping, matching `tube_raster`'s own native behavior; a true
+/// wrap-off clip is Stitch's own concern once its GPU raster step adds it
+/// (STITCH_NODE_SPEC.md §7: "Wrap off: clip at the tile edge").
+pub fn dispatch_preview_mask(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    key: &str,
+    resolution: u32,
+    path: &Path,
+) {
+    const SAMPLES_PER_SEGMENT: usize = 32;
+    let radius = PREVIEW_HALF_WIDTH_PX / resolution as f32;
+
+    let mut segs = Vec::new();
+    for (tag, sp) in path.subpaths.iter().enumerate() {
+        let poly = preview_polyline(sp, SAMPLES_PER_SEGMENT);
+        let n = poly.len();
+        if n < 2 {
+            continue;
+        }
+        for i in 0..n - 1 {
+            segs.push(crate::tube_raster::Segment {
+                p0: [poly[i][0] as f32, poly[i][1] as f32, 0.0],
+                r0: radius,
+                p1: [poly[i + 1][0] as f32, poly[i + 1][1] as f32, 0.0],
+                r1: radius,
+                tag: tag as u32,
+            });
+        }
+        if sp.closed {
+            segs.push(crate::tube_raster::Segment {
+                p0: [poly[n - 1][0] as f32, poly[n - 1][1] as f32, 0.0],
+                r0: radius,
+                p1: [poly[0][0] as f32, poly[0][1] as f32, 0.0],
+                r1: radius,
+                tag: tag as u32,
+            });
+        }
+    }
+
+    if segs.is_empty() {
+        // A fresh Path node (nothing drawn yet) has nothing to raster —
+        // tube_raster requires at least one segment, so fill solid black
+        // directly rather than dispatching a degenerate pass.
+        gpu.fill_rgba8(pool, key, resolution, [0, 0, 0, 255]);
+        return;
+    }
+
+    // tube_raster's own height/ply_id outputs aren't meaningful for a flat
+    // preview outline — route them to scratch keys this function doesn't
+    // expose, and reuse its `mask` output directly as Preview Mask.
+    let height_key = format!("{key}__preview_height_scratch");
+    let ply_id_key = format!("{key}__preview_ply_id_scratch");
+    let cell_key = format!("{key}__preview_cell_scratch");
+    crate::tube_raster::dispatch(
+        gpu,
+        pool,
+        crate::tube_raster::RasterOutputKeys {
+            height: &height_key,
+            mask: key,
+            ply_id: &ply_id_key,
+            cell: &cell_key,
+        },
+        resolution,
+        &segs,
+        1,
+        radius,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -816,5 +924,43 @@ mod tests {
         let closed = SubPath::new(open.points.clone(), true);
         assert_eq!(segments(&open).len(), 1);
         assert_eq!(segments(&closed).len(), 2);
+    }
+
+    // --- Step 2: Preview Mask ---
+
+    #[test]
+    fn preview_mask_is_blank_for_an_empty_path() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        dispatch_preview_mask(&mut gpu, &mut pool, "preview", 64, &Path::default());
+        let pixels = gpu.read_rgba8(pool.texture("preview").unwrap(), 64);
+        assert!(pixels.iter().step_by(4).all(|&v| v == 0));
+    }
+
+    #[test]
+    fn preview_mask_draws_something_for_the_demo_path() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        dispatch_preview_mask(&mut gpu, &mut pool, "preview", 256, &demo_path());
+        let pixels = gpu.read_rgba8(pool.texture("preview").unwrap(), 256);
+        let lit = pixels.iter().step_by(4).filter(|&&v| v > 0).count();
+        assert!(lit > 0, "demo path should draw a visible outline");
+        // A thin 2px line shouldn't cover a large fraction of the tile.
+        let total = pixels.len() / 4;
+        assert!(
+            (lit as f32) < 0.25 * total as f32,
+            "outline coverage looks too thick: {lit}/{total}"
+        );
+    }
+
+    #[test]
+    fn preview_mask_is_deterministic() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        dispatch_preview_mask(&mut gpu, &mut pool, "a", 128, &demo_path());
+        dispatch_preview_mask(&mut gpu, &mut pool, "b", 128, &demo_path());
+        let a = gpu.read_rgba8(pool.texture("a").unwrap(), 128);
+        let b = gpu.read_rgba8(pool.texture("b").unwrap(), 128);
+        assert_eq!(a, b);
     }
 }

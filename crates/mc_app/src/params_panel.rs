@@ -104,7 +104,8 @@ fn randomize_all_params(
                 mc_core::ParamValue::Text(default.to_string())
             }
             mc_nodes::defs::ParamSpecKind::Gradient { .. }
-            | mc_nodes::defs::ParamSpecKind::ImagePath => continue,
+            | mc_nodes::defs::ParamSpecKind::ImagePath
+            | mc_nodes::defs::ParamSpecKind::Path => continue,
         };
         out.push((param.name, value));
     }
@@ -952,6 +953,44 @@ fn show_inner(
                     (None, _) => "(none loaded)".to_string(),
                 };
                 ui.weak(status).on_hover_text(param.tooltip);
+            }
+            mc_nodes::defs::ParamSpecKind::Path => {
+                let path_value = current
+                    .as_ref()
+                    .and_then(mc_core::ParamValue::as_path)
+                    .cloned()
+                    .unwrap_or_default();
+                let point_count: usize = path_value.subpaths.iter().map(|sp| sp.points.len()).sum();
+                ui.weak(format!(
+                    "{} subpath{}, {} point{} — edit in the 2D View",
+                    path_value.subpaths.len(),
+                    if path_value.subpaths.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    },
+                    point_count,
+                    if point_count == 1 { "" } else { "s" },
+                ))
+                .on_hover_text(param.tooltip);
+
+                let mut wrap = path_value.wrap;
+                if ui
+                    .checkbox(&mut wrap, "Wrap")
+                    .on_hover_text(
+                        "Points may be dragged past the tile edge and reappear on the \
+                         other side, so a border can tile seamlessly.",
+                    )
+                    .changed()
+                {
+                    commit_once(
+                        graph,
+                        history,
+                        id,
+                        param.name,
+                        mc_core::ParamValue::Path(mc_core::Path { wrap, ..path_value }),
+                    );
+                }
             }
         }
     }
