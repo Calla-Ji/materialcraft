@@ -22,6 +22,7 @@ mod params_panel;
 mod path_editor;
 mod theme;
 mod toast;
+mod twod_toolbar;
 mod viewport3d;
 mod viewport3d_panels;
 
@@ -258,190 +259,119 @@ impl eframe::App for MaterialCreatorApp {
                 dock::CrateId::Parameters => {
                     params_panel::show(ui, graph, history, *selected, param_drag);
                 }
-                dock::CrateId::TwoDView => match preview_texture_id {
-                    Some(texture_id) => {
-                        const PADDING: f32 = 16.0;
-                        const ICON_SIZE: f32 = 28.0;
+                dock::CrateId::TwoDView => {
+                    let full_rect = ui.available_rect_before_wrap();
+                    let toolbar_content_rect = twod_toolbar::show(
+                        ui,
+                        full_rect,
+                        &mut two_d_view.tiling_preview,
+                        path_editor,
+                        graph,
+                        *selected,
+                    );
 
-                        let full_rect = ui.available_rect_before_wrap();
-                        let content_rect = full_rect.shrink(PADDING);
+                    match preview_texture_id {
+                        Some(texture_id) => {
+                            const PADDING: f32 = 16.0;
 
-                        // Drag-to-pan, under the tiling icon button below so
-                        // the button's own click still wins there. While a
-                        // Path node is selected, this same response drives
-                        // the path editor's own point/handle dragging
-                        // instead (see below) — panning a vector editor
-                        // mid-edit would be more confusing than useful, and
-                        // reusing one interact region avoids two senses
-                        // racing for the same pointer input.
-                        let drag_response = ui.interact(
-                            content_rect,
-                            ui.id().with("two_d_view_drag"),
-                            egui::Sense::click_and_drag(),
-                        );
-                        let editing_path = selected
-                            .and_then(|id| graph.node(id))
-                            .is_some_and(|n| n.kind == "path");
-                        if drag_response.dragged() && !editing_path {
-                            two_d_view.pan += drag_response.drag_delta();
-                        }
+                            let content_rect = toolbar_content_rect.shrink(PADDING);
 
-                        if two_d_view.tiling_preview {
-                            // Each tile is a third of the shorter side, so
-                            // the panel always shows a handful of full
-                            // repeats regardless of its own size/aspect —
-                            // "fills the window" rather than a fixed 2x2/3x3
-                            // count that could leave empty space in a large
-                            // or oddly-shaped panel.
-                            let tile_px =
-                                (content_rect.width().min(content_rect.height()) / 3.0).max(16.0);
-                            let uv_rect = egui::Rect::from_min_size(
-                                egui::pos2(
-                                    -two_d_view.pan.x / tile_px,
-                                    -two_d_view.pan.y / tile_px,
-                                ),
-                                egui::vec2(
-                                    content_rect.width() / tile_px,
-                                    content_rect.height() / tile_px,
-                                ),
-                            );
-                            ui.painter().image(
-                                texture_id,
+                            // Drag-to-pan, under the editor's own point/handle
+                            // dragging — while a Path node is selected, this
+                            // same response drives that instead (see below);
+                            // panning a vector editor mid-edit would be more
+                            // confusing than useful, and reusing one interact
+                            // region avoids two senses racing for the same
+                            // pointer input.
+                            let drag_response = ui.interact(
                                 content_rect,
-                                uv_rect,
-                                egui::Color32::WHITE,
+                                ui.id().with("two_d_view_drag"),
+                                egui::Sense::click_and_drag(),
                             );
-                        } else {
-                            let size = content_rect.width().min(content_rect.height());
-                            // Clamped so a drag can slide the tile around its
-                            // padded box but never off it entirely — `pan`
-                            // itself is left unclamped (not reassigned here)
-                            // so a wilder pan is still there, restored
-                            // automatically, if tiling is turned back on.
-                            let half_slack =
-                                ((content_rect.size() - egui::Vec2::splat(size)) * 0.5).abs();
-                            let pan = egui::vec2(
-                                two_d_view.pan.x.clamp(-half_slack.x, half_slack.x),
-                                two_d_view.pan.y.clamp(-half_slack.y, half_slack.y),
-                            );
-                            let image_rect = egui::Rect::from_center_size(
-                                content_rect.center() + pan,
-                                egui::Vec2::splat(size),
-                            );
-                            ui.painter().image(
-                                texture_id,
-                                image_rect,
-                                egui::Rect::from_min_max(
-                                    egui::pos2(0.0, 0.0),
-                                    egui::pos2(1.0, 1.0),
-                                ),
-                                egui::Color32::WHITE,
-                            );
+                            let editing_path = selected
+                                .and_then(|id| graph.node(id))
+                                .is_some_and(|n| n.kind == "path");
+                            if drag_response.dragged() && !editing_path {
+                                two_d_view.pan += drag_response.drag_delta();
+                            }
 
-                            if editing_path {
-                                if let Some(id) = *selected {
-                                    path_editor::show(
-                                        ui,
-                                        image_rect,
-                                        graph,
-                                        history,
-                                        id,
-                                        path_editor,
-                                        &drag_response,
-                                    );
+                            if two_d_view.tiling_preview {
+                                // Each tile is a third of the shorter side, so
+                                // the panel always shows a handful of full
+                                // repeats regardless of its own size/aspect —
+                                // "fills the window" rather than a fixed 2x2/3x3
+                                // count that could leave empty space in a large
+                                // or oddly-shaped panel.
+                                let tile_px = (content_rect.width().min(content_rect.height())
+                                    / 3.0)
+                                    .max(16.0);
+                                let uv_rect = egui::Rect::from_min_size(
+                                    egui::pos2(
+                                        -two_d_view.pan.x / tile_px,
+                                        -two_d_view.pan.y / tile_px,
+                                    ),
+                                    egui::vec2(
+                                        content_rect.width() / tile_px,
+                                        content_rect.height() / tile_px,
+                                    ),
+                                );
+                                ui.painter().image(
+                                    texture_id,
+                                    content_rect,
+                                    uv_rect,
+                                    egui::Color32::WHITE,
+                                );
+                            } else {
+                                let size = content_rect.width().min(content_rect.height());
+                                // Clamped so a drag can slide the tile around its
+                                // padded box but never off it entirely — `pan`
+                                // itself is left unclamped (not reassigned here)
+                                // so a wilder pan is still there, restored
+                                // automatically, if tiling is turned back on.
+                                let half_slack =
+                                    ((content_rect.size() - egui::Vec2::splat(size)) * 0.5).abs();
+                                let pan = egui::vec2(
+                                    two_d_view.pan.x.clamp(-half_slack.x, half_slack.x),
+                                    two_d_view.pan.y.clamp(-half_slack.y, half_slack.y),
+                                );
+                                let image_rect = egui::Rect::from_center_size(
+                                    content_rect.center() + pan,
+                                    egui::Vec2::splat(size),
+                                );
+                                ui.painter().image(
+                                    texture_id,
+                                    image_rect,
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(0.0, 0.0),
+                                        egui::pos2(1.0, 1.0),
+                                    ),
+                                    egui::Color32::WHITE,
+                                );
+
+                                if editing_path {
+                                    if let Some(id) = *selected {
+                                        path_editor::show(
+                                            ui,
+                                            image_rect,
+                                            graph,
+                                            history,
+                                            id,
+                                            path_editor,
+                                            &drag_response,
+                                        );
+                                    }
                                 }
                             }
                         }
-
-                        // Tiling toggle, top-right corner overlay — same
-                        // selectable-icon-button look as the 3D viewport's
-                        // toolbar (`viewport3d_panels::icon_button`), just a
-                        // plain on/off instead of a slide-out panel.
-                        let icon_rect = egui::Rect::from_min_size(
-                            egui::pos2(full_rect.right() - ICON_SIZE - 6.0, full_rect.top() + 6.0),
-                            egui::Vec2::splat(ICON_SIZE),
-                        );
-                        let icon_response = ui.interact(
-                            icon_rect,
-                            ui.id().with("two_d_view_tiling_toggle"),
-                            egui::Sense::click(),
-                        );
-                        let visuals = ui
-                            .style()
-                            .interact_selectable(&icon_response, two_d_view.tiling_preview);
-                        let painter = ui.painter();
-                        if two_d_view.tiling_preview || icon_response.hovered() {
-                            painter.rect_filled(icon_rect, 4.0, visuals.bg_fill);
-                        }
-                        painter.text(
-                            icon_rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            '\u{f015}'.to_string(), // grid_3x3
-                            egui::FontId::new(
-                                20.0,
-                                egui::FontFamily::Name("material_icons_round".into()),
-                            ),
-                            visuals.fg_stroke.color,
-                        );
-                        let icon_response = icon_response.on_hover_text(
-                            "Show the pattern tiled across the whole view, to check how it \
-                             seams.",
-                        );
-                        if icon_response.clicked() {
-                            two_d_view.tiling_preview = !two_d_view.tiling_preview;
-                        }
-
-                        // Pen toggle, top-left corner — a Path node's editor
-                        // has no other on-screen entry point, so without
-                        // this button Pen mode only exists as a keyboard
-                        // shortcut nobody looking at the app would discover.
-                        // Only shown in the single-tile view, matching where
-                        // the editor itself is actually interactive.
-                        if editing_path && !two_d_view.tiling_preview {
-                            if let Some(id) = *selected {
-                                const PEN_WIDTH: f32 = 46.0;
-                                let pen_rect = egui::Rect::from_min_size(
-                                    egui::pos2(full_rect.left() + 6.0, full_rect.top() + 6.0),
-                                    egui::vec2(PEN_WIDTH, ICON_SIZE),
-                                );
-                                let pen_response = ui.interact(
-                                    pen_rect,
-                                    ui.id().with("two_d_view_pen_toggle"),
-                                    egui::Sense::click(),
-                                );
-                                let pen_on = path_editor.pen_mode();
-                                let visuals = ui.style().interact_selectable(&pen_response, pen_on);
-                                let painter = ui.painter();
-                                if pen_on || pen_response.hovered() {
-                                    painter.rect_filled(pen_rect, 4.0, visuals.bg_fill);
-                                }
-                                painter.text(
-                                    pen_rect.center(),
-                                    egui::Align2::CENTER_CENTER,
-                                    "Pen",
-                                    egui::FontId::proportional(13.0),
-                                    visuals.fg_stroke.color,
-                                );
-                                let pen_response = pen_response.on_hover_text(
-                                    "Draw new points on this curve — click empty space to \
-                                     append one, drag to pull out a handle, click the first \
-                                     point again to close. P also toggles this while \
-                                     hovering the view, Esc leaves it.",
-                                );
-                                if pen_response.clicked() {
-                                    path_editor.toggle_pen_mode(graph, id);
-                                }
-                            }
-                        }
-                    }
-                    None => {
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
+                        None => {
                             ui.add_space(8.0);
-                            ui.weak("(select a node to preview it)");
-                        });
+                            ui.horizontal(|ui| {
+                                ui.add_space(8.0);
+                                ui.weak("(select a node to preview it)");
+                            });
+                        }
                     }
-                },
+                }
                 dock::CrateId::ThreeDView => {
                     const TOOLBAR_WIDTH: f32 = 38.0;
                     let full_rect = ui.available_rect_before_wrap();
