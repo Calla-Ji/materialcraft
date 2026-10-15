@@ -28,6 +28,11 @@
 //                      point) sits between the top tip (0) and bottom tip
 //                      (1). 0.5 is centered (equal top/bottom halves).
 //   size             — how large the shape is (0..1, fraction of the tile)
+//   scale_x          — independent X stretch on top of `size`, applied
+//                      before `rotation` (so a stretched-then-rotated
+//                      ellipse/rectangle tilts as a whole). 1.0 = no
+//                      stretch.
+//   scale_y          — same, for Y.
 //   softness         — how soft the edge is (0 = hard edge)
 //   rotation         — 0..1, fraction of a full turn, on top of each kind's
 //                      own upright default (a Polygon/Star point straight
@@ -46,10 +51,12 @@ struct ShapeParams {
     leaf_width: f32,
     curvature_middle: f32,
     middle_position: f32,
+    scale_x: f32,
+    scale_y: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: ShapeParams;
-@group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(1) var output: texture_storage_2d<rgba16float, write>;
 
 fn rotate(p: vec2<f32>, angle: f32) -> vec2<f32> {
     let c = cos(angle);
@@ -186,7 +193,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let uv = (vec2<f32>(id.xy) + 0.5) / f32(params.resolution);
     var p = uv - vec2<f32>(0.5, 0.5);
     let sides_f = f32(params.sides);
+    // Rotate the world-space query point into the shape's own local frame
+    // first (the existing, already-correct step every kind's rotation
+    // already relied on), *then* stretch — not the other way around. For
+    // Disc specifically, stretching before rotating would be invisible:
+    // `length(rotate(v, angle)) == length(v)` for any angle (rotation
+    // preserves vector length), so a stretch-then-rotate ellipse's
+    // apparent orientation could never actually change with Rotation.
+    // Stretching in the already-local (post-rotate) frame instead makes
+    // the stretch's own axes rotate along with the shape, as expected.
     p = rotate(p, params.rotation * 6.283185307 + base_offset(params.kind, sides_f));
+    p = p / vec2<f32>(max(params.scale_x, 0.0001), max(params.scale_y, 0.0001));
 
     let edge = params.size * 0.5;
     let softness = max(params.softness * 0.5, 0.0005);

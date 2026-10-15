@@ -46,6 +46,21 @@ pub struct ShapeParams {
     pub kind: ShapeKind,
     pub sides: u32,
     pub size: f32,
+    /// Independent X/Y stretch on top of `size`'s own uniform scale,
+    /// applied in the shape's own local space *after* `rotation` carries
+    /// the query point into that frame (`shape.wgsl`'s own comment on
+    /// this has the full reasoning — stretching before rotating a Disc
+    /// specifically would be an invisible no-op, since rotation preserves
+    /// vector length). The net effect is the usual one: stretching a Disc
+    /// into an ellipse and then rotating it tilts the whole ellipse, the
+    /// same result every DCC tool gives for a non-uniformly scaled, then
+    /// rotated, object. 1.0 is no stretch on that axis; this is how every
+    /// shape kind (not just Disc/Square) gets a real elliptical or
+    /// rectangular variant, since the stretch happens on the shared input
+    /// coordinate every kind's own distance field reads, not duplicated
+    /// per-kind math.
+    pub scale_x: f32,
+    pub scale_y: f32,
     pub softness: f32,
     pub rotation: f32,
     /// Star only: how deep the points cut in, 1.0..0.05. At 1.0 the star's
@@ -75,7 +90,11 @@ impl Default for ShapeParams {
             kind: ShapeKind::Disc,
             sides: 5,
             size: 0.6,
-            softness: 0.05,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            // The owner's own request: the preset should always start
+            // with a hard edge, not the old 0.05 default.
+            softness: 0.0,
             rotation: 0.0,
             point_depth: 0.5,
             curvature_top: 0.6,
@@ -107,6 +126,14 @@ impl ShapeParams {
                 .get("size")
                 .and_then(mc_core::ParamValue::as_float)
                 .unwrap_or(defaults.size),
+            scale_x: params
+                .get("scale_x")
+                .and_then(mc_core::ParamValue::as_float)
+                .unwrap_or(defaults.scale_x),
+            scale_y: params
+                .get("scale_y")
+                .and_then(mc_core::ParamValue::as_float)
+                .unwrap_or(defaults.scale_y),
             softness: params
                 .get("softness")
                 .and_then(mc_core::ParamValue::as_float)
@@ -166,7 +193,7 @@ pub fn dispatch(
         &gpu.device,
         key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -203,8 +230,8 @@ pub fn dispatch(
     gpu.queue.submit(Some(encoder.finish()));
 }
 
-fn pack_params(resolution: u32, params: &ShapeParams) -> [u8; 48] {
-    let mut bytes = [0u8; 48];
+fn pack_params(resolution: u32, params: &ShapeParams) -> [u8; 56] {
+    let mut bytes = [0u8; 56];
     bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     bytes[4..8].copy_from_slice(&params.kind.as_u32().to_le_bytes());
     bytes[8..12].copy_from_slice(&params.sides.to_le_bytes());
@@ -217,6 +244,8 @@ fn pack_params(resolution: u32, params: &ShapeParams) -> [u8; 48] {
     bytes[36..40].copy_from_slice(&params.leaf_width.to_le_bytes());
     bytes[40..44].copy_from_slice(&params.curvature_middle.to_le_bytes());
     bytes[44..48].copy_from_slice(&params.middle_position.to_le_bytes());
+    bytes[48..52].copy_from_slice(&params.scale_x.to_le_bytes());
+    bytes[52..56].copy_from_slice(&params.scale_y.to_le_bytes());
     bytes
 }
 
@@ -563,5 +592,100 @@ mod tests {
                 "{name:?} should parse"
             );
         }
+    }
+
+    #[test]
+    fn default_softness_is_zero() {
+        assert_eq!(ShapeParams::default().softness, 0.0);
+    }
+
+    /// Horizontal extent (inside-pixel count along the center row) of a
+    /// `scale_x = 2.0` Disc should end up roughly twice its own vertical
+    /// extent (inside-pixel count along the center column, `scale_y`
+    /// untouched) — a real ellipse, not just a bigger circle.
+    #[test]
+    fn scale_x_stretches_a_disc_into_an_ellipse() {
+        let r = RESOLUTION as usize;
+        let params = ShapeParams {
+            kind: ShapeKind::Disc,
+            size: 0.3,
+            scale_x: 2.0,
+            ..ShapeParams::default()
+        };
+        let pixels = render(&params);
+
+        let horizontal_extent = (0..r)
+            .filter(|&x| pixels[(r / 2 * r + x) * 4] > 128)
+            .count();
+        let vertical_extent = (0..r)
+            .filter(|&y| pixels[(y * r + r / 2) * 4] > 128)
+            .count();
+
+        let ratio = horizontal_extent as f32 / vertical_extent as f32;
+        assert!(
+            (1.7..=2.3).contains(&ratio),
+            "scale_x = 2.0 should roughly double the horizontal extent relative to vertical \
+             (horizontal={horizontal_extent}, vertical={vertical_extent}, ratio={ratio})"
+        );
+    }
+
+    /// Same idea as the Disc case, but for Square — confirms the stretch
+    /// is applied uniformly across shape kinds (via the shared input
+    /// coordinate every kind's own distance field reads), not special-
+    /// cased just for Disc.
+    #[test]
+    fn scale_y_stretches_a_square_into_a_rectangle() {
+        let r = RESOLUTION as usize;
+        let params = ShapeParams {
+            kind: ShapeKind::Square,
+            size: 0.3,
+            scale_y: 2.0,
+            ..ShapeParams::default()
+        };
+        let pixels = render(&params);
+
+        let horizontal_extent = (0..r)
+            .filter(|&x| pixels[(r / 2 * r + x) * 4] > 128)
+            .count();
+        let vertical_extent = (0..r)
+            .filter(|&y| pixels[(y * r + r / 2) * 4] > 128)
+            .count();
+
+        let ratio = vertical_extent as f32 / horizontal_extent as f32;
+        assert!(
+            (1.7..=2.3).contains(&ratio),
+            "scale_y = 2.0 should roughly double the vertical extent relative to horizontal \
+             (horizontal={horizontal_extent}, vertical={vertical_extent}, ratio={ratio})"
+        );
+    }
+
+    /// A stretched ellipse rotated 90 degrees should swap its own extents
+    /// — proof the stretch happens in the shape's own local space before
+    /// `rotation`, not fixed to the image's x/y axes afterward.
+    #[test]
+    fn stretch_rotates_with_the_shape() {
+        let r = RESOLUTION as usize;
+        let params = ShapeParams {
+            kind: ShapeKind::Disc,
+            size: 0.3,
+            scale_x: 2.0,
+            rotation: 0.25, // a quarter turn
+            ..ShapeParams::default()
+        };
+        let pixels = render(&params);
+
+        let horizontal_extent = (0..r)
+            .filter(|&x| pixels[(r / 2 * r + x) * 4] > 128)
+            .count();
+        let vertical_extent = (0..r)
+            .filter(|&y| pixels[(y * r + r / 2) * 4] > 128)
+            .count();
+
+        let ratio = vertical_extent as f32 / horizontal_extent as f32;
+        assert!(
+            (1.7..=2.3).contains(&ratio),
+            "a scale_x = 2.0 ellipse rotated a quarter turn should now be tall, not wide \
+             (horizontal={horizontal_extent}, vertical={vertical_extent}, ratio={ratio})"
+        );
     }
 }
