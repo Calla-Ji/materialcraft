@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // display_encode.wgsl — encodes a linear-space source texture to sRGB gamma
-// for on-screen display.
+// for on-screen display, optionally isolating a single channel first.
 //
 // Every node's output texture is stored linear (CLAUDE.md §8: sRGB encoding
 // only happens at specific boundaries). egui's own renderer assumes any
@@ -10,12 +10,22 @@
 // produces the sRGB-encoded copy egui actually needs, using the exact same
 // piecewise OETF `mc_export::linear_to_srgb_u8` uses, so the 2D View/
 // thumbnails match an exported PNG pixel-for-pixel (modulo 8-bit rounding).
+//
+// `channel` (CLAUDE.md §9's "channel view (RGB / R / G / B / A)", built as
+// part of the 2D View's own toolbar) picks a single channel to broadcast
+// across R/G/B instead of passing all three through — the only way to
+// actually judge e.g. a packed ORM texture's Roughness channel on its own,
+// since the combined RGB view of three unrelated grayscale channels
+// necessarily reads as an arbitrary, not-meant-to-look-sensible color.
+// Alpha is broadcast raw (no sRGB) when isolated, same as every other
+// place in this codebase that treats alpha as linear coverage, not a
+// gamma-encoded color channel (`mc_export::apply_color_space` skips it too).
 
 struct DisplayEncodeParams {
     resolution: u32,
+    channel: u32, // 0 = RGB, 1 = R, 2 = G, 3 = B, 4 = A
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: DisplayEncodeParams;
@@ -36,6 +46,20 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coords = vec2<i32>(id.xy);
     let src = textureLoad(source_tex, coords, 0);
+
+    if params.channel == 4u {
+        // Alpha, raw — no sRGB, and always fully opaque so the isolated
+        // channel is actually visible regardless of the source's own alpha.
+        textureStore(output, coords, vec4<f32>(vec3<f32>(src.a), 1.0));
+        return;
+    }
+    if params.channel >= 1u && params.channel <= 3u {
+        let value = select(select(src.b, src.g, params.channel == 2u), src.r, params.channel == 1u);
+        let encoded = linear_to_srgb(value);
+        textureStore(output, coords, vec4<f32>(vec3<f32>(encoded), 1.0));
+        return;
+    }
+
     let encoded = vec3<f32>(
         linear_to_srgb(src.r),
         linear_to_srgb(src.g),

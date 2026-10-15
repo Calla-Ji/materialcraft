@@ -9,6 +9,8 @@
 //! same idea as Blender's Material Preview shading mode or Unreal's material
 //! preview sphere, just scoped to exactly what CLAUDE.md asks for.
 
+use std::collections::HashMap;
+
 use glam::{Mat4, Vec3};
 
 const VERTEX_ATTRS: [wgpu::VertexAttribute; 4] =
@@ -554,6 +556,25 @@ impl Viewport3d {
             let Some(key) = resolve_channel_key(graph, kind) else {
                 return fallback.clone();
             };
+            // This bind group's own sampler (binding 6) always filters —
+            // every real channel texture is `Rgba16Float`, which supports
+            // that, *except* a node whose own output is deliberately
+            // higher-precision (so far just Gabor Noise's `raw`, stored as
+            // `Rgba32Float`, which WebGPU never allows filtered sampling
+            // of without an opt-in device feature this app doesn't
+            // request). Falling back here — treating it the same as
+            // nothing meaningfully connected — is the same call its own
+            // doc comment already makes ("for math nodes downstream, not
+            // direct display"); the alternative (a second, non-filtering
+            // bind group layout + pipeline variant just for this one
+            // case) is a lot of machinery for a channel that was never a
+            // sensible thing to view directly in the first place.
+            let Some(texture) = pool.texture(&key) else {
+                return fallback.clone();
+            };
+            if texture.format() != wgpu::TextureFormat::Rgba16Float {
+                return fallback.clone();
+            }
             crate::mipgen::generate_mip_chain(gpu, pool, &key, is_normal_map);
             crate::mipgen::full_mip_view(pool, &key).unwrap_or_else(|| fallback.clone())
         };
@@ -1106,7 +1127,55 @@ fn generate_rounded_cube(segments: u32, radius: f32) -> (Vec<Vertex>, Vec<u32>) 
         }
     }
     compute_tangents(&mut vertices, &indices);
+    weld_seam_vertices(&vertices, &mut indices);
     (vertices, indices)
+}
+
+/// Welds vertices that land at the same physical position but came from
+/// different faces — every edge of this per-face-UV-mapped cube has
+/// exactly that (two faces' independently generated vertex grids meeting
+/// at the same edge, but on opposite sides of a UV seam). Without this,
+/// height displacement — which reads each vertex's own UV to sample the
+/// Height texture (`vs_main` in `viewport3d.wgsl`) — pulls each face's
+/// copy of a shared edge point by a *different* amount, whatever that
+/// face's own, unrelated UV happens to sample there, tearing the mesh
+/// open into a visible crack along every cube edge with any height
+/// contrast nearby — worse with more height detail, and *not* fixed by
+/// raising tessellation, since the crack isn't a resolution problem: it's
+/// two genuinely different target positions for what should be one
+/// shared point. Welding makes every triangle on both sides of a seam
+/// reference the exact same vertex, so there is no way for them to end up
+/// in different places — at the cost of a thin, one-row sliver where the
+/// *losing* face's own edge row shows the winning face's color instead of
+/// its own, the standard, much less visible trade-off box-mapped meshes
+/// accept instead of an open seam. Call after `compute_tangents`, not
+/// before — each vertex's tangent should come from its own face's UV
+/// gradient, not get confused by a weld that's about to make two
+/// differently-UV'd vertices share an index.
+fn weld_seam_vertices(vertices: &[Vertex], indices: &mut [u32]) {
+    // Quantized to 1e-6 — far finer than any real edge length this mesh
+    // ever produces (even at the maximum 128 segments, the shortest edge
+    // is still several orders of magnitude longer), so this only ever
+    // merges points that are the same position up to float rounding, never
+    // two distinct-but-nearby vertices.
+    const SCALE: f32 = 1_000_000.0;
+    let key = |p: [f32; 3]| -> (i64, i64, i64) {
+        (
+            (p[0] * SCALE).round() as i64,
+            (p[1] * SCALE).round() as i64,
+            (p[2] * SCALE).round() as i64,
+        )
+    };
+
+    let mut canonical: HashMap<(i64, i64, i64), u32> = HashMap::new();
+    let mut remap = vec![0u32; vertices.len()];
+    for (i, v) in vertices.iter().enumerate() {
+        let canonical_index = *canonical.entry(key(v.position)).or_insert(i as u32);
+        remap[i] = canonical_index;
+    }
+    for idx in indices.iter_mut() {
+        *idx = remap[*idx as usize];
+    }
 }
 
 /// One point of the 2D (radial-distance, height) profile that
@@ -1335,5 +1404,85 @@ fn compute_tangents(vertices: &mut [Vertex], indices: &[u32]) {
             (arbitrary - normal * normal.dot(arbitrary)).normalize()
         };
         vertex.tangent = tangent.to_array();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{generate_rounded_cube, Viewport3d};
+
+    /// Regression test for a reported bug: raising Height Scale on a Cube
+    /// or Rounded Cube tore the mesh open at its edges (a visible crack
+    /// showing the background through it), and raising Tessellation never
+    /// fixed it — because it wasn't a resolution problem. Each of the 6
+    /// faces generates its own independent UV-mapped vertex grid; two
+    /// faces' vertices at a shared edge sit at the exact same position but
+    /// carry different UVs, so height displacement (which reads each
+    /// vertex's own UV) pulled them to different final positions. This
+    /// asserts the actual fix's own invariant: among every vertex index
+    /// the mesh's triangles reference, no two *different* indices ever
+    /// point at the same physical position — so there's no shared edge
+    /// point left for displacement to disagree about.
+    #[test]
+    fn rounded_cube_has_no_duplicate_indices_at_shared_edge_positions() {
+        for radius in [0.0, 0.25] {
+            let (vertices, indices) = generate_rounded_cube(4, radius);
+            let key = |p: [f32; 3]| -> (i64, i64, i64) {
+                const SCALE: f32 = 1_000_000.0;
+                (
+                    (p[0] * SCALE).round() as i64,
+                    (p[1] * SCALE).round() as i64,
+                    (p[2] * SCALE).round() as i64,
+                )
+            };
+            let mut index_by_position: std::collections::HashMap<(i64, i64, i64), u32> =
+                std::collections::HashMap::new();
+            for &idx in &indices {
+                let pos = vertices[idx as usize].position;
+                let k = key(pos);
+                match index_by_position.get(&k) {
+                    Some(&existing) => assert_eq!(
+                        existing, idx,
+                        "radius {radius}: two different vertex indices ({existing} and {idx}) \
+                         reference the same position {pos:?} — a shared cube edge wasn't \
+                         welded, which is exactly what tears the mesh open under height \
+                         displacement"
+                    ),
+                    None => {
+                        index_by_position.insert(k, idx);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Regression test for a crash found by manual testing: wiring Gabor
+    /// Noise's `raw` output (deliberately `Rgba32Float`, not the usual
+    /// `Rgba16Float` every other node output uses — see `gabor_noise.rs`'s
+    /// own doc comment on why) into Output: Height and looking at the 3D
+    /// viewport crashed with a wgpu validation error ("Texture binding 5
+    /// expects sample type Float { filterable: true }, but was given a
+    /// view with format Rgba32Float (sample type Float { filterable:
+    /// false })"). `Rgba32Float` can't be sampled with filtering without
+    /// an opt-in device feature this app doesn't request — fixed by having
+    /// `build_texture_bind_group`'s own `channel_view` fall back to the
+    /// placeholder texture for any channel whose resolved format isn't
+    /// filterable, the same as if nothing were connected, rather than
+    /// trying to bind it anyway.
+    #[test]
+    fn height_wired_to_a_non_filterable_format_falls_back_instead_of_crashing() {
+        let mut graph = mc_core::Graph::new();
+        let gabor = graph.add_node(mc_core::Node::new("gabor_noise"));
+        let output = graph.add_node(mc_core::Node::new("output_height"));
+        graph.connect(gabor, "raw", output, "input").unwrap();
+        graph.settings.resolution = 64;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        mc_nodes::registry::evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let viewport = Viewport3d::new(&gpu);
+        // Would panic inside wgpu validation before the fix.
+        let _bind_group = viewport.build_texture_bind_group(&mut gpu, &pool, &graph);
     }
 }

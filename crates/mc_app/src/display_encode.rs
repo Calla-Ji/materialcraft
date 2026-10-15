@@ -5,17 +5,64 @@
 
 const NODE_KIND: &str = "display_encode";
 
-/// Returns a view onto `source_key`'s sRGB-encoded display copy, creating
-/// and/or refreshing it as needed. The copy lives under a derived key in the
-/// same pool so it's cheap to look up again (`get_or_create` only
-/// reallocates on an actual size change) — called once per visible preview
-/// per frame, which is the same cadence egui's own texture registration
-/// already runs at, so this doesn't add a new per-frame cost class, just a
-/// small compute dispatch alongside an existing one.
+/// CLAUDE.md §9's "channel view (RGB / R / G / B / A)" — which channel(s)
+/// of a preview to show. Isolating one is the only way to actually judge
+/// it on its own merit for a node whose combined RGB reads as an arbitrary
+/// color by design (e.g. a packed ORM texture — see
+/// `display_encode.wgsl`'s own doc comment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChannelView {
+    #[default]
+    Rgb,
+    R,
+    G,
+    B,
+    A,
+}
+
+impl ChannelView {
+    pub const ALL: [ChannelView; 5] = [
+        ChannelView::Rgb,
+        ChannelView::R,
+        ChannelView::G,
+        ChannelView::B,
+        ChannelView::A,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ChannelView::Rgb => "RGB",
+            ChannelView::R => "R",
+            ChannelView::G => "G",
+            ChannelView::B => "B",
+            ChannelView::A => "A",
+        }
+    }
+
+    fn as_u32(self) -> u32 {
+        match self {
+            ChannelView::Rgb => 0,
+            ChannelView::R => 1,
+            ChannelView::G => 2,
+            ChannelView::B => 3,
+            ChannelView::A => 4,
+        }
+    }
+}
+
+/// Returns a view onto `source_key`'s sRGB-encoded display copy (optionally
+/// isolated to one channel — see [`ChannelView`]), creating and/or
+/// refreshing it as needed. The copy lives under a derived key in the same
+/// pool so it's cheap to look up again (`get_or_create` only reallocates on
+/// an actual size change) — called once per visible preview per frame,
+/// which is the same cadence egui's own texture registration already runs
+/// at, so this doesn't add a new per-frame cost class, just a small compute
+/// dispatch alongside an existing one.
 pub fn encode_for_display(
     gpu: &mut mc_gpu::Context,
     pool: &mut mc_gpu::TexturePool,
     source_key: &str,
+    channel: ChannelView,
 ) -> Option<wgpu::TextureView> {
     let resolution = pool.texture(source_key)?.width();
     let source_view = pool.view(source_key)?.clone();
@@ -25,6 +72,7 @@ pub fn encode_for_display(
 
     let mut param_bytes = [0u8; 16];
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
+    param_bytes[4..8].copy_from_slice(&channel.as_u32().to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("display_encode_params"),
         size: param_bytes.len() as u64,
@@ -33,7 +81,17 @@ pub fn encode_for_display(
     });
     gpu.queue.write_buffer(&param_buffer, 0, &param_bytes);
 
-    let dest_key = format!("{source_key}__display_srgb");
+    // Thumbnails (`canvas.rs`) always encode RGB for the same `source_key`
+    // a selected node's own (possibly channel-isolated) 2D View preview
+    // encodes in the same frame — sharing one key between them would have
+    // whichever call ran last silently overwrite the other's result. Only
+    // non-RGB modes get their own distinct key, so the common RGB case
+    // (thumbnails, and the 2D View itself when no channel is isolated)
+    // keeps using exactly the key it always has.
+    let dest_key = match channel {
+        ChannelView::Rgb => format!("{source_key}__display_srgb"),
+        _ => format!("{source_key}__display_srgb_{}", channel.label()),
+    };
     let dest_view = pool.get_or_create(
         &gpu.device,
         &dest_key,
@@ -83,7 +141,7 @@ pub fn encode_for_display(
 
 #[cfg(test)]
 mod tests {
-    use super::encode_for_display;
+    use super::{encode_for_display, ChannelView};
 
     const RESOLUTION: u32 = 16;
 
@@ -124,8 +182,8 @@ mod tests {
             },
         );
 
-        let display_view =
-            encode_for_display(&mut gpu, &mut pool, "image").expect("image texture exists");
+        let display_view = encode_for_display(&mut gpu, &mut pool, "image", ChannelView::Rgb)
+            .expect("image texture exists");
         let display_texture = pool
             .texture("image__display_srgb")
             .expect("display copy exists");
@@ -150,6 +208,90 @@ mod tests {
                 "sRGB 128 round-tripped through linear and back should land close to 128, \
                  got {channel}"
             );
+        }
+    }
+
+    /// An isolated channel is broadcast across R/G/B (so it actually shows
+    /// up as a visible grey, not a single colored line) — and picking a
+    /// different source channel each time (not just always red-on-red)
+    /// actually proves `channel` selects the right one, rather than the
+    /// test passing by coincidence if the shader ignored it.
+    #[test]
+    fn isolating_a_channel_broadcasts_just_that_one_across_rgb() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        mc_nodes::uniform_color::dispatch(
+            &mut gpu,
+            &mut pool,
+            "image",
+            RESOLUTION,
+            &mc_nodes::uniform_color::UniformColorParams {
+                color: [0.1, 0.5, 0.9, 1.0],
+            },
+        );
+
+        for (channel, linear_source) in [
+            (ChannelView::R, 0.1_f32),
+            (ChannelView::G, 0.5_f32),
+            (ChannelView::B, 0.9_f32),
+        ] {
+            let _ = encode_for_display(&mut gpu, &mut pool, "image", channel)
+                .expect("image texture exists");
+            let dest_key = format!("image__display_srgb_{}", channel.label());
+            let texture = pool.texture(&dest_key).expect("display copy exists");
+            let pixels = gpu.read_rgba8(texture, RESOLUTION);
+
+            let expected = linear_to_srgb_u8_approx(linear_source);
+            for px in pixels.as_chunks::<4>().0 {
+                assert_eq!(px[0], px[1], "isolated channel should broadcast to G too");
+                assert_eq!(px[1], px[2], "isolated channel should broadcast to B too");
+                assert!(
+                    px[0].abs_diff(expected) <= 2,
+                    "channel {channel:?}: expected ~{expected}, got {}",
+                    px[0]
+                );
+                assert_eq!(px[3], 255, "isolated channel view should always be opaque");
+            }
+        }
+    }
+
+    /// Same sRGB OETF `display_encode.wgsl`'s own `linear_to_srgb` uses,
+    /// reimplemented in Rust so the test above has an independent
+    /// expectation to check the shader's output against.
+    fn linear_to_srgb_u8_approx(linear: f32) -> u8 {
+        let srgb = if linear <= 0.003_130_8 {
+            linear * 12.92
+        } else {
+            1.055 * linear.powf(1.0 / 2.4) - 0.055
+        };
+        (srgb.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
+
+    #[test]
+    fn isolating_alpha_broadcasts_raw_unencoded_value() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        mc_nodes::uniform_color::dispatch(
+            &mut gpu,
+            &mut pool,
+            "image",
+            RESOLUTION,
+            &mc_nodes::uniform_color::UniformColorParams {
+                color: [0.1, 0.5, 0.9, 0.4],
+            },
+        );
+
+        let _ = encode_for_display(&mut gpu, &mut pool, "image", ChannelView::A)
+            .expect("image texture exists");
+        let texture = pool
+            .texture("image__display_srgb_A")
+            .expect("display copy exists");
+        let pixels = gpu.read_rgba8(texture, RESOLUTION);
+        for px in pixels.as_chunks::<4>().0 {
+            // Raw, not sRGB-encoded — 0.4 * 255 = 102, not the ~180 sRGB
+            // encoding 0.4 would produce.
+            assert!(px[0].abs_diff(102) <= 2, "got {}", px[0]);
+            assert_eq!(px[3], 255, "isolated channel view should always be opaque");
         }
     }
 }

@@ -20,7 +20,15 @@ struct DownsampleParams {
 
 @group(0) @binding(0) var<uniform> params: DownsampleParams;
 @group(0) @binding(1) var source_tex: texture_2d<f32>;
-@group(0) @binding(2) var dest_tex: texture_storage_2d<rgba8unorm, write>;
+// `__DEST_FORMAT__` is substituted at load time (see `mipgen.rs`'s own
+// `generate_mip_chain`) with whichever storage format this particular
+// channel's own pool texture actually uses — `rgba16float` for every
+// ordinary node output, or `rgba32float` for the rare higher-precision one
+// (Gabor Noise's `raw`). A wgpu storage texture binding's format is part of
+// its type, fixed at shader-compile time, so one static copy of this
+// shader can't target both; substituting a token is simpler than
+// maintaining two near-duplicate files.
+@group(0) @binding(2) var dest_tex: texture_storage_2d<__DEST_FORMAT__, write>;
 
 fn wrap(coord: i32, size: i32) -> i32 {
     return ((coord % size) + size) % size;

@@ -6,8 +6,6 @@
 //! PROGRESS.md). `mc_gpu::TexturePool::get_or_create` already allocates the
 //! mip levels; this is what actually fills them in.
 
-const NODE_KIND: &str = "mip_downsample";
-
 /// Regenerates every mip level beyond 0 for `key`'s texture, reading each
 /// level from the one before it. Called unconditionally once per frame the
 /// 3D viewport renders (same cadence `resolve_channel` already resolves at)
@@ -36,8 +34,25 @@ pub fn generate_mip_chain(
     }
     let base_size = texture.width();
 
-    let shader_source = include_str!("../shaders/mip_downsample.wgsl");
-    let pipeline = gpu.compute_pipeline(NODE_KIND, shader_source, "main");
+    // A storage texture binding's format is fixed at shader-compile time,
+    // so the one template substitutes whichever format this channel's own
+    // pool texture actually uses — see mip_downsample.wgsl's own doc
+    // comment on `dest_tex`. A format with no real-value meaning here
+    // (Rgba8Unorm: flat fallback colors, imported images — none of which
+    // ever reach a multi-mip pool texture, so `mip_count <= 1` above
+    // already returned) is a caller bug, not something a user can trigger
+    // by wiring up a graph; log and skip rather than panic either way.
+    let (format_token, node_kind) = match texture.format() {
+        wgpu::TextureFormat::Rgba16Float => ("rgba16float", "mip_downsample_rgba16float"),
+        wgpu::TextureFormat::Rgba32Float => ("rgba32float", "mip_downsample_rgba32float"),
+        other => {
+            log::warn!("mipgen: no mip_downsample variant for format {other:?} (key {key:?})");
+            return;
+        }
+    };
+    let shader_source =
+        include_str!("../shaders/mip_downsample.wgsl").replace("__DEST_FORMAT__", format_token);
+    let pipeline = gpu.compute_pipeline(node_kind, &shader_source, "main");
 
     let mut encoder = gpu
         .device
@@ -112,4 +127,35 @@ pub fn generate_mip_chain(
 pub fn full_mip_view(pool: &mc_gpu::TexturePool, key: &str) -> Option<wgpu::TextureView> {
     let texture = pool.texture(key)?;
     Some(texture.create_view(&wgpu::TextureViewDescriptor::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generate_mip_chain;
+
+    /// Regression test for two crashes found by manual testing (connecting
+    /// a node's output straight into a PBR channel and looking at the 3D
+    /// viewport): first with any ordinary node (format `Rgba16Float`,
+    /// every node's own output texture since the earlier banding fix —
+    /// first noticed with Gabor Noise, but not specific to it), then again
+    /// with Gabor Noise's `raw` output specifically (format `Rgba32Float`,
+    /// its own deliberately higher-precision output). Both were the same
+    /// root cause: `mip_downsample.wgsl`'s `dest_tex` binding was a single
+    /// hardcoded format (`rgba8unorm`, then `rgba16float`) that didn't
+    /// match whichever format the channel's own pool texture actually
+    /// used. `generate_mip_chain` now substitutes the right format per
+    /// call instead of assuming one.
+    #[test]
+    fn generates_mips_for_every_real_channel_texture_format() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+
+        pool.get_or_create(&gpu.device, "rgba16", 64, wgpu::TextureFormat::Rgba16Float);
+        generate_mip_chain(&mut gpu, &pool, "rgba16", false);
+        generate_mip_chain(&mut gpu, &pool, "rgba16", true);
+
+        pool.get_or_create(&gpu.device, "rgba32", 64, wgpu::TextureFormat::Rgba32Float);
+        generate_mip_chain(&mut gpu, &pool, "rgba32", false);
+        generate_mip_chain(&mut gpu, &pool, "rgba32", true);
+    }
 }
