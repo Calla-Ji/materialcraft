@@ -12,6 +12,7 @@
 mod add_node_menu;
 mod autosave;
 mod canvas;
+mod dialog_chrome;
 mod display_encode;
 mod dock;
 mod export_dialog;
@@ -20,6 +21,9 @@ mod mipgen;
 mod node_icons;
 mod params_panel;
 mod path_editor;
+mod preset_graph;
+mod splash;
+mod svg_import_dialog;
 mod theme;
 mod toast;
 mod twod_toolbar;
@@ -30,20 +34,39 @@ use std::collections::HashMap;
 
 use canvas::CanvasState;
 
-/// 2D View's own pan/tiling-preview state — view-only, not part of the graph
-/// or any node's params.
-#[derive(Default)]
+/// 2D View's own pan/zoom/tiling-preview state — view-only, not part of the
+/// graph or any node's params.
 struct TwoDViewState {
-    /// Screen-space drag offset, in points. Only has visible effect while
-    /// `tiling_preview` is on (the single-tile view always exactly fills its
-    /// square, so there's nothing to pan to otherwise) — kept regardless so
-    /// toggling tiling back on restores where you left off.
+    /// Screen-space drag offset, in points. At the default `zoom` in the
+    /// single-tile view, the tile always exactly fills its square, so this
+    /// only has visible effect once `tiling_preview` is on or `zoom` has
+    /// zoomed in past 1x — kept regardless so toggling tiling/zooming back
+    /// out restores where you left off.
     pan: egui::Vec2,
+    /// Scroll-wheel/pinch zoom factor, centered on the pointer. 1.0 = fit
+    /// (the single tile exactly fills its square; a tiling-preview "tile"
+    /// is a third of the panel's shorter side, same as before zoom existed).
+    zoom: f32,
     /// Shows the image tiled edge-to-edge across the whole panel (wrap-
     /// addressed, via `preview_texture`'s Repeat sampler) instead of a
     /// single centered copy, so a seam — or the lack of one — is visible at
     /// a glance.
     tiling_preview: bool,
+    /// CLAUDE.md §9's "channel view (RGB / R / G / B / A)" — see
+    /// `display_encode::ChannelView`'s own doc comment for why isolating
+    /// one is sometimes the only way to actually judge it.
+    channel_view: display_encode::ChannelView,
+}
+
+impl Default for TwoDViewState {
+    fn default() -> Self {
+        Self {
+            pan: egui::Vec2::ZERO,
+            zoom: 1.0,
+            tiling_preview: false,
+            channel_view: display_encode::ChannelView::default(),
+        }
+    }
 }
 
 /// Root application state for the eframe event loop.
@@ -57,19 +80,39 @@ struct MaterialCreatorApp {
     canvas: CanvasState,
     thumbnail_ids: HashMap<mc_core::NodeId, egui::TextureId>,
 
+    /// The node the Parameters panel edits — the "pinned" node. Only
+    /// changes on a deliberate action: double-clicking a node, the node
+    /// header's own "Show in Parameters / 2D View" dot, or creating/adding
+    /// a node (which naturally becomes both pinned and previewed at once).
+    /// A single click on a node, by contrast, only moves `preview_node` —
+    /// the owner's own request, so clicking around the graph to compare
+    /// outputs in the 2D View doesn't keep yanking the Parameters panel
+    /// away from whatever you're actually mid-edit on.
     selected: Option<mc_core::NodeId>,
-    /// Which of `selected`'s own output ports to preview in the 2D View,
-    /// for a node with more than one (currently just Thread) — tagged with
-    /// the node it was set for, so switching to a *different* node
-    /// automatically falls back to that node's own default/first output
-    /// instead of silently reusing a stale port name that might not even
-    /// exist on it. Set by clicking an output pin in the node graph (see
-    /// `canvas::show`'s own doc comment on that pin's click handling).
+    /// The node the 2D View shows. Moves on a plain single click/drag, not
+    /// just the deliberate actions that also move `selected` — see that
+    /// field's own doc comment for the full reasoning.
+    preview_node: Option<mc_core::NodeId>,
+    /// Which of `preview_node`'s own output ports to preview in the 2D
+    /// View, for a node with more than one (currently just Thread) —
+    /// tagged with the node it was set for, so switching to a *different*
+    /// node automatically falls back to that node's own default/first
+    /// output instead of silently reusing a stale port name that might not
+    /// even exist on it. Set by clicking an output pin in the node graph
+    /// (see `canvas::show`'s own doc comment on that pin's click
+    /// handling).
     preview_port: Option<(mc_core::NodeId, String)>,
     add_node_menu: Option<add_node_menu::AddNodeMenu>,
     pending_wire_connect: Option<canvas::DroppedWire>,
     param_drag: params_panel::DragState,
     export_dialog: export_dialog::ExportDialogState,
+    svg_import_dialog: svg_import_dialog::SvgImportDialogState,
+    /// Set by the Image Trace node's own "Export SVG…" button
+    /// (`params_panel.rs`) — consumed right after `export_dialog::show`,
+    /// where `gpu`/`pool`/`graph` are already all in scope together, the
+    /// same reason `export_dialog`'s own real export runs from there
+    /// rather than from `params_panel.rs` itself.
+    pending_svg_export: Option<mc_core::NodeId>,
     viewport3d: viewport3d::Viewport3d,
     viewport_panels: viewport3d_panels::ViewportPanels,
     dock: dock::DockLayout,
@@ -94,6 +137,9 @@ struct MaterialCreatorApp {
     /// session was found — shows the restore/discard prompt until the
     /// artist answers it.
     pending_recovery: bool,
+    /// Shown on every launch, once `pending_recovery` (if any) is resolved
+    /// — see `splash.rs`'s own doc comment.
+    splash: splash::SplashState,
 }
 
 impl eframe::App for MaterialCreatorApp {
@@ -149,11 +195,18 @@ impl eframe::App for MaterialCreatorApp {
         self.autosave.maybe_save(&self.graph);
 
         if self.pending_recovery {
-            egui::Window::new("Recover unsaved work?")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                .show(ui.ctx(), |ui| {
+            // Not `closable`: Restore/Discard are the only way out, on
+            // purpose — see `dialog_chrome::show`'s own doc comment on
+            // why a hard confirm like this never gets an X.
+            let mut open = true;
+            dialog_chrome::show(
+                ui.ctx(),
+                "recover_unsaved_work_confirm",
+                "Recover unsaved work?",
+                &mut open,
+                false,
+                dialog_chrome::DEFAULT_WIDTH,
+                |ui| {
                     ui.label(
                         "MaterialCreator didn't close cleanly last time — an autosave from \
                          that session is available.",
@@ -167,6 +220,10 @@ impl eframe::App for MaterialCreatorApp {
                                     // (see `replace_graph`'s doc comment).
                                     self.replace_graph(graph, None);
                                     self.toasts.info("Restored autosave from previous session");
+                                    // Real recovered work is already loaded —
+                                    // the splash screen's own "pick a
+                                    // starting point" choice doesn't apply.
+                                    self.splash.open = false;
                                 }
                                 Err(err) => {
                                     log::warn!("failed to restore autosave: {err}");
@@ -182,7 +239,28 @@ impl eframe::App for MaterialCreatorApp {
                             self.pending_recovery = false;
                         }
                     });
-                });
+                },
+            );
+        }
+
+        // Shown on every launch, once any crash-recovery prompt above is
+        // resolved — picking "Restore" there already closes this (see that
+        // handler), so it only ever appears when there's genuinely nothing
+        // to recover, or the artist chose "Discard".
+        if !self.pending_recovery {
+            if let Some((start, resolution)) = splash::show(ui.ctx(), &mut self.splash) {
+                let graph = match start {
+                    splash::StartChoice::Empty => {
+                        let mut graph = mc_core::Graph::new();
+                        graph.settings.resolution = resolution;
+                        graph
+                    }
+                    splash::StartChoice::Blender => preset_graph::build_blender(resolution),
+                    splash::StartChoice::Unreal => preset_graph::build_unreal_engine_5(resolution),
+                };
+                self.replace_graph(graph, None);
+                self.splash.open = false;
+            }
         }
 
         // Re-evaluate whatever the previous frame's edits (including
@@ -237,6 +315,7 @@ impl eframe::App for MaterialCreatorApp {
             canvas,
             thumbnail_ids,
             selected,
+            preview_node,
             preview_port,
             param_drag,
             viewport3d,
@@ -247,6 +326,8 @@ impl eframe::App for MaterialCreatorApp {
             toasts,
             two_d_view,
             path_editor,
+            svg_import_dialog,
+            pending_svg_export,
             ..
         } = self;
 
@@ -262,7 +343,15 @@ impl eframe::App for MaterialCreatorApp {
             },
             &mut |ui, id| match id {
                 dock::CrateId::Parameters => {
-                    params_panel::show(ui, graph, history, *selected, param_drag, path_editor);
+                    params_panel::show(
+                        ui,
+                        graph,
+                        history,
+                        *selected,
+                        param_drag,
+                        path_editor,
+                        pending_svg_export,
+                    );
                 }
                 dock::CrateId::TwoDView => {
                     let full_rect = ui.available_rect_before_wrap();
@@ -270,7 +359,9 @@ impl eframe::App for MaterialCreatorApp {
                         ui,
                         full_rect,
                         &mut two_d_view.tiling_preview,
+                        &mut two_d_view.channel_view,
                         path_editor,
+                        svg_import_dialog,
                         graph,
                         history,
                         *selected,
@@ -281,6 +372,53 @@ impl eframe::App for MaterialCreatorApp {
                             const PADDING: f32 = 16.0;
 
                             let content_rect = toolbar_content_rect.shrink(PADDING);
+
+                            // Scroll wheel and pinch both zoom here — unlike
+                            // the node graph canvas, there's nothing else
+                            // for a plain scroll to do in a single-image
+                            // preview (drag already covers panning) —
+                            // centered on the pointer so the spot being
+                            // inspected stays under the cursor instead of
+                            // the view recentering under it. Gated the same
+                            // way canvas.rs gates its own pan/zoom: pointer
+                            // inside this panel's content rect *and* this
+                            // panel's layer is the topmost one there, so
+                            // scrolling over e.g. a popup sitting on top of
+                            // the 2D View doesn't also zoom the view
+                            // underneath it.
+                            if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) {
+                                if content_rect.contains(pointer)
+                                    && ui.ctx().layer_id_at(pointer) == Some(ui.layer_id())
+                                {
+                                    let pinch = ui.input(|i| i.zoom_delta());
+                                    let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
+                                    // A mouse wheel/trackpad notch is tens
+                                    // of points; this scale was tuned by
+                                    // feel to land in the same ballpark as
+                                    // a single pinch gesture's own
+                                    // zoom_delta step.
+                                    let scroll_zoom = (scroll_y * 0.002).exp();
+                                    let raw_delta = pinch * scroll_zoom;
+                                    if raw_delta != 1.0 {
+                                        let old_zoom = two_d_view.zoom;
+                                        two_d_view.zoom = (old_zoom * raw_delta).clamp(0.25, 32.0);
+                                        // Re-derive the factor actually
+                                        // applied (clamping can shrink it)
+                                        // so the anchor correction below
+                                        // stays exact instead of
+                                        // overshooting at the zoom limits.
+                                        let applied = two_d_view.zoom / old_zoom;
+                                        let reference = if two_d_view.tiling_preview {
+                                            content_rect.min
+                                        } else {
+                                            content_rect.center()
+                                        };
+                                        let anchor = pointer - reference;
+                                        two_d_view.pan =
+                                            anchor * (1.0 - applied) + two_d_view.pan * applied;
+                                    }
+                                }
+                            }
 
                             // Drag-to-pan, under the editor's own point/handle
                             // dragging — while a Path node is selected, this
@@ -307,10 +445,12 @@ impl eframe::App for MaterialCreatorApp {
                                 // repeats regardless of its own size/aspect —
                                 // "fills the window" rather than a fixed 2x2/3x3
                                 // count that could leave empty space in a large
-                                // or oddly-shaped panel.
+                                // or oddly-shaped panel. Scaled by `zoom` on
+                                // top of that base size.
                                 let tile_px = (content_rect.width().min(content_rect.height())
                                     / 3.0)
-                                    .max(16.0);
+                                    .max(16.0)
+                                    * two_d_view.zoom;
                                 let uv_rect = egui::Rect::from_min_size(
                                     egui::pos2(
                                         -two_d_view.pan.x / tile_px,
@@ -328,7 +468,8 @@ impl eframe::App for MaterialCreatorApp {
                                     egui::Color32::WHITE,
                                 );
                             } else {
-                                let size = content_rect.width().min(content_rect.height());
+                                let size = content_rect.width().min(content_rect.height())
+                                    * two_d_view.zoom;
                                 // Clamped so a drag can slide the tile around its
                                 // padded box but never off it entirely — `pan`
                                 // itself is left unclamped (not reassigned here)
@@ -344,7 +485,13 @@ impl eframe::App for MaterialCreatorApp {
                                     content_rect.center() + pan,
                                     egui::Vec2::splat(size),
                                 );
-                                ui.painter().image(
+                                // Clipped to `content_rect` — once zoomed in,
+                                // `size` can exceed `content_rect`'s own
+                                // dimensions, and an unclipped painter let
+                                // the image bleed out over the toolbar rail
+                                // and neighboring panels instead of stopping
+                                // at the 2D View's own edge.
+                                ui.painter_at(content_rect).image(
                                     texture_id,
                                     image_rect,
                                     egui::Rect::from_min_max(
@@ -645,6 +792,7 @@ impl eframe::App for MaterialCreatorApp {
                         history,
                         canvas,
                         selected,
+                        preview_node,
                         preview_port,
                         gpu,
                         pool,
@@ -653,7 +801,7 @@ impl eframe::App for MaterialCreatorApp {
                     ));
                 }
                 dock::CrateId::NodeLibrary => {
-                    show_node_library(ui, graph, history, canvas, selected);
+                    show_node_library(ui, graph, history, canvas, selected, preview_node);
                 }
             },
         );
@@ -661,7 +809,12 @@ impl eframe::App for MaterialCreatorApp {
         let canvas_output = canvas_output.unwrap_or(canvas::CanvasOutput {
             open_add_menu_at: None,
             dropped_wire: None,
+            connect_rejected: None,
         });
+
+        if let Some(reason) = &canvas_output.connect_rejected {
+            self.toasts.error(reason.clone());
+        }
 
         // Cmd+A (select all) / Delete, skipped while a text field (e.g. the
         // add-node search box, a parameter's numeric entry) has focus, so
@@ -693,6 +846,9 @@ impl eframe::App for MaterialCreatorApp {
                 let _ = self.history.do_transaction(&mut self.graph, transaction);
                 if self.selected.is_some_and(|id| ids.contains(&id)) {
                     self.selected = None;
+                }
+                if self.preview_node.is_some_and(|id| ids.contains(&id)) {
+                    self.preview_node = None;
                 }
                 self.canvas.selected.clear();
             }
@@ -740,6 +896,7 @@ impl eframe::App for MaterialCreatorApp {
                     .graph
                     .set_node_position(core_id, [graph_pos.x, graph_pos.y]);
                 self.selected = Some(core_id);
+                self.preview_node = Some(core_id);
                 self.canvas.selected.clear();
                 self.canvas.selected.insert(core_id);
                 if let Some(dropped) = self.pending_wire_connect.take() {
@@ -760,6 +917,58 @@ impl eframe::App for MaterialCreatorApp {
             &mut self.pool,
             &mut self.graph,
         );
+
+        svg_import_dialog::show(
+            ui.ctx(),
+            &mut self.svg_import_dialog,
+            &mut self.graph,
+            &mut self.history,
+        );
+
+        // Image Trace's own "Export SVG…" button (`params_panel.rs`) —
+        // handled here rather than there since it needs `gpu`/`pool`
+        // together with `graph`, same reasoning as `export_dialog`'s own
+        // real export. Re-traces from the current Image input rather
+        // than re-deriving an SVG from the already-computed (and
+        // tile-unit, collinear-point-dropped) `path` param, so the
+        // export is a faithful re-run of the same pipeline Preview Mask
+        // and Path came from, not a second, lossier conversion of their
+        // own output.
+        if let Some(id) = self.pending_svg_export.take() {
+            let resolution = self.graph.settings.resolution;
+            let svg = (|| {
+                let (input_id, from_port) = self.graph.upstream_from(id, "image")?;
+                let input_key = mc_nodes::registry::texture_key(input_id, &from_port);
+                let texture = self.pool.texture(&input_key)?;
+                let bytes = self.gpu.read_rgba8(texture, resolution);
+                let params = self
+                    .graph
+                    .node(id)
+                    .map(|n| mc_nodes::image_trace::TraceParams::from_graph(&n.params))
+                    .unwrap_or_default();
+                let contours = mc_nodes::image_trace::trace_from_rgba8(
+                    bytes, resolution, resolution, &params,
+                )?;
+                Some(mc_nodes::image_trace::to_svg(
+                    &contours, resolution, resolution,
+                ))
+            })();
+
+            match svg {
+                Some(svg) => {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("SVG", &["svg"])
+                        .set_file_name("trace.svg")
+                        .save_file()
+                    {
+                        if let Err(err) = std::fs::write(&path, svg) {
+                            log::warn!("failed to write {}: {err}", path.display());
+                        }
+                    }
+                }
+                None => log::warn!("image_trace export: nothing to export for node {id:?}"),
+            }
+        }
 
         // egui/eframe only repaints in response to new OS input (mouse
         // move, click, key) — it does not automatically notice that a graph
@@ -799,6 +1008,7 @@ impl MaterialCreatorApp {
         self.canvas = CanvasState::default();
         self.thumbnail_ids.clear();
         self.selected = None;
+        self.preview_node = None;
         self.add_node_menu = None;
         self.pending_wire_connect = None;
         self.preview_texture_id = None;
@@ -810,7 +1020,10 @@ impl MaterialCreatorApp {
     }
 
     fn do_new(&mut self) {
-        self.replace_graph(mc_core::Graph::new(), None);
+        // Same "pick a starting point" choice as a fresh launch, rather
+        // than silently dropping straight to an empty graph — see
+        // `splash.rs`'s own doc comment.
+        self.splash.open = true;
     }
 
     fn do_open(&mut self) {
@@ -866,8 +1079,8 @@ impl MaterialCreatorApp {
         }
     }
 
-    /// The selected node's resolved output texture, registered/updated as an
-    /// egui texture for the 2D view. Prefers `preview_port` (a specific
+    /// `preview_node`'s own resolved output texture, registered/updated as
+    /// an egui texture for the 2D view. Prefers `preview_port` (a specific
     /// output someone clicked on, for a multi-output node) when it's
     /// actually still valid for `id` — still checked against the node's own
     /// `NodeDef` here rather than trusted outright, since `preview_port`
@@ -876,7 +1089,7 @@ impl MaterialCreatorApp {
     /// but a stale port name silently resolving to *some other* node's
     /// texture under the same key format would be a confusing bug to hit).
     fn preview_texture(&mut self) -> Option<egui::TextureId> {
-        let id = self.selected?;
+        let id = self.preview_node?;
         let key = match &self.preview_port {
             Some((port_node, port_name)) if *port_node == id => {
                 let kind = &self.graph.node(id)?.kind;
@@ -894,7 +1107,12 @@ impl MaterialCreatorApp {
         // this view has to already be sRGB-encoded or the preview reads too
         // dark/off relative to the 3D viewport and an exported PNG — see
         // `display_encode.rs`.
-        let view = crate::display_encode::encode_for_display(&mut self.gpu, &mut self.pool, &key)?;
+        let view = crate::display_encode::encode_for_display(
+            &mut self.gpu,
+            &mut self.pool,
+            &key,
+            self.two_d_view.channel_view,
+        )?;
 
         // Repeat (not egui's default ClampToEdge) addressing: identical to
         // before for the normal single-tile view (UV never leaves [0, 1]
@@ -943,9 +1161,10 @@ impl MaterialCreatorApp {
 /// Display order for the Node Library panel's category groups — the
 /// `mc_nodes::defs` category strings, just in a deliberate reading order
 /// rather than their incidental declaration order in that file.
-const NODE_CATEGORY_ORDER: [&str; 9] = [
+const NODE_CATEGORY_ORDER: [&str; 10] = [
     "Generators/Noise",
     "Generators/Patterns",
+    "Generators/Path",
     "Filters/Adjustments",
     "Filters/Blending & Masking",
     "Filters/Spatial",
@@ -961,6 +1180,7 @@ fn category_short_name(category: &'static str) -> &'static str {
     match category {
         "Generators/Noise" => "Noise",
         "Generators/Patterns" => "Patterns",
+        "Generators/Path" => "Path",
         "Filters/Adjustments" => "Adjust",
         "Filters/Blending & Masking" => "Blend/Mask",
         "Filters/Spatial" => "Spatial",
@@ -974,7 +1194,8 @@ fn category_short_name(category: &'static str) -> &'static str {
 
 /// The Node Library panel's content: every node, grouped by category and
 /// color-coded to match (`theme::category_color`), shown as a Material
-/// Icons Round glyph (`node_icons::icon_for_kind`) — clicking one adds that
+/// Icons Round glyph, or a hand-drawn exception (`node_icons::draw_icon`)
+/// — clicking one adds that
 /// node to the graph, the same transaction/selection flow the add-node menu
 /// uses, just without a specific click position to place it at.
 fn show_node_library(
@@ -983,6 +1204,7 @@ fn show_node_library(
     history: &mut mc_core::History,
     canvas: &mut canvas::CanvasState,
     selected: &mut Option<mc_core::NodeId>,
+    preview: &mut Option<mc_core::NodeId>,
 ) {
     const ICON_SIZE: f32 = 32.0;
     const ICON_FONT_SIZE: f32 = 18.0;
@@ -1016,20 +1238,19 @@ fn show_node_library(
                                         4.0,
                                         theme::category_color(category).gamma_multiply(bg_alpha),
                                     );
-                                    ui.painter().text(
-                                        rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        node_icons::icon_for_kind(def.kind).to_string(),
-                                        egui::FontId::new(
-                                            ICON_FONT_SIZE,
-                                            egui::FontFamily::Name("material_icons_round".into()),
-                                        ),
+                                    node_icons::draw_icon(
+                                        ui.painter(),
+                                        rect,
+                                        def.kind,
+                                        ICON_FONT_SIZE,
                                         theme::SUPERNOVA_LIGHT,
                                     );
                                 }
                                 let response = response.on_hover_text(def.display_name);
                                 if response.clicked() {
-                                    add_node_from_library(graph, history, canvas, selected, def);
+                                    add_node_from_library(
+                                        graph, history, canvas, selected, preview, def,
+                                    );
                                 }
                             }
                         });
@@ -1047,6 +1268,7 @@ fn add_node_from_library(
     history: &mut mc_core::History,
     canvas: &mut canvas::CanvasState,
     selected: &mut Option<mc_core::NodeId>,
+    preview: &mut Option<mc_core::NodeId>,
     def: &'static mc_nodes::defs::NodeDef,
 ) {
     let node = def.instantiate();
@@ -1055,6 +1277,7 @@ fn add_node_from_library(
         let drop_pos = canvas.last_click_pos();
         let _ = graph.set_node_position(core_id, [drop_pos.x, drop_pos.y]);
         *selected = Some(core_id);
+        *preview = Some(core_id);
         canvas.selected.clear();
         canvas.selected.insert(core_id);
     }
@@ -1114,7 +1337,13 @@ fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("MaterialCreator")
-            .with_icon(app_icon()),
+            .with_icon(app_icon())
+            // Opens filling the screen (maximized, not exclusive
+            // fullscreen — the OS menu bar/dock stay reachable) so the
+            // splash screen's own centering lands in the middle of the
+            // actual screen on first paint, not a small default window
+            // size the splash would otherwise look lost inside of.
+            .with_maximized(true),
         ..Default::default()
     };
 
@@ -1141,11 +1370,14 @@ fn main() -> eframe::Result<()> {
                 canvas: CanvasState::default(),
                 thumbnail_ids: HashMap::new(),
                 selected: None,
+                preview_node: None,
                 preview_port: None,
                 add_node_menu: None,
                 pending_wire_connect: None,
                 param_drag: None,
                 export_dialog: export_dialog::ExportDialogState::default(),
+                svg_import_dialog: svg_import_dialog::SvgImportDialogState::default(),
+                pending_svg_export: None,
                 viewport3d,
                 viewport_panels: viewport3d_panels::ViewportPanels::default(),
                 dock: dock::DockLayout::default(),
@@ -1157,6 +1389,7 @@ fn main() -> eframe::Result<()> {
                 last_eval_error: None,
                 autosave: autosave::Autosave::default(),
                 pending_recovery: autosave::recovery_path().exists(),
+                splash: splash::SplashState::default(),
             }))
         }),
     )

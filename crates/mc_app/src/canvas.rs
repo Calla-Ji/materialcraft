@@ -8,8 +8,10 @@
 //! (camera pan/zoom, multi-selection, in-progress drag/wire gestures) and
 //! edits `Graph` through the same `Command`/`Transaction` API the rest of
 //! the app already uses, so undo/redo keeps working with no extra plumbing.
-//! Node position is intentionally *not* undo-tracked (CLAUDE.md: "purely
-//! cosmetic, ignored by evaluation"), matching the old behavior.
+//! Node position from plain dragging is intentionally *not* undo-tracked
+//! (CLAUDE.md: "purely cosmetic, ignored by evaluation"), matching the old
+//! behavior — [`auto_layout`] is the one deliberate exception, since it can
+//! move every node in the graph in a single click; see its own doc comment.
 //!
 //! Built to replace egui-snarl after its selection model turned out to have
 //! no public way to clear or replace its own internal (and visually
@@ -63,6 +65,17 @@ pub struct CanvasState {
     pan: Vec2,
     zoom: f32,
     pub selected: HashSet<NodeId>,
+    /// Toggled by the Snap to Grid corner button — persistent, not a
+    /// held-key modifier (that was the first version; the owner found it
+    /// "not really amazing" and asked for a toggle instead).
+    pub snap_to_grid: bool,
+    /// While Snap to Grid is on and a node drag is in progress, each
+    /// dragged node's true, unrounded running position — see the drag
+    /// handler's own comment for why this exists (rounding the node's
+    /// already-rounded *stored* position every frame made a slow drag
+    /// stick permanently at whatever grid cell it first snapped to).
+    /// Cleared per-node the instant its drag stops.
+    drag_unsnapped: HashMap<NodeId, [f32; 2]>,
     wire_drag: Option<PinRef>,
     /// Screen-space drag-start position, while a Shift+drag box-select is in
     /// progress.
@@ -80,6 +93,8 @@ impl Default for CanvasState {
             pan: Vec2::ZERO,
             zoom: 1.0,
             selected: HashSet::new(),
+            snap_to_grid: false,
+            drag_unsnapped: HashMap::new(),
             wire_drag: None,
             box_select_start: None,
             last_click_pos: Pos2::ZERO,
@@ -104,6 +119,14 @@ pub struct CanvasOutput {
     /// add-node menu filtered to the given port type/direction, then connect
     /// whatever gets picked back to this pin.
     pub dropped_wire: Option<DroppedWire>,
+    /// A wire was dropped on a real pin, but the connection was rejected —
+    /// `main.rs` should show this as a toast. Before this field existed, a
+    /// rejected connection (most often: dragging "upward" into a node that
+    /// would create a cycle, correctly refused) failed completely silently
+    /// — the wire preview just vanished on release, with nothing telling
+    /// the artist why. See `try_connect`'s own `ConnectFailure` for the
+    /// actual reasons this can happen.
+    pub connect_rejected: Option<String>,
 }
 
 pub struct DroppedWire {
@@ -323,9 +346,16 @@ fn pick_up_connected_input(
 }
 
 /// Connects two pins if exactly one is an output and one is an input and
-/// their port types are compatible; a no-op otherwise (e.g. dragging between
-/// two inputs, or onto nothing).
-fn try_connect(graph: &mut mc_core::Graph, history: &mut mc_core::History, a: PinRef, b: PinRef) {
+/// their port types are compatible; rejected otherwise (e.g. dragging
+/// between two inputs, incompatible types, or a connection that would
+/// create a cycle) — see `ConnectFailure`'s own doc comment for why the
+/// caller should surface this rather than swallow it.
+fn try_connect(
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    a: PinRef,
+    b: PinRef,
+) -> Result<(), ConnectFailure> {
     let (
         PinRef::Output {
             node: from_node,
@@ -338,18 +368,18 @@ fn try_connect(graph: &mut mc_core::Graph, history: &mut mc_core::History, a: Pi
     ) = (match (a, b) {
         (PinRef::Output { .. }, PinRef::Input { .. }) => (a, b),
         (PinRef::Input { .. }, PinRef::Output { .. }) => (b, a),
-        _ => return,
+        _ => return Err(ConnectFailure::NotOneInputOneOutput),
     })
     else {
-        return;
+        return Err(ConnectFailure::NotOneInputOneOutput);
     };
 
     let Some(from_port) = node_def_of(graph, from_node).and_then(|d| d.outputs.get(from_index))
     else {
-        return;
+        return Err(ConnectFailure::NotOneInputOneOutput);
     };
     let Some(to_port) = node_def_of(graph, to_node).and_then(|d| d.inputs.get(to_index)) else {
-        return;
+        return Err(ConnectFailure::NotOneInputOneOutput);
     };
     let from_kind = graph
         .node(from_node)
@@ -358,10 +388,41 @@ fn try_connect(graph: &mut mc_core::Graph, history: &mut mc_core::History, a: Pi
     let from_type =
         mc_nodes::defs::effective_output_type(graph, from_node, &from_kind, from_port.port_type);
     if !mc_nodes::defs::ports_compatible(from_type, to_port.port_type) {
-        return;
+        return Err(ConnectFailure::IncompatibleTypes);
     }
-    if let Ok(tx) = graph.connect_transaction(from_node, from_port.name, to_node, to_port.name) {
-        let _ = history.do_transaction(graph, tx);
+    match graph.connect_transaction(from_node, from_port.name, to_node, to_port.name) {
+        Ok(tx) => {
+            let _ = history.do_transaction(graph, tx);
+            Ok(())
+        }
+        Err(_) => Err(ConnectFailure::WouldCreateCycle),
+    }
+}
+
+/// Why a dropped wire didn't connect — surfaced to the artist as a toast
+/// (`CanvasOutput::connect_rejected`) rather than left silent. Before this
+/// existed, every one of these cases just made the in-progress wire
+/// preview vanish on release with no explanation — most confusingly for
+/// `WouldCreateCycle`, since the graph's own cycle check is correct,
+/// required behavior (evaluation assumes a DAG), but dragging a wire
+/// "upward" into an indirect source of the node you started from hits it
+/// constantly in normal use and looks exactly like "the connection just
+/// doesn't register."
+enum ConnectFailure {
+    NotOneInputOneOutput,
+    IncompatibleTypes,
+    WouldCreateCycle,
+}
+
+impl ConnectFailure {
+    fn message(&self) -> &'static str {
+        match self {
+            ConnectFailure::NotOneInputOneOutput => {
+                "Can't connect: need one output pin and one input pin"
+            }
+            ConnectFailure::IncompatibleTypes => "Can't connect: incompatible port types",
+            ConnectFailure::WouldCreateCycle => "Can't connect: would create a loop",
+        }
     }
 }
 
@@ -377,6 +438,7 @@ fn duplicate_nodes(
     history: &mut mc_core::History,
     canvas: &mut CanvasState,
     selected: &mut Option<NodeId>,
+    preview: &mut Option<NodeId>,
     id: NodeId,
 ) {
     let targets: Vec<NodeId> = if canvas.selected.contains(&id) {
@@ -403,7 +465,230 @@ fn duplicate_nodes(
         canvas.selected.clear();
         canvas.selected.extend(new_ids.iter().copied());
         *selected = new_ids.last().copied();
+        *preview = *selected;
     }
+}
+
+/// Horizontal gap between layout columns, and vertical gap between
+/// stacked nodes within a column — both graph units, independent of
+/// `NODE_WIDTH`/node height so a tall multi-port node still gets a clean
+/// gap below it rather than touching its neighbor.
+const AUTO_LAYOUT_COLUMN_GAP: f32 = 80.0;
+const AUTO_LAYOUT_ROW_GAP: f32 = 30.0;
+
+/// Rearranges every node in `graph` into a left-to-right layered layout:
+/// column = longest-path distance from a source node (no inputs), row =
+/// stacked within that column by each node's own real height (via
+/// `node_size`), ordered by a one-pass barycenter heuristic (each node
+/// sorted by the average row of its own upstream nodes) to cut down on
+/// wire crossings.
+///
+/// Recorded as one undo step of `Command::MoveNode`s — deliberately *not*
+/// following plain dragging's own "position isn't undo-tracked" rule (see
+/// this module's own doc comment): a single drag moves one node a few
+/// pixels, but this can silently rewrite every node's hand-placed position
+/// in a 50+ node graph in a single click, which is a big enough blast
+/// radius to deserve a real undo step.
+pub fn auto_layout(graph: &mut mc_core::Graph, history: &mut mc_core::History) {
+    let Ok(order) = graph.topological_order() else {
+        return;
+    };
+    if order.is_empty() {
+        return;
+    }
+
+    let mut column: HashMap<NodeId, u32> = HashMap::new();
+    for &id in &order {
+        let col = graph
+            .connections()
+            .iter()
+            .filter(|c| c.to_node == id)
+            .filter_map(|c| column.get(&c.from_node))
+            .max()
+            .map(|&upstream_col| upstream_col + 1)
+            .unwrap_or(0);
+        column.insert(id, col);
+    }
+
+    let column_count = column.values().max().map(|&c| c + 1).unwrap_or(0) as usize;
+    let mut columns: Vec<Vec<NodeId>> = vec![Vec::new(); column_count];
+    for &id in &order {
+        columns[column[&id] as usize].push(id);
+    }
+
+    // Barycenter row ordering: processed column by column, left to right,
+    // so by the time a node's own row is needed as an upstream reference
+    // for a later column, it's already been assigned.
+    let mut row_of: HashMap<NodeId, f32> = HashMap::new();
+    for nodes_in_column in &mut columns {
+        nodes_in_column.sort_by(|&a, &b| {
+            let barycenter = |id: NodeId| -> f32 {
+                let upstream_rows: Vec<f32> = graph
+                    .connections()
+                    .iter()
+                    .filter(|c| c.to_node == id)
+                    .filter_map(|c| row_of.get(&c.from_node).copied())
+                    .collect();
+                if upstream_rows.is_empty() {
+                    0.0
+                } else {
+                    upstream_rows.iter().sum::<f32>() / upstream_rows.len() as f32
+                }
+            };
+            barycenter(a)
+                .partial_cmp(&barycenter(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for (row, &id) in nodes_in_column.iter().enumerate() {
+            row_of.insert(id, row as f32);
+        }
+    }
+
+    let mut transaction: mc_core::Transaction = Vec::new();
+    let mut x = 0.0f32;
+    for nodes_in_column in &columns {
+        let mut y = 0.0f32;
+        for &id in nodes_in_column {
+            transaction.push(mc_core::Command::MoveNode {
+                id,
+                position: [x, y],
+            });
+            let height = node_def_of(graph, id)
+                .map(|def| node_size(def, 1.0).y)
+                .unwrap_or(0.0);
+            y += height + AUTO_LAYOUT_ROW_GAP;
+        }
+        x += NODE_WIDTH + AUTO_LAYOUT_COLUMN_GAP;
+    }
+
+    if !transaction.is_empty() {
+        let _ = history.do_transaction(graph, transaction);
+    }
+}
+
+/// One frame of (optionally grid-snapped) node dragging: adds `delta` onto
+/// `base_unsnapped` (the running, full-precision position — *not* the
+/// node's own stored position, which may already be rounded from a
+/// previous frame) and returns `(position_to_store, new_unsnapped_total)`.
+/// Snapping only the returned *store* value, while the caller keeps
+/// feeding `new_unsnapped_total` back in as next frame's `base_unsnapped`,
+/// is what makes a slow drag actually progress instead of sticking:
+/// re-rounding an already-rounded position every frame means a small
+/// per-frame delta just rounds straight back to the same grid cell,
+/// forever, since nothing anywhere retains the sub-grid precision needed
+/// to ever cross into the next one.
+fn apply_drag_delta(
+    base_unsnapped: [f32; 2],
+    delta: Vec2,
+    snap_to_grid: bool,
+) -> ([f32; 2], [f32; 2]) {
+    let raw = [base_unsnapped[0] + delta.x, base_unsnapped[1] + delta.y];
+    let out = if snap_to_grid {
+        [
+            (raw[0] / GRID_BASE_SPACING).round() * GRID_BASE_SPACING,
+            (raw[1] / GRID_BASE_SPACING).round() * GRID_BASE_SPACING,
+        ]
+    } else {
+        raw
+    };
+    (out, raw)
+}
+
+/// How close to the canvas edge (screen pixels) the pointer needs to be,
+/// while dragging a wire, before the view starts scrolling toward it, and
+/// the top speed (screen pixels/second) reached right at — or past — that
+/// edge, tapering linearly to zero at the margin's own inner edge.
+const WIRE_DRAG_AUTOPAN_MARGIN: f32 = 60.0;
+const WIRE_DRAG_AUTOPAN_MAX_SPEED: f32 = 700.0;
+
+/// The raw pan velocity (graph-camera screen-pixels/second, before `dt` or
+/// zoom are applied) wire-drag autopan wants for `pointer`'s current
+/// position relative to `canvas_rect` — split out from
+/// [`autopan_for_wire_drag`] so this edge-margin math is testable without
+/// a real `egui::Ui`/`Context`. A pointer outside `canvas_rect` entirely
+/// (dragged clean off the canvas) clamps to the same top speed as right at
+/// the edge, rather than accelerating further or doing nothing.
+fn wire_drag_autopan_velocity(canvas_rect: Rect, pointer: Pos2) -> Vec2 {
+    let edge_speed = |dist_from_edge: f32| -> f32 {
+        ((WIRE_DRAG_AUTOPAN_MARGIN - dist_from_edge) / WIRE_DRAG_AUTOPAN_MARGIN).clamp(0.0, 1.0)
+            * WIRE_DRAG_AUTOPAN_MAX_SPEED
+    };
+    let mut v = Vec2::ZERO;
+    v.x -= edge_speed(pointer.x - canvas_rect.left());
+    v.x += edge_speed(canvas_rect.right() - pointer.x);
+    v.y -= edge_speed(pointer.y - canvas_rect.top());
+    v.y += edge_speed(canvas_rect.bottom() - pointer.y);
+    v
+}
+
+/// While a wire is being dragged, scrolls `canvas`'s own camera toward
+/// wherever `pointer` is hovering near (or past) `canvas_rect`'s edge —
+/// see [`wire_drag_autopan_velocity`] for the actual math. Requests a
+/// repaint every active frame, since this has to keep moving even while
+/// the pointer itself is perfectly still (egui only redraws on its own
+/// otherwise).
+fn autopan_for_wire_drag(
+    canvas: &mut CanvasState,
+    canvas_rect: Rect,
+    pointer: Pos2,
+    ui: &egui::Ui,
+) {
+    let velocity = wire_drag_autopan_velocity(canvas_rect, pointer);
+    if velocity != Vec2::ZERO {
+        let dt = ui.input(|i| i.stable_dt);
+        canvas.pan += velocity * dt / canvas.zoom;
+        ui.ctx().request_repaint();
+    }
+}
+
+// Matches `twod_toolbar.rs`'s and `viewport3d_panels.rs`'s own BUTTON_SIZE/
+// ICON_FONT_SIZE exactly — the owner's own request, so these corner
+// buttons read as the same button style as the 2D/3D view sidebars rather
+// than a visually distinct one-off.
+const CORNER_BUTTON_SIZE: f32 = 30.0;
+const CORNER_BUTTON_GAP: f32 = 6.0;
+const CORNER_BUTTON_MARGIN: f32 = 10.0;
+const CORNER_ICON_FONT_SIZE: f32 = 20.0;
+// Codepoints confirmed against Google's own MaterialIconsRound-Regular.
+// codepoints file, same convention every other glyph constant in this app
+// follows (see `twod_toolbar.rs`'s own module doc comment).
+const AUTO_LAYOUT_GLYPH: char = '\u{e8f0}'; // "view_module" — the owner's own pick.
+                                            // "magnet" isn't in this app's bundled font (that's a Material *Symbols*
+                                            // icon, a different, newer set this app doesn't ship) — "grid_on",
+                                            // confirmed with the owner as her second choice once that was explained.
+const SNAP_TO_GRID_GLYPH: char = '\u{e3ec}'; // "grid_on"
+
+/// Square icon button for the canvas's own top-right corner controls
+/// (Auto Layout, Snap to Grid) — same visual recipe as
+/// `twod_toolbar::icon_button` (that one's private to its own file, and a
+/// third near-identical copy here follows the same precedent
+/// `viewport3d_panels::icon_button` already set rather than factor out a
+/// shared helper three different UI styles would all have to agree on).
+fn corner_icon_button(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    id_source: &str,
+    glyph: char,
+    selected: bool,
+    tooltip: &str,
+) -> egui::Response {
+    let response = ui.interact(rect, ui.id().with(id_source), Sense::click());
+    let visuals = ui.style().interact_selectable(&response, selected);
+    let painter = ui.painter();
+    if selected || response.hovered() {
+        painter.rect_filled(rect, 4.0, visuals.bg_fill);
+    }
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph.to_string(),
+        egui::FontId::new(
+            CORNER_ICON_FONT_SIZE,
+            egui::FontFamily::Name("material_icons_round".into()),
+        ),
+        visuals.fg_stroke.color,
+    );
+    response.on_hover_text(tooltip)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -413,6 +698,7 @@ pub fn show(
     history: &mut mc_core::History,
     canvas: &mut CanvasState,
     selected: &mut Option<NodeId>,
+    preview: &mut Option<NodeId>,
     preview_port: &mut Option<(NodeId, String)>,
     gpu: &mut mc_gpu::Context,
     pool: &mut mc_gpu::TexturePool,
@@ -425,6 +711,7 @@ pub fn show(
     let mut output = CanvasOutput {
         open_add_menu_at: None,
         dropped_wire: None,
+        connect_rejected: None,
     };
 
     // Background interact region first, so it sits "under" the per-node/
@@ -576,7 +863,7 @@ pub fn show(
         if node_response.drag_started_by(egui::PointerButton::Primary) && !is_selected {
             canvas.selected.clear();
             canvas.selected.insert(id);
-            *selected = Some(id);
+            *preview = Some(id);
         }
         if node_response.dragged_by(egui::PointerButton::Primary) {
             let delta = node_response.drag_delta() / canvas.zoom;
@@ -585,10 +872,49 @@ pub fn show(
             } else {
                 vec![id]
             };
+            // Snap to Grid (the corner toggle button) locks dragged nodes
+            // to the same `GRID_BASE_SPACING` the dot grid is drawn at —
+            // not whatever multiple the dots render at when zoomed out,
+            // which only doubles for on-screen readability, not layout.
+            // Snapped on every frame, not just on release, so it reads as
+            // the node locking to the grid as it moves rather than
+            // jumping once at the end.
+            //
+            // The per-frame delta is added onto `drag_unsnapped`'s own
+            // running total, not onto the node's actual (already-rounded)
+            // stored position — a real bug once fixed: rounding the
+            // already-rounded position every frame meant a slow drag's
+            // small per-frame delta kept rounding straight back to the
+            // same grid cell it started at, forever, since it never
+            // accumulated anywhere with full precision. From the node's
+            // own point of view that reads as the drag simply stopping
+            // dead the moment it first snapped. See `apply_drag_delta`'s
+            // own doc comment.
             for target in targets {
-                if let Some(pos) = graph.node(target).map(|n| n.position) {
-                    let _ = graph.set_node_position(target, [pos[0] + delta.x, pos[1] + delta.y]);
+                let base = canvas
+                    .drag_unsnapped
+                    .get(&target)
+                    .copied()
+                    .or_else(|| graph.node(target).map(|n| n.position));
+                if let Some(pos) = base {
+                    let (out_pos, raw) = apply_drag_delta(pos, delta, canvas.snap_to_grid);
+                    if canvas.snap_to_grid {
+                        canvas.drag_unsnapped.insert(target, raw);
+                    } else {
+                        canvas.drag_unsnapped.remove(&target);
+                    }
+                    let _ = graph.set_node_position(target, out_pos);
                 }
+            }
+        }
+        if node_response.drag_stopped_by(egui::PointerButton::Primary) {
+            let targets: Vec<NodeId> = if canvas.selected.contains(&id) {
+                canvas.selected.iter().copied().collect()
+            } else {
+                vec![id]
+            };
+            for target in targets {
+                canvas.drag_unsnapped.remove(&target);
             }
         }
         if node_response.clicked_by(egui::PointerButton::Primary) {
@@ -603,12 +929,23 @@ pub fn show(
             } else {
                 canvas.selected.clear();
                 canvas.selected.insert(id);
-                *selected = Some(id);
+                // A plain click only moves the 2D View's own preview, not
+                // the Parameters panel — the owner's own request, so
+                // clicking around the graph to compare node outputs
+                // doesn't keep yanking Parameters away from whatever's
+                // actually being edited. Double-click pins it instead.
+                *preview = Some(id);
             }
+        }
+        if node_response.double_clicked_by(egui::PointerButton::Primary) {
+            canvas.selected.clear();
+            canvas.selected.insert(id);
+            *selected = Some(id);
+            *preview = Some(id);
         }
         node_response.context_menu(|ui| {
             if ui.button("Duplicate Node").clicked() {
-                duplicate_nodes(graph, history, canvas, selected, id);
+                duplicate_nodes(graph, history, canvas, selected, preview, id);
                 ui.close();
             }
             if ui.button("Delete Node").clicked() {
@@ -617,6 +954,9 @@ pub fn show(
                 canvas.selected.remove(&id);
                 if *selected == Some(id) {
                     *selected = None;
+                }
+                if *preview == Some(id) {
+                    *preview = None;
                 }
                 ui.close();
             }
@@ -704,6 +1044,9 @@ pub fn show(
             if *selected == Some(id) {
                 *selected = None;
             }
+            if *preview == Some(id) {
+                *preview = None;
+            }
         }
 
         // Duplicate indicator: same idea as the delete dot, for the
@@ -726,7 +1069,7 @@ pub fn show(
             .on_hover_text("Duplicate node")
             .clicked()
         {
-            duplicate_nodes(graph, history, canvas, selected, id);
+            duplicate_nodes(graph, history, canvas, selected, preview, id);
         }
 
         // Preview-target indicator: a small dot in the header, rather than a
@@ -753,6 +1096,7 @@ pub fn show(
             .clicked()
         {
             *selected = Some(id);
+            *preview = Some(id);
         }
 
         for (i, port) in def.inputs.iter().enumerate() {
@@ -834,15 +1178,16 @@ pub fn show(
                 canvas.wire_drag = Some(PinRef::Output { node: id, index: i });
             }
             // A plain click (not a drag) previews this specific output
-            // instead of wiring it — the same gesture the node header's
-            // own preview dot uses for "show this node", just scoped to
-            // one of its several outputs. `Sense::click_and_drag`'s own
+            // instead of wiring it — only moves `preview` (2D View), same
+            // as a plain click on the node body itself, not `selected`
+            // (Parameters) — matching this pin's own tooltip, which only
+            // ever promised the 2D View. `Sense::click_and_drag`'s own
             // `clicked()` already only fires for an actual click (no
             // meaningful pointer movement), the same way the input pins
             // above already rely on `drag_started_by` alone to mean a real
             // drag — no extra guard needed to tell the two gestures apart.
             if pin_resp.clicked() {
-                *selected = Some(id);
+                *preview = Some(id);
                 *preview_port = Some((id, port.name.to_string()));
             }
         }
@@ -872,7 +1217,12 @@ pub fn show(
             // Thumbnails are node output, which is linear — see
             // `display_encode.rs` for why this has to be a real encode pass,
             // not just handing egui the raw (linear) texture view.
-            if let Some(view) = crate::display_encode::encode_for_display(gpu, pool, &key) {
+            if let Some(view) = crate::display_encode::encode_for_display(
+                gpu,
+                pool,
+                &key,
+                crate::display_encode::ChannelView::Rgb,
+            ) {
                 let texture_id = match thumbnail_ids.get(&id).copied() {
                     Some(tex_id) => {
                         render_state
@@ -912,6 +1262,14 @@ pub fn show(
         if let (Some(from_pin), Some(cur)) = (pins.iter().find(|p| p.r == from), current) {
             draw_wire(&painter, from_pin.pos, cur, port_color(from_pin.port_type));
         }
+        // Scrolls the view toward wherever the pointer is near (or past)
+        // the canvas edge, so a node outside the current viewport — most
+        // often one further "up" the graph than what's visible, the
+        // reported case this exists for — is still reachable without
+        // letting go of the wire.
+        if let Some(cur) = current {
+            autopan_for_wire_drag(canvas, canvas_rect, cur, ui);
+        }
         if ui.input(|i| i.pointer.primary_released()) {
             if let Some(cur) = current {
                 let target = pins
@@ -921,7 +1279,9 @@ pub fn show(
                 let connected =
                     target.is_some_and(|t| t.pos.distance(cur) <= PIN_HIT_RADIUS * canvas.zoom);
                 if let Some(target) = target.filter(|_| connected) {
-                    try_connect(graph, history, from, target.r);
+                    if let Err(reason) = try_connect(graph, history, from, target.r) {
+                        output.connect_rejected = Some(reason.message().to_string());
+                    }
                 } else if let Some(from_pin) = pins.iter().find(|p| p.r == from) {
                     let (from_node, from_port_index, from_is_output) = match from {
                         PinRef::Output { node, index } => (node, index, true),
@@ -1030,6 +1390,50 @@ pub fn show(
         }
     }
 
+    // Top-right corner controls — Auto Layout above Snap to Grid, per the
+    // owner's own request to move both out of the main menu bar and group
+    // them here. Added last, so (per this file's own z-order-by-add-order
+    // rule, see Pass 4's own comment) they sit on top of and intercept
+    // clicks over the plain background-pan gesture underneath them.
+    let auto_layout_rect = Rect::from_min_size(
+        Pos2::new(
+            canvas_rect.right() - CORNER_BUTTON_MARGIN - CORNER_BUTTON_SIZE,
+            canvas_rect.top() + CORNER_BUTTON_MARGIN,
+        ),
+        Vec2::splat(CORNER_BUTTON_SIZE),
+    );
+    let snap_rect = Rect::from_min_size(
+        Pos2::new(
+            auto_layout_rect.min.x,
+            auto_layout_rect.max.y + CORNER_BUTTON_GAP,
+        ),
+        Vec2::splat(CORNER_BUTTON_SIZE),
+    );
+    if corner_icon_button(
+        ui,
+        auto_layout_rect,
+        "canvas_auto_layout_button",
+        AUTO_LAYOUT_GLYPH,
+        false,
+        "Auto Layout — rearranges every node into a clean left-to-right layout.",
+    )
+    .clicked()
+    {
+        auto_layout(graph, history);
+    }
+    if corner_icon_button(
+        ui,
+        snap_rect,
+        "canvas_snap_to_grid_button",
+        SNAP_TO_GRID_GLYPH,
+        canvas.snap_to_grid,
+        "Snap to Grid — dragged nodes lock to the grid while this is on.",
+    )
+    .clicked()
+    {
+        canvas.snap_to_grid = !canvas.snap_to_grid;
+    }
+
     output
 }
 
@@ -1136,8 +1540,223 @@ pub fn connect_dropped_wire(
 
 #[cfg(test)]
 mod tests {
-    use super::{duplicate_nodes, CanvasState, DUPLICATE_OFFSET};
+    use super::{
+        apply_drag_delta, auto_layout, duplicate_nodes, try_connect, wire_drag_autopan_velocity,
+        CanvasState, PinRef, DUPLICATE_OFFSET, GRID_BASE_SPACING, WIRE_DRAG_AUTOPAN_MAX_SPEED,
+    };
+    use egui::{Pos2, Rect, Vec2};
     use mc_core::{Node, ParamValue};
+
+    /// Regression test for a reported bug: with Snap to Grid on, dragging a
+    /// node slowly made it stop moving entirely partway through the drag.
+    /// Root cause was re-rounding the node's own already-snapped stored
+    /// position every frame — each small per-frame delta just rounded
+    /// straight back to the same cell forever, since nowhere kept the
+    /// sub-grid precision needed to ever cross into the next one. This
+    /// simulates exactly that: many frames of a 2-unit delta (far smaller
+    /// than the 24-unit grid's own 12-unit rounding threshold), each frame
+    /// feeding the *unsnapped* total back in as the next frame's base —
+    /// what `canvas.rs`'s own drag handler does — and asserts real distance
+    /// is still covered by the end, not stuck at the starting cell.
+    #[test]
+    fn snap_to_grid_drag_makes_progress_across_many_small_frames_instead_of_sticking() {
+        let mut unsnapped = [0.0f32, 0.0];
+        let mut last_output = [0.0f32, 0.0];
+        for _ in 0..24 {
+            let (out, raw) = apply_drag_delta(unsnapped, Vec2::new(2.0, 0.0), true);
+            unsnapped = raw;
+            last_output = out;
+        }
+        assert!(
+            last_output[0] > 0.0,
+            "24 frames of a 2-unit drag (48 units total) should cross at least one 24-unit \
+             grid cell, not stick at the starting position: got {last_output:?}"
+        );
+    }
+
+    #[test]
+    fn snap_to_grid_rounds_to_the_nearest_grid_multiple() {
+        let (out, _) = apply_drag_delta([0.0, 0.0], Vec2::new(GRID_BASE_SPACING * 2.4, 0.0), true);
+        assert_eq!(out[0], GRID_BASE_SPACING * 2.0);
+    }
+
+    #[test]
+    fn snap_to_grid_off_passes_the_delta_through_unrounded() {
+        let (out, raw) = apply_drag_delta([10.0, 10.0], Vec2::new(3.0, -1.0), false);
+        assert_eq!(out, [13.0, 9.0]);
+        assert_eq!(raw, [13.0, 9.0]);
+    }
+
+    #[test]
+    fn autopan_is_zero_well_inside_the_canvas() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let v = wire_drag_autopan_velocity(rect, Pos2::new(400.0, 300.0));
+        assert_eq!(v, Vec2::ZERO);
+    }
+
+    #[test]
+    fn autopan_scrolls_toward_the_top_edge() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let v = wire_drag_autopan_velocity(rect, Pos2::new(400.0, 5.0));
+        assert!(v.y < 0.0, "near the top edge should pan toward negative y");
+        assert_eq!(v.x, 0.0);
+    }
+
+    #[test]
+    fn autopan_scrolls_toward_the_bottom_edge() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let v = wire_drag_autopan_velocity(rect, Pos2::new(400.0, 598.0));
+        assert!(
+            v.y > 0.0,
+            "near the bottom edge should pan toward positive y"
+        );
+    }
+
+    #[test]
+    fn autopan_scrolls_toward_the_left_edge() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let v = wire_drag_autopan_velocity(rect, Pos2::new(2.0, 300.0));
+        assert!(v.x < 0.0, "near the left edge should pan toward negative x");
+    }
+
+    #[test]
+    fn autopan_clamps_to_the_max_speed_well_past_the_edge() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let v = wire_drag_autopan_velocity(rect, Pos2::new(400.0, -500.0));
+        assert_eq!(v.y, -WIRE_DRAG_AUTOPAN_MAX_SPEED);
+    }
+
+    #[test]
+    fn autopan_in_a_corner_moves_diagonally() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let v = wire_drag_autopan_velocity(rect, Pos2::new(3.0, 3.0));
+        assert!(v.x < 0.0, "near the left edge should also pan in x");
+        assert!(v.y < 0.0, "near the top edge should also pan in y");
+    }
+
+    #[test]
+    fn try_connect_links_a_compatible_output_to_an_input() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        let source = graph.add_node(Node::new("perlin_noise"));
+        let filter = graph.add_node(Node::new("levels"));
+
+        let result = try_connect(
+            &mut graph,
+            &mut history,
+            PinRef::Output {
+                node: source,
+                index: 0,
+            },
+            PinRef::Input {
+                node: filter,
+                index: 0,
+            },
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(graph.connections().len(), 1);
+    }
+
+    #[test]
+    fn try_connect_rejects_two_pins_of_the_same_direction() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        let a = graph.add_node(Node::new("perlin_noise"));
+        let b = graph.add_node(Node::new("voronoi"));
+
+        let result = try_connect(
+            &mut graph,
+            &mut history,
+            PinRef::Output { node: a, index: 0 },
+            PinRef::Output { node: b, index: 0 },
+        );
+
+        assert!(result.is_err());
+        assert!(graph.connections().is_empty());
+    }
+
+    #[test]
+    fn try_connect_rejects_a_connection_that_would_create_a_cycle() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        let a = graph.add_node(Node::new("levels"));
+        let b = graph.add_node(Node::new("levels"));
+        graph
+            .connect(a, "output", b, "input")
+            .expect("a -> b is valid on its own");
+
+        // Dragging a wire from b's output "up" into a's input would feed
+        // b back into its own upstream — exactly the reported "can't
+        // connect to a node higher up" symptom; the graph is right to
+        // refuse it, but this test is really about `try_connect` giving a
+        // real reason back rather than nothing.
+        let result = try_connect(
+            &mut graph,
+            &mut history,
+            PinRef::Output { node: b, index: 0 },
+            PinRef::Input { node: a, index: 0 },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            graph.connections().len(),
+            1,
+            "the original a -> b connection should be untouched"
+        );
+    }
+
+    #[test]
+    fn auto_layout_places_downstream_nodes_in_a_later_column() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        let source = graph.add_node(Node::new("perlin_noise"));
+        let filter = graph.add_node(Node::new("levels"));
+        graph
+            .connect(source, "output", filter, "input")
+            .expect("valid connection");
+        // Deliberately start both nodes at the same spot, so a passing
+        // test can only mean the layout actually separated them by
+        // dependency, not that they happened to already be far apart.
+        let _ = graph.set_node_position(source, [500.0, 500.0]);
+        let _ = graph.set_node_position(filter, [500.0, 500.0]);
+
+        auto_layout(&mut graph, &mut history);
+
+        let source_x = graph.node(source).unwrap().position[0];
+        let filter_x = graph.node(filter).unwrap().position[0];
+        assert!(
+            filter_x > source_x,
+            "levels (downstream) should land in a later column than perlin_noise (its source): \
+             source_x={source_x}, filter_x={filter_x}"
+        );
+    }
+
+    #[test]
+    fn auto_layout_is_a_single_undoable_step() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        let a = graph.add_node(Node::new("perlin_noise"));
+        let b = graph.add_node(Node::new("voronoi"));
+        let _ = graph.set_node_position(a, [12.0, 34.0]);
+        let _ = graph.set_node_position(b, [56.0, 78.0]);
+
+        auto_layout(&mut graph, &mut history);
+        assert_ne!(graph.node(a).unwrap().position, [12.0, 34.0]);
+
+        assert!(history.can_undo());
+        history.undo(&mut graph);
+        assert_eq!(graph.node(a).unwrap().position, [12.0, 34.0]);
+        assert_eq!(graph.node(b).unwrap().position, [56.0, 78.0]);
+    }
+
+    #[test]
+    fn auto_layout_on_an_empty_graph_does_nothing() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        auto_layout(&mut graph, &mut history);
+        assert!(!history.can_undo());
+    }
 
     #[test]
     fn duplicate_copies_kind_and_params_with_an_offset_position_and_selects_the_copy() {
@@ -1145,6 +1764,7 @@ mod tests {
         let mut history = mc_core::History::new();
         let mut canvas = CanvasState::default();
         let mut selected = None;
+        let mut preview = None;
 
         let original =
             graph.add_node(Node::new("perlin_noise").with_param("seed", ParamValue::Seed(7)));
@@ -1155,6 +1775,7 @@ mod tests {
             &mut history,
             &mut canvas,
             &mut selected,
+            &mut preview,
             original,
         );
 
@@ -1186,13 +1807,21 @@ mod tests {
         let mut history = mc_core::History::new();
         let mut canvas = CanvasState::default();
         let mut selected = None;
+        let mut preview = None;
 
         let a = graph.add_node(Node::new("perlin_noise"));
         let b = graph.add_node(Node::new("voronoi"));
         canvas.selected.insert(a);
         canvas.selected.insert(b);
 
-        duplicate_nodes(&mut graph, &mut history, &mut canvas, &mut selected, a);
+        duplicate_nodes(
+            &mut graph,
+            &mut history,
+            &mut canvas,
+            &mut selected,
+            &mut preview,
+            a,
+        );
 
         assert_eq!(
             graph.nodes().count(),

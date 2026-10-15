@@ -35,15 +35,21 @@ pub const PINK_DWARF: Color32 = Color32::from_rgb(0xFF, 0x99, 0xD8);
 /// own unassigned-category fallback below).
 pub const PATH_CYAN: Color32 = Color32::from_rgb(0x6E, 0xE7, 0xE0);
 
-/// One accent color per node category (`mc_nodes::defs`'s 9 category
+/// One accent color per node category (`mc_nodes::defs`'s 10 category
 /// strings), for the Node Library panel's grouping and each node card's
 /// header-bar accent in the Node Graph canvas. An evenly hue-spaced
 /// placeholder palette (not sourced from the owner's brand guide, which
 /// doesn't define per-category colors) — easy to swap for real ones later.
+/// `Generators/Path` is the one exception: rather than slot a 10th hue
+/// into that wheel, it reuses `PATH_CYAN` directly — the same color
+/// Path-type wires/ports already use everywhere else in the app, so the
+/// category accent and "this is Path data" visual language line up
+/// instead of introducing an unrelated second meaning for the same hue.
 pub fn category_color(category: &str) -> Color32 {
     match category {
         "Generators/Noise" => Color32::from_rgb(0xD3, 0x68, 0x68),
         "Generators/Patterns" => Color32::from_rgb(0xD3, 0xAF, 0x68),
+        "Generators/Path" => PATH_CYAN,
         "Filters/Adjustments" => Color32::from_rgb(0xAF, 0xD3, 0x68),
         "Filters/Blending & Masking" => Color32::from_rgb(0x68, 0xD3, 0x68),
         "Filters/Spatial" => Color32::from_rgb(0x68, 0xD3, 0xAF),

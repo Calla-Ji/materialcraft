@@ -719,12 +719,19 @@ fn closes_active_subpath(
 fn draw(
     ui: &egui::Ui,
     image_rect: egui::Rect,
+    content_rect: egui::Rect,
     path: &mc_core::Path,
     selected: &HashSet<PointKey>,
     pen_mode: bool,
     show_curve: bool,
 ) {
-    let painter = ui.painter();
+    // Clipped to `content_rect`, not just drawn at `image_rect`'s own
+    // position — once the 2D View can zoom, `image_rect` can be larger
+    // than (and centered off of) `content_rect`, and an unclipped painter
+    // let the curve/points/hint bleed out over the toolbar rail and
+    // neighboring panels instead of stopping at the 2D View's own edge.
+    let painter = ui.painter_at(content_rect);
+    let painter = &painter;
     let curve_stroke = egui::Stroke::new(1.5, crate::theme::PATH_CYAN);
     let handle_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(190));
     let point_outline = egui::Stroke::new(1.0, egui::Color32::BLACK);
@@ -925,6 +932,7 @@ pub fn show(
         draw(
             ui,
             image_rect,
+            content_rect,
             current,
             &state.selected,
             state.pen_mode,

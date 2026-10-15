@@ -441,6 +441,139 @@ fn knit_preset_picker(
     }
 }
 
+/// Stitch's "Look" param (ParamSpec::defs.rs's own tooltip: "Picking a Look
+/// resets Thread Diameter, Plies, Twist Angle, Regularity, Stem Width and
+/// Density to its own defaults — each stays independently editable
+/// afterward") — same "preset resets these sliders, they stay independently
+/// editable after" pattern as `knit_preset_picker` above, just triggered by
+/// the node's own real "look" param rather than a separate "preset" one.
+fn stitch_look_picker(
+    ui: &mut egui::Ui,
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    id: mc_core::NodeId,
+    node_kind: &str,
+    current_params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+) {
+    if node_kind != "stitch" {
+        return;
+    }
+    let current = match current_params.get("look") {
+        Some(mc_core::ParamValue::Enum(s)) => s.clone(),
+        _ => "hand".to_string(),
+    };
+    let mut chosen = None;
+    egui::ComboBox::from_label("Look")
+        .selected_text(&current)
+        .show_ui(ui, |ui| {
+            for name in ["hand", "machine"] {
+                if ui.selectable_label(current == name, name).clicked() {
+                    chosen = Some(name);
+                }
+            }
+        });
+    if let Some(name) = chosen {
+        let look = match name {
+            "machine" => mc_nodes::stitch::Look::Machine,
+            _ => mc_nodes::stitch::Look::Hand,
+        };
+        let defaults = mc_nodes::stitch::look_defaults(look);
+        commit_once_multi(
+            graph,
+            history,
+            id,
+            &[
+                ("look", mc_core::ParamValue::Enum(name.to_string())),
+                (
+                    "thread_mm",
+                    mc_core::ParamValue::Float(defaults.thread_mm as f32),
+                ),
+                ("plies", mc_core::ParamValue::Int(defaults.plies as i32)),
+                (
+                    "twist_angle",
+                    mc_core::ParamValue::Float(defaults.twist_angle_deg as f32),
+                ),
+                (
+                    "regularity",
+                    mc_core::ParamValue::Float(defaults.regularity as f32),
+                ),
+                (
+                    "stem_width_mm",
+                    mc_core::ParamValue::Float(defaults.thread_mm as f32),
+                ),
+                (
+                    "density_mm",
+                    mc_core::ParamValue::Float(
+                        (defaults.thread_mm * defaults.density_factor) as f32,
+                    ),
+                ),
+            ],
+        );
+    }
+}
+
+/// French Knot's own "Knot Look" picker — same "preset resets these
+/// sliders, they stay independently editable after" pattern as
+/// `stitch_look_picker` just above, for the exact same reason
+/// (`knot_look` is its own param, separate from Stitch's own `look`,
+/// precisely because it needs this kind of multi-slider reset with
+/// different values — see `mc_nodes::defs`'s own Stitch `NodeDef` doc
+/// comment on `knot_look`).
+fn knot_look_picker(
+    ui: &mut egui::Ui,
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    id: mc_core::NodeId,
+    node_kind: &str,
+    current_params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+) {
+    let stitch_kind = match current_params.get("stitch") {
+        Some(mc_core::ParamValue::Enum(s)) => s.as_str(),
+        _ => "running",
+    };
+    if node_kind != "stitch" || stitch_kind != "french_knot" {
+        return;
+    }
+    let current = match current_params.get("knot_look") {
+        Some(mc_core::ParamValue::Enum(s)) => s.clone(),
+        _ => "hand".to_string(),
+    };
+    let mut chosen = None;
+    egui::ComboBox::from_label("Knot Look")
+        .selected_text(&current)
+        .show_ui(ui, |ui| {
+            for name in ["hand", "neat", "loose"] {
+                if ui.selectable_label(current == name, name).clicked() {
+                    chosen = Some(name);
+                }
+            }
+        });
+    if let Some(name) = chosen {
+        let look = match name {
+            "neat" => mc_nodes::french_knot::KnotLook::Neat,
+            "loose" => mc_nodes::french_knot::KnotLook::Loose,
+            _ => mc_nodes::french_knot::KnotLook::Hand,
+        };
+        let defaults = mc_nodes::french_knot::look_defaults(look);
+        commit_once_multi(
+            graph,
+            history,
+            id,
+            &[
+                ("knot_look", mc_core::ParamValue::Enum(name.to_string())),
+                (
+                    "knot_twist_angle",
+                    mc_core::ParamValue::Float(defaults.twist_angle_deg as f32),
+                ),
+                (
+                    "regularity",
+                    mc_core::ParamValue::Float(defaults.regularity as f32),
+                ),
+            ],
+        );
+    }
+}
+
 /// KNIT_NODE_SPEC.md §8 item 6: "snapping shown live in the panel (for
 /// example '12 wales x 13 courses')" — Wales/Courses both get rounded up to
 /// a multiple of the chart's own width/height (`mc_nodes::knit::resolve`),
@@ -465,6 +598,68 @@ fn knit_resolved_hint(
     ));
 }
 
+/// The Seed dice button, upgraded by [`randomize_all_params`] into a
+/// "randomize everything on this node" action — its own section at the
+/// very top of the panel, above any preset picker. Owner's own call: a
+/// whole-node action like this reads as a different kind of thing than a
+/// preset (which only resets a handful of *dependent* sliders), so the two
+/// shouldn't visually blend into one group. Previously rendered wherever
+/// "seed" fell in the node's own declared param order — the bottom, since
+/// every node declares it last — which buried a whole-node action under
+/// everything it was about to reset.
+fn seed_randomizer_section(
+    ui: &mut egui::Ui,
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    dragging: &mut DragState,
+    id: mc_core::NodeId,
+    def: &'static mc_nodes::defs::NodeDef,
+    current_params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+) -> bool {
+    let Some(param) = def
+        .params
+        .iter()
+        .find(|p| matches!(p.kind, mc_nodes::defs::ParamSpecKind::Seed { .. }))
+    else {
+        return false;
+    };
+    let mc_nodes::defs::ParamSpecKind::Seed { default } = &param.kind else {
+        unreachable!("just matched Seed above")
+    };
+    let mut value = current_params
+        .get(param.name)
+        .and_then(mc_core::ParamValue::as_seed)
+        .unwrap_or(*default);
+    ui.horizontal(|ui| {
+        let response = ui
+            .add(egui::DragValue::new(&mut value).prefix(format!("{}: ", param.display_name)))
+            .on_hover_text(param.tooltip);
+        commit_live(
+            ui,
+            graph,
+            history,
+            dragging,
+            id,
+            param.name,
+            &response,
+            mc_core::ParamValue::Seed(value),
+        );
+        if ui
+            .button("🎲")
+            .on_hover_text("Randomizes every parameter on this node, not just Seed.")
+            .clicked()
+        {
+            let new_seed = random_seed();
+            let mut changes = vec![(param.name, mc_core::ParamValue::Seed(new_seed))];
+            changes.extend(randomize_all_params(def, param.name, new_seed));
+            commit_once_multi(graph, history, id, &changes);
+        }
+    });
+    thread_seed_hint(ui, def.kind, param.name, current_params);
+    ui.separator();
+    true
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     graph: &mut mc_core::Graph,
@@ -472,6 +667,7 @@ pub fn show(
     selected: Option<mc_core::NodeId>,
     dragging: &mut DragState,
     path_editor: &mut crate::path_editor::PathEditorState,
+    pending_svg_export: &mut Option<mc_core::NodeId>,
 ) {
     egui::Frame::new()
         .inner_margin(egui::Margin::symmetric(12, 8))
@@ -485,7 +681,15 @@ pub fn show(
                 .id_salt("params_panel_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    show_inner(ui, graph, history, selected, dragging, path_editor);
+                    show_inner(
+                        ui,
+                        graph,
+                        history,
+                        selected,
+                        dragging,
+                        path_editor,
+                        pending_svg_export,
+                    );
                 });
         });
 }
@@ -497,6 +701,7 @@ fn show_inner(
     selected: Option<mc_core::NodeId>,
     dragging: &mut DragState,
     path_editor: &mut crate::path_editor::PathEditorState,
+    pending_svg_export: &mut Option<mc_core::NodeId>,
 ) {
     let Some(id) = selected else {
         ui.weak("(select a node to edit its parameters)");
@@ -518,9 +723,14 @@ fn show_inner(
     ui.heading(def.display_name);
     ui.weak(def.tooltip);
 
+    let has_seed_randomizer =
+        seed_randomizer_section(ui, graph, history, dragging, id, def, &current_params);
+
     thread_preset_picker(ui, graph, history, id, &node_kind);
     knit_preset_picker(ui, graph, history, id, &node_kind, &current_params);
     knit_resolved_hint(ui, &node_kind, &current_params);
+    stitch_look_picker(ui, graph, history, id, &node_kind, &current_params);
+    knot_look_picker(ui, graph, history, id, &node_kind, &current_params);
 
     // A connected-vs-fallback status line for inputs where that's genuinely
     // ambiguous from the rendered result alone (e.g. a connected Fiber using
@@ -623,6 +833,61 @@ fn show_inner(
         if node_kind == "knit" && param.name == "preset" {
             continue;
         }
+        // Rendered by stitch_look_picker/knot_look_picker above instead,
+        // for the same reason.
+        if node_kind == "stitch" && matches!(param.name, "look" | "knot_look") {
+            continue;
+        }
+        // Image Trace's and Path Simplify's own "path" params are each
+        // computed fresh every evaluation (`mc_nodes::image_trace`'s and
+        // `mc_nodes::path_simplify`'s own `dispatch`/`simplify`), not
+        // hand-edited — the generic `ParamSpecKind::Path` case below
+        // (built for the Path node's own, genuinely user-editable "Wrap"
+        // toggle) would let a click here get silently overwritten on the
+        // very next evaluation, so both render their own read-only
+        // summary instead. Image Trace also gets the "Export SVG…"
+        // action TRACE_SPEC.md's own node UI calls for.
+        if matches!(node_kind.as_str(), "image_trace" | "path_simplify") && param.name == "path" {
+            let path_value = current_params
+                .get("path")
+                .and_then(mc_core::ParamValue::as_path)
+                .cloned()
+                .unwrap_or_default();
+            let point_count: usize = path_value.subpaths.iter().map(|sp| sp.points.len()).sum();
+            let source = if node_kind == "image_trace" {
+                "traced from Image"
+            } else {
+                "simplified from Path"
+            };
+            ui.weak(format!(
+                "{} subpath{}, {} point{} \u{2014} {source}",
+                path_value.subpaths.len(),
+                if path_value.subpaths.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                point_count,
+                if point_count == 1 { "" } else { "s" },
+            ))
+            .on_hover_text(param.tooltip);
+            if node_kind == "image_trace"
+                && ui
+                    .add_enabled(
+                        !path_value.subpaths.is_empty(),
+                        egui::Button::new("Export SVG\u{2026}"),
+                    )
+                    .clicked()
+            {
+                *pending_svg_export = Some(id);
+            }
+            continue;
+        }
+        // Rendered by seed_randomizer_section above instead, for the same
+        // reason — moved to its own section at the top of the panel.
+        if has_seed_randomizer && matches!(param.kind, mc_nodes::defs::ParamSpecKind::Seed { .. }) {
+            continue;
+        }
         if !mc_nodes::defs::param_is_relevant(&node_kind, param.name, &current_params) {
             continue;
         }
@@ -664,38 +929,12 @@ fn show_inner(
                 thread_fiber_param_hint(ui, &node_kind, param.name);
                 knit_ply_id_hint(ui, &node_kind, param.name, &current_params);
             }
-            mc_nodes::defs::ParamSpecKind::Seed { default } => {
-                let mut value = current.and_then(|v| v.as_seed()).unwrap_or(*default);
-                ui.horizontal(|ui| {
-                    let response = ui
-                        .add(
-                            egui::DragValue::new(&mut value)
-                                .prefix(format!("{}: ", param.display_name)),
-                        )
-                        .on_hover_text(param.tooltip);
-                    commit_live(
-                        ui,
-                        graph,
-                        history,
-                        dragging,
-                        id,
-                        param.name,
-                        &response,
-                        mc_core::ParamValue::Seed(value),
-                    );
-                    if ui
-                        .button("🎲")
-                        .on_hover_text("Randomizes every parameter on this node, not just Seed.")
-                        .clicked()
-                    {
-                        let new_seed = random_seed();
-                        let mut changes = vec![(param.name, mc_core::ParamValue::Seed(new_seed))];
-                        changes.extend(randomize_all_params(def, param.name, new_seed));
-                        commit_once_multi(graph, history, id, &changes);
-                    }
-                });
-                thread_seed_hint(ui, &node_kind, param.name, &current_params);
-            }
+            // No Seed arm here — every node with a Seed param gets
+            // `has_seed_randomizer == true` above, so the skip earlier in
+            // this loop always continues past it before reaching this
+            // match; it's rendered once, at the top of the panel, by
+            // `seed_randomizer_section` instead.
+            mc_nodes::defs::ParamSpecKind::Seed { .. } => {}
             mc_nodes::defs::ParamSpecKind::Enum { options, default } => {
                 let value = match &current {
                     Some(mc_core::ParamValue::Enum(s)) => s.clone(),
@@ -1024,75 +1263,90 @@ fn path_point_list(
     ui.add_space(6.0);
     ui.separator();
     for (sp_i, sp) in path_value.subpaths.iter().enumerate() {
-        ui.weak(format!(
-            "Subpath {} ({})",
+        // Collapsed by default: a hand-drawn curve might only have a
+        // handful of points, but an Image Trace result can have hundreds
+        // of subpaths with thousands of points between them — rendering
+        // every one of those rows unconditionally made this list the
+        // dominant cost in the whole panel, and an unusable wall of
+        // fields to begin with. `CollapsingHeader`'s own body closure
+        // only runs while open, so a closed subpath costs nothing here
+        // beyond its own header row.
+        egui::CollapsingHeader::new(format!(
+            "Subpath {} ({}, {} point{})",
             sp_i + 1,
-            if sp.closed { "closed" } else { "open" }
-        ));
-        for (pt_i, pt) in sp.points.iter().enumerate() {
-            ui.horizontal(|ui| {
-                let is_selected = path_editor.is_selected(sp_i, pt_i);
-                if ui
-                    .selectable_label(is_selected, format!("Point {}", pt_i + 1))
-                    .clicked()
-                {
-                    path_editor.select_only(sp_i, pt_i);
-                }
+            if sp.closed { "closed" } else { "open" },
+            sp.points.len(),
+            if sp.points.len() == 1 { "" } else { "s" },
+        ))
+        .id_salt(("path_point_list_subpath", id, sp_i))
+        .default_open(false)
+        .show(ui, |ui| {
+            for (pt_i, pt) in sp.points.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let is_selected = path_editor.is_selected(sp_i, pt_i);
+                    if ui
+                        .selectable_label(is_selected, format!("Point {}", pt_i + 1))
+                        .clicked()
+                    {
+                        path_editor.select_only(sp_i, pt_i);
+                    }
 
-                let mut new_pos = pt.pos;
-                let x_response = ui.add(
-                    egui::DragValue::new(&mut new_pos[0])
-                        .speed(0.001)
-                        .prefix("X: "),
-                );
-                let y_response = ui.add(
-                    egui::DragValue::new(&mut new_pos[1])
-                        .speed(0.001)
-                        .prefix("Y: "),
-                );
+                    let mut new_pos = pt.pos;
+                    let x_response = ui.add(
+                        egui::DragValue::new(&mut new_pos[0])
+                            .speed(0.001)
+                            .prefix("X: "),
+                    );
+                    let y_response = ui.add(
+                        egui::DragValue::new(&mut new_pos[1])
+                            .speed(0.001)
+                            .prefix("Y: "),
+                    );
 
-                // Called every frame regardless of whether either value
-                // actually changed — same as the Vec2 case above,
-                // `commit_live` itself is the thing deciding whether this
-                // frame is a drag-start/live-apply/drag-stop no-op, same
-                // reasoning as why that case doesn't gate on `changed()`
-                // either: gating here on our own would risk skipping the
-                // exact frame `commit_live` needs to see to open or close
-                // its undo snapshot.
-                let mut new_path = path_value.clone();
-                new_path.subpaths[sp_i].points[pt_i].pos = new_pos;
-                commit_live(
-                    ui,
-                    graph,
-                    history,
-                    dragging,
-                    id,
-                    "path",
-                    &x_response,
-                    mc_core::ParamValue::Path(new_path.clone()),
-                );
-                commit_live(
-                    ui,
-                    graph,
-                    history,
-                    dragging,
-                    id,
-                    "path",
-                    &y_response,
-                    mc_core::ParamValue::Path(new_path),
-                );
+                    // Called every frame regardless of whether either
+                    // value actually changed — same as the Vec2 case
+                    // above, `commit_live` itself is the thing deciding
+                    // whether this frame is a drag-start/live-apply/
+                    // drag-stop no-op, same reasoning as why that case
+                    // doesn't gate on `changed()` either: gating here on
+                    // our own would risk skipping the exact frame
+                    // `commit_live` needs to see to open or close its
+                    // undo snapshot.
+                    let mut new_path = path_value.clone();
+                    new_path.subpaths[sp_i].points[pt_i].pos = new_pos;
+                    commit_live(
+                        ui,
+                        graph,
+                        history,
+                        dragging,
+                        id,
+                        "path",
+                        &x_response,
+                        mc_core::ParamValue::Path(new_path.clone()),
+                    );
+                    commit_live(
+                        ui,
+                        graph,
+                        history,
+                        dragging,
+                        id,
+                        "path",
+                        &y_response,
+                        mc_core::ParamValue::Path(new_path),
+                    );
 
-                let trash = ui
-                    .add(egui::Button::new(
-                        egui::RichText::new('\u{e872}'.to_string()) // "delete"
-                            .family(egui::FontFamily::Name("material_icons_round".into())),
-                    ))
-                    .on_hover_text("Delete this point.");
-                if trash.clicked() {
-                    path_editor.delete_point(graph, history, id, sp_i, pt_i);
-                }
-            });
-        }
+                    let trash = ui
+                        .add(egui::Button::new(
+                            egui::RichText::new('\u{e872}'.to_string()) // "delete"
+                                .family(egui::FontFamily::Name("material_icons_round".into())),
+                        ))
+                        .on_hover_text("Delete this point.");
+                    if trash.clicked() {
+                        path_editor.delete_point(graph, history, id, sp_i, pt_i);
+                    }
+                });
+            }
+        });
     }
 }
 

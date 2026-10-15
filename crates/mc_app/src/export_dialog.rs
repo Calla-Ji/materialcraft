@@ -11,6 +11,16 @@ pub struct ExportDialogState {
     graph_name: String,
     out_dir: Option<std::path::PathBuf>,
     status: Option<Result<Vec<std::path::PathBuf>, String>>,
+    /// Which maps to export, plus Unreal's own Format/Opacity choices —
+    /// shared between both presets now (the owner's own request: Blender
+    /// used to have no per-map choice at all, only Unreal's "optional"
+    /// trio was toggleable). See `mc_nodes::export::ExportOptions`'s own
+    /// doc comment for which fields apply to which preset.
+    options: mc_nodes::export::ExportOptions,
+    /// `Some(paths)` while the "these already exist, overwrite?" confirm
+    /// window is up — set by a first Export click that found existing
+    /// files, cleared by either button in that window.
+    pending_overwrite: Option<Vec<std::path::PathBuf>>,
 }
 
 impl Default for ExportDialogState {
@@ -22,8 +32,32 @@ impl Default for ExportDialogState {
             graph_name: "material".to_string(),
             out_dir: None,
             status: None,
+            options: mc_nodes::export::ExportOptions::default(),
+            pending_overwrite: None,
         }
     }
+}
+
+/// Runs the real export and stores the result in `state.status`.
+fn run_export(
+    state: &mut ExportDialogState,
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    graph: &mut mc_core::Graph,
+    out_dir: &std::path::Path,
+) {
+    let result = mc_nodes::export::export_material(
+        gpu,
+        pool,
+        graph,
+        state.preset,
+        state.resolution,
+        state.graph_name.trim(),
+        out_dir,
+        &state.options,
+    )
+    .map_err(|err| err.to_string());
+    state.status = Some(result);
 }
 
 /// Renders the dialog if `state.open`. Mutates `graph` transiently (it's
@@ -41,10 +75,14 @@ pub fn show(
     }
 
     let mut open = state.open;
-    egui::Window::new("Export Material")
-        .open(&mut open)
-        .resizable(false)
-        .show(ctx, |ui| {
+    crate::dialog_chrome::show(
+        ctx,
+        "export_material_dialog",
+        "Export Material",
+        &mut open,
+        true,
+        crate::dialog_chrome::DEFAULT_WIDTH,
+        |ui| {
             egui::ComboBox::from_label("Preset")
                 .selected_text(state.preset.name())
                 .show_ui(ui, |ui| {
@@ -66,6 +104,75 @@ pub fn show(
                         );
                     }
                 });
+
+            let is_unreal = state.preset == mc_export::naming::Preset::Unreal;
+
+            if is_unreal {
+                ui.separator();
+                egui::ComboBox::from_label("Format")
+                    .selected_text(match state.options.format {
+                        mc_export::RasterFormat::Png => "PNG",
+                        mc_export::RasterFormat::Tga => "TGA",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut state.options.format,
+                            mc_export::RasterFormat::Png,
+                            "PNG",
+                        );
+                        ui.selectable_value(
+                            &mut state.options.format,
+                            mc_export::RasterFormat::Tga,
+                            "TGA",
+                        );
+                    });
+            }
+
+            ui.separator();
+            ui.weak("Maps to export \u{2014} unchecked ones are left out entirely.");
+            ui.checkbox(&mut state.options.export_base_color, "Base Color");
+            ui.checkbox(&mut state.options.export_normal, "Normal");
+            if is_unreal {
+                ui.checkbox(&mut state.options.export_orm, "ORM");
+            } else {
+                ui.checkbox(&mut state.options.export_roughness, "Roughness");
+                ui.checkbox(&mut state.options.export_metallic, "Metallic");
+                ui.checkbox(
+                    &mut state.options.export_ambient_occlusion,
+                    "Ambient Occlusion",
+                );
+            }
+            ui.checkbox(&mut state.options.export_height, "Height");
+            ui.checkbox(&mut state.options.export_emissive, "Emissive");
+
+            if is_unreal {
+                let mut export_opacity =
+                    state.options.opacity != mc_nodes::export::OpacityMode::Off;
+                ui.checkbox(&mut export_opacity, "Opacity");
+                if export_opacity {
+                    if state.options.opacity == mc_nodes::export::OpacityMode::Off {
+                        state.options.opacity = mc_nodes::export::OpacityMode::BaseColorAlpha;
+                    }
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.radio_value(
+                            &mut state.options.opacity,
+                            mc_nodes::export::OpacityMode::BaseColorAlpha,
+                            "In Base Color alpha",
+                        );
+                        ui.radio_value(
+                            &mut state.options.opacity,
+                            mc_nodes::export::OpacityMode::SeparateFile,
+                            "Separate file (_M)",
+                        );
+                    });
+                } else {
+                    state.options.opacity = mc_nodes::export::OpacityMode::Off;
+                }
+            } else {
+                ui.checkbox(&mut state.options.export_alpha, "Alpha");
+            }
+            ui.separator();
 
             ui.horizontal(|ui| {
                 ui.label("Name:");
@@ -96,17 +203,19 @@ pub fn show(
                 .clicked()
             {
                 let out_dir = state.out_dir.clone().expect("checked by can_export");
-                let result = mc_nodes::export::export_material(
-                    gpu,
-                    pool,
+                let planned = mc_nodes::export::planned_output_paths(
                     graph,
                     state.preset,
-                    state.resolution,
                     state.graph_name.trim(),
                     &out_dir,
-                )
-                .map_err(|err| err.to_string());
-                state.status = Some(result);
+                    &state.options,
+                );
+                let existing: Vec<_> = planned.into_iter().filter(|p| p.exists()).collect();
+                if existing.is_empty() {
+                    run_export(state, gpu, pool, graph, &out_dir);
+                } else {
+                    state.pending_overwrite = Some(existing);
+                }
             }
 
             if let Some(status) = &state.status {
@@ -119,12 +228,57 @@ pub fn show(
                         for path in paths {
                             ui.weak(path.display().to_string());
                         }
+                        if state.preset == mc_export::naming::Preset::Unreal {
+                            ui.add_space(4.0);
+                            ui.weak(
+                                "In UE5: BC sRGB on; N sRGB off, compression Normalmap; ORM \
+                                 sRGB off, compression Masks; H sRGB off, compression Grayscale.",
+                            );
+                        }
                     }
                     Err(err) => {
                         ui.colored_label(egui::Color32::LIGHT_RED, format!("Export failed: {err}"));
                     }
                 }
             }
-        });
+        },
+    );
     state.open = open;
+
+    if let Some(existing) = state.pending_overwrite.clone() {
+        // Not `closable`: Overwrite/Cancel are the only way out, on
+        // purpose — see `dialog_chrome::show`'s own doc comment on why a
+        // hard confirm like this never gets an X.
+        let mut open = true;
+        let mut still_pending = true;
+        crate::dialog_chrome::show(
+            ctx,
+            "export_overwrite_confirm",
+            "Overwrite existing files?",
+            &mut open,
+            false,
+            crate::dialog_chrome::DEFAULT_WIDTH,
+            |ui| {
+                ui.label("These files already exist and will be overwritten:");
+                ui.add_space(4.0);
+                for path in &existing {
+                    ui.weak(path.display().to_string());
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Overwrite").clicked() {
+                        let out_dir = state.out_dir.clone().expect("set before export");
+                        run_export(state, gpu, pool, graph, &out_dir);
+                        still_pending = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        still_pending = false;
+                    }
+                });
+            },
+        );
+        if !still_pending {
+            state.pending_overwrite = None;
+        }
+    }
 }
