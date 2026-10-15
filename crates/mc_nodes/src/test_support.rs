@@ -78,3 +78,61 @@ pub fn tiles_seamlessly(pixels: &[u8], resolution: u32) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Path to a file under `tests/golden/<subdir>/` — shared by any node with
+/// golden fixtures there (currently Gabor Noise and Scattered Streaks, both
+/// under `gabor_streaks`, ported from the owner's own reference package).
+pub fn golden_path(subdir: &str, file_name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/golden")
+        .join(subdir)
+        .join(file_name)
+}
+
+/// Minimal `.npy` reader for a 2D little-endian `<f4` array — exactly what
+/// the Gabor/Streaks reference package's `make_sheets.py` wrote its own
+/// `.npy` goldens as (confirmed via a direct header dump before writing
+/// this). Only handles the one shape those goldens actually use; not a
+/// general-purpose parser.
+pub fn read_npy_f32_2d(path: &std::path::Path) -> Vec<f32> {
+    let bytes = std::fs::read(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    assert_eq!(
+        &bytes[0..6],
+        b"\x93NUMPY",
+        "{}: bad npy magic",
+        path.display()
+    );
+    let header_len = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
+    let header = std::str::from_utf8(&bytes[10..10 + header_len]).unwrap();
+    assert!(
+        header.contains("'<f4'"),
+        "{}: expected little-endian f32 dtype, got header {header}",
+        path.display()
+    );
+    let data_start = 10 + header_len;
+    bytes[data_start..]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
+        .collect()
+}
+
+/// Loads a 16-bit grayscale PNG golden as `0..1` `f32`s — the Gabor/Streaks
+/// reference package's own goldens are stored at 16-bit depth for extra
+/// precision even though its own tolerances are stated in 8-bit (`/255`)
+/// units. Returns `(values, resolution)`.
+pub fn read_png16_as_unit_floats(path: &std::path::Path) -> (Vec<f32>, u32) {
+    let img = image::open(path)
+        .unwrap_or_else(|err| panic!("failed to open {}: {err}", path.display()))
+        .to_luma16();
+    let resolution = img.width();
+    assert_eq!(img.height(), resolution, "{}: not square", path.display());
+    let values = img
+        .into_raw()
+        .into_iter()
+        .map(|v| f32::from(v) / 65535.0)
+        .collect();
+    (values, resolution)
+}

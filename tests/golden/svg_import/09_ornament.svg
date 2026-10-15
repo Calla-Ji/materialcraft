@@ -1,0 +1,10 @@
+<!-- a small ornament as a designer would draw it: leaves with sharp tips and smooth sides -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
+
+  <path d="M50 92 C50 70 50 40 50 10"/>
+  <path d="M50 70 C35 66 22 56 16 40 C30 42 44 52 50 70 Z"/>
+  <path d="M50 70 C65 66 78 56 84 40 C70 42 56 52 50 70 Z"/>
+  <path d="M50 42 C40 36 34 26 34 14 C44 20 49 30 50 42 Z"/>
+  <path d="M50 42 C60 36 66 26 66 14 C56 20 51 30 50 42 Z"/>
+  <circle cx="50" cy="8" r="4"/>
+ </svg>

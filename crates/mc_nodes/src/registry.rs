@@ -9,13 +9,14 @@
 use std::collections::HashSet;
 
 use crate::{
-    bevel, blend, block_shift, blur, channel_split, checker, clamp, clouds, curvature_from_normal,
-    curve, data_corrupt, directional_blur, directional_warp, dither_pattern, edge_detect,
-    fabric_generator, fractal_sum, gradient_linear, gradient_map, gradient_radial,
-    grayscale_conversion, height_to_ao, height_to_normal, histogram_scan, hsl_adjust, image_import,
-    invert, knit, levels, ordered_dither, palette_dither, path, perlin, scanline_jitter, shape,
-    simplex_noise, slope_blur, thread_shape, threshold, tile_generator, transform2d, uniform_color,
-    voronoi, warp, white_noise,
+    anisotropic_noise, bevel, blend, block_shift, blur, channel_pack, channel_split, checker,
+    clamp, clouds, curvature_from_normal, curve, data_corrupt, directional_blur, directional_warp,
+    dither_pattern, edge_detect, fabric_generator, fractal_sum, french_knot, gabor_noise,
+    gradient_linear, gradient_map, gradient_radial, grayscale_conversion, height_to_ao,
+    height_to_normal, histogram_scan, hsl_adjust, image_import, image_trace, invert, knit, levels,
+    ordered_dither, palette_dither, path, path_simplify, path_to_mask, perlin, scanline_jitter,
+    scattered_streaks, shape, simplex_noise, slope_blur, stitch, thread_shape, threshold,
+    tile_generator, transform2d, uniform_color, voronoi, warp, white_noise,
 };
 
 /// The default output port name every single-output `NodeDef` uses.
@@ -108,16 +109,43 @@ pub fn evaluate(
         };
 
         let key = texture_key(id, DEFAULT_OUTPUT_PORT);
+        // Set by the "image_trace"/"path_simplify" arms below, written to
+        // the graph only *after* the closure returns — `node` (borrowed
+        // from `graph`) is still alive for the closure's whole body
+        // (every other arm reads it too), so `graph.set_computed_param`
+        // can't be called from inside it without a borrow conflict. A
+        // local variable the closure can freely assign into, read back
+        // out here once it's done, sidesteps that cleanly.
+        let mut computed_path_result: Option<mc_core::Path> = None;
         let result: Result<(), EvalError> = (|| {
             match node.kind.as_str() {
                 "perlin_noise" => {
                     let params = perlin::PerlinParams::from_graph(&node.params);
                     perlin::dispatch(gpu, pool, &key, resolution, &params);
                 }
+                "anisotropic_noise" => {
+                    let params =
+                        anisotropic_noise::AnisotropicNoiseParams::from_graph(&node.params);
+                    anisotropic_noise::dispatch(gpu, pool, &key, resolution, &params);
+                }
                 "levels" => {
                     let input_key = resolve_input("input")?;
                     let params = levels::LevelsParams::from_graph(&node.params);
                     levels::dispatch(gpu, pool, &input_key, &key, resolution, &params);
+                }
+                "channel_pack" => {
+                    let r_key = resolve_optional_input("r");
+                    let g_key = resolve_optional_input("g");
+                    let b_key = resolve_optional_input("b");
+                    channel_pack::dispatch(
+                        gpu,
+                        pool,
+                        r_key.as_deref(),
+                        g_key.as_deref(),
+                        b_key.as_deref(),
+                        &key,
+                        resolution,
+                    );
                 }
                 "blend" => {
                     let base_key = resolve_input("base")?;
@@ -182,6 +210,51 @@ pub fn evaluate(
                             fiber: &fiber_key,
                             mask: &mask_key,
                         },
+                        resolution,
+                        &params,
+                    );
+                }
+                "gabor_noise" => {
+                    let value_key = texture_key(id, "value");
+                    let phasor_key = texture_key(id, "phasor");
+                    let phase_key = texture_key(id, "phase");
+                    let intensity_key = texture_key(id, "intensity");
+                    let raw_key = texture_key(id, "raw");
+                    let params = gabor_noise::GaborParams::from_graph(&node.params, resolution);
+                    gabor_noise::dispatch(
+                        gpu,
+                        pool,
+                        gabor_noise::GaborOutputKeys {
+                            value: &value_key,
+                            phasor: &phasor_key,
+                            phase: &phase_key,
+                            intensity: &intensity_key,
+                            raw: &raw_key,
+                        },
+                        resolution,
+                        &params,
+                    );
+                }
+                "scattered_streaks" => {
+                    let angle_map_key = resolve_optional_input("angle_map");
+                    let height_key = texture_key(id, "height");
+                    let mask_key = texture_key(id, "mask");
+                    let streak_id_key = texture_key(id, "streak_id");
+                    let along_key = texture_key(id, "along");
+                    let direction_key = texture_key(id, "direction");
+                    let params =
+                        scattered_streaks::StreakParams::from_graph(&node.params, resolution);
+                    scattered_streaks::dispatch(
+                        gpu,
+                        pool,
+                        scattered_streaks::StreakOutputKeys {
+                            height: &height_key,
+                            mask: &mask_key,
+                            streak_id: &streak_id_key,
+                            along: &along_key,
+                            direction: &direction_key,
+                        },
+                        angle_map_key.as_deref(),
                         resolution,
                         &params,
                     );
@@ -275,6 +348,52 @@ pub fn evaluate(
                 "shape" => {
                     let params = shape::ShapeParams::from_graph(&node.params);
                     shape::dispatch(gpu, pool, &key, resolution, &params);
+                }
+                "stitch" => {
+                    // French Knot has its own `KnotParams`/`crate::french_knot`
+                    // entirely (see `mc_nodes::stitch::StitchKind`'s own doc
+                    // comment) — branches here, before either side ever
+                    // builds the other model's own params, rather than
+                    // inside `stitch::dispatch_render` itself.
+                    let is_french_knot = node.params.get("stitch").and_then(|v| match v {
+                        mc_core::ParamValue::Enum(s) => Some(s.as_str()),
+                        _ => None,
+                    }) == Some("french_knot");
+                    if is_french_knot {
+                        let params = crate::french_knot::KnotParams::from_graph(&node.params);
+                        french_knot::dispatch_render(
+                            gpu,
+                            pool,
+                            french_knot::RenderOutputKeys {
+                                height: &texture_key(id, "height"),
+                                mask: &texture_key(id, "mask"),
+                                knot_id: &texture_key(id, "thread_id"),
+                                along: &texture_key(id, "order"),
+                                strand_id: &texture_key(id, "ply_id"),
+                                direction: &texture_key(id, "direction"),
+                            },
+                            &params,
+                            resolution,
+                        );
+                    } else {
+                        let params = crate::stitch::StitchParams::from_graph(&node.params);
+                        let local_path = crate::stitch::synthetic_local_path(&params);
+                        stitch::dispatch_render(
+                            gpu,
+                            pool,
+                            stitch::RenderOutputKeys {
+                                height: &texture_key(id, "height"),
+                                mask: &texture_key(id, "mask"),
+                                thread_id: &texture_key(id, "thread_id"),
+                                order: &texture_key(id, "order"),
+                                ply_id: &texture_key(id, "ply_id"),
+                                direction: &texture_key(id, "direction"),
+                            },
+                            &local_path,
+                            &params,
+                            resolution,
+                        );
+                    }
                 }
                 "gradient_linear" => {
                     let params = gradient_linear::GradientLinearParams::from_graph(&node.params);
@@ -501,13 +620,76 @@ pub fn evaluate(
                         gpu, pool, &input_key, &key, resolution, &params,
                     );
                 }
+                "image_trace" => {
+                    let input_key = resolve_input("image")?;
+                    let preview_mask_key = texture_key(id, "preview_mask");
+                    let params = image_trace::TraceParams::from_graph(&node.params);
+                    computed_path_result = Some(image_trace::dispatch(
+                        gpu,
+                        pool,
+                        &input_key,
+                        &preview_mask_key,
+                        resolution,
+                        &params,
+                    ));
+                }
+                "path_simplify" => {
+                    // A `Path` input, not a texture one — bypasses
+                    // `resolve_input`/the texture pool entirely, same as
+                    // the "path" node's own `Reference` (read directly
+                    // from the upstream node's own `path` param).
+                    // Unconnected degrades to an empty path rather than
+                    // a `MissingInput` error, matching `Reference`'s own
+                    // "optional" precedent.
+                    let input_path = graph
+                        .upstream_from(id, "input")
+                        .and_then(|(upstream_id, _)| graph.node(upstream_id))
+                        .and_then(|n| n.params.get("path"))
+                        .and_then(mc_core::ParamValue::as_path)
+                        .cloned()
+                        .unwrap_or_default();
+                    let params = path_simplify::SimplifyParams::from_graph(&node.params);
+                    let simplified = path_simplify::simplify(&input_path, params.tolerance);
+                    let preview_mask_key = texture_key(id, "preview_mask");
+                    path::dispatch_preview_mask(
+                        gpu,
+                        pool,
+                        &preview_mask_key,
+                        resolution,
+                        &simplified,
+                    );
+                    computed_path_result = Some(simplified);
+                }
+                "path_to_mask" => {
+                    // Same "read the Path input directly, bypassing the
+                    // texture pool" pattern as `path_simplify` above —
+                    // unconnected degrades to an empty (blank) path
+                    // rather than a `MissingInput` error.
+                    let input_path = graph
+                        .upstream_from(id, "input")
+                        .and_then(|(upstream_id, _)| graph.node(upstream_id))
+                        .and_then(|n| n.params.get("path"))
+                        .and_then(mc_core::ParamValue::as_path)
+                        .cloned()
+                        .unwrap_or_default();
+                    let params = path_to_mask::MaskParams::from_graph(&node.params);
+                    path_to_mask::dispatch(gpu, pool, &key, resolution, &input_path, &params);
+                }
                 other => return Err(EvalError::UnknownKind(id, other.to_string())),
             }
             Ok(())
         })();
 
         match result {
-            Ok(()) => graph.mark_evaluated(id),
+            Ok(()) => {
+                // See `computed_path_result`'s own comment above: written
+                // here, once `node`'s borrow of `graph` from this
+                // iteration has ended, not from inside the closure.
+                if let Some(path) = computed_path_result {
+                    let _ = graph.set_computed_param(id, "path", mc_core::ParamValue::Path(path));
+                }
+                graph.mark_evaluated(id);
+            }
             Err(err) => {
                 failed.insert(id);
                 if first_error.is_none() {
@@ -562,7 +744,7 @@ pub fn resolve_texture_key(graph: &mc_core::Graph, node: mc_core::NodeId) -> Opt
 
 #[cfg(test)]
 mod tests {
-    use super::{evaluate, resolve_texture_key, texture_key};
+    use super::{evaluate, path, resolve_texture_key, texture_key};
 
     /// Regression test for a real bug the owner hit: wiring Thread's Ply
     /// ID, Fiber, and Mask outputs each into their own Output node, and
@@ -683,6 +865,103 @@ mod tests {
         evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
     }
 
+    #[test]
+    fn stitch_default_instantiation_evaluates() {
+        let mut graph = mc_core::Graph::new();
+        let stitch_node = graph.add_node(crate::defs::node_def("stitch").unwrap().instantiate());
+        let height_out = graph.add_node(mc_core::Node::new("output_height"));
+        graph
+            .connect(stitch_node, "height", height_out, "input")
+            .unwrap();
+        // Thread radius at the default 0.45mm/50mm diameter is genuinely
+        // sub-pixel below roughly 128px — not a bug, just too coarse a
+        // test resolution for a physically-thin thread to reliably cover
+        // any whole pixel.
+        graph.settings.resolution = 256;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let height_key = resolve_texture_key(&graph, height_out).unwrap();
+        let pixels = gpu.read_rgba8(pool.texture(&height_key).unwrap(), 256);
+        let lit = pixels.iter().step_by(4).filter(|&&v| v > 0).count();
+        assert!(
+            lit > 0,
+            "a fresh Stitch node's default back-stitch should be visible"
+        );
+    }
+
+    /// French Knot has its own `KnotParams`/`crate::french_knot` entirely
+    /// (see `mc_nodes::stitch::StitchKind`'s own doc comment) — this is
+    /// the one test exercising this module's own branch to it, end to end
+    /// through a real graph, rather than `crate::french_knot`'s own tests
+    /// calling `dispatch_render` directly.
+    #[test]
+    fn stitch_node_evaluates_as_french_knot_when_selected() {
+        let mut graph = mc_core::Graph::new();
+        let stitch_node = graph.add_node(crate::defs::node_def("stitch").unwrap().instantiate());
+        graph
+            .set_param(
+                stitch_node,
+                "stitch",
+                mc_core::ParamValue::Enum("french_knot".to_string()),
+            )
+            .unwrap();
+        let height_out = graph.add_node(mc_core::Node::new("output_height"));
+        graph
+            .connect(stitch_node, "height", height_out, "input")
+            .unwrap();
+        graph.settings.resolution = 128;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let height_key = resolve_texture_key(&graph, height_out).unwrap();
+        let pixels = gpu.read_rgba8(pool.texture(&height_key).unwrap(), 128);
+        let lit = pixels.iter().step_by(4).filter(|&&v| v > 0).count();
+        assert!(
+            lit > 0,
+            "a Stitch node set to French Knot should be visible"
+        );
+    }
+
+    /// Every one of Stitch's six outputs should show its own data, not a
+    /// repeat of whichever output happens to be declared first — the same
+    /// bug class `knit_output_node_shows_the_specific_upstream_port_it_is_wired_to`
+    /// already regression-tests for Knit.
+    #[test]
+    fn stitch_output_nodes_show_the_specific_port_they_are_wired_to() {
+        let mut graph = mc_core::Graph::new();
+        let stitch_node = graph.add_node(crate::defs::node_def("stitch").unwrap().instantiate());
+        let height_out = graph.add_node(mc_core::Node::new("output_height"));
+        let mask_out = graph.add_node(mc_core::Node::new("output_height"));
+        graph
+            .connect(stitch_node, "height", height_out, "input")
+            .unwrap();
+        graph
+            .connect(stitch_node, "mask", mask_out, "input")
+            .unwrap();
+        graph.settings.resolution = 256;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let height_key = resolve_texture_key(&graph, height_out).unwrap();
+        let mask_key = resolve_texture_key(&graph, mask_out).unwrap();
+        assert_eq!(height_key, texture_key(stitch_node, "height"));
+        assert_eq!(mask_key, texture_key(stitch_node, "mask"));
+
+        let height_pixels = gpu.read_rgba8(pool.texture(&height_key).unwrap(), 256);
+        let mask_pixels = gpu.read_rgba8(pool.texture(&mask_key).unwrap(), 256);
+        assert_ne!(
+            height_pixels, mask_pixels,
+            "an Output node fed by Mask should not show Height's own pixels"
+        );
+    }
+
     /// The owner's own exact workflow: a Shape node wired into Path's own
     /// Stamp input should change Path's output — the graph-level version
     /// of `path::tests::dispatch_stamp_composites_the_stamp_texture_over_the_base`,
@@ -736,6 +1015,48 @@ mod tests {
         assert_ne!(
             without_stamp, with_stamp,
             "wiring a Shape into Path's Stamp input should change its output"
+        );
+    }
+
+    /// The actual intended workflow (not just Shape standing in for it):
+    /// Stitch's own Height output wired into Path's Stamp input should
+    /// splatter real embroidery-stitch geometry along the curve.
+    #[test]
+    fn stitch_wired_into_paths_stamp_input_changes_its_output() {
+        let mut graph = mc_core::Graph::new();
+        let stitch_node = graph.add_node(crate::defs::node_def("stitch").unwrap().instantiate());
+        let path_node = graph.add_node(crate::defs::node_def("path").unwrap().instantiate());
+        let line_path = mc_core::Path {
+            subpaths: vec![mc_core::SubPath::new(
+                vec![
+                    mc_core::Point::new([0.1, 0.5]),
+                    mc_core::Point::new([0.9, 0.5]),
+                ],
+                false,
+            )],
+            wrap: true,
+        };
+        graph
+            .set_param(path_node, "path", mc_core::ParamValue::Path(line_path))
+            .unwrap();
+        graph
+            .connect(stitch_node, "height", path_node, "stamp")
+            .unwrap();
+        graph.settings.resolution = 64;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let preview_mask = gpu.read_rgba8(
+            pool.texture(&texture_key(path_node, "preview_mask"))
+                .unwrap(),
+            64,
+        );
+        let lit = preview_mask.iter().step_by(4).filter(|&&v| v > 0).count();
+        assert!(
+            lit > 0,
+            "Stitch stamped along Path's curve should be visible"
         );
     }
 
@@ -902,5 +1223,271 @@ mod tests {
             !graph.needs_evaluation(voronoi),
             "the independent node should be marked up to date"
         );
+    }
+
+    /// End-to-end through the real graph/registry path (defs.rs defaults
+    /// via `from_graph`, multi-output texture keys, the optional
+    /// `angle_map` input left unconnected) rather than calling `dispatch`
+    /// directly, for both of GABOR_STREAKS_SPEC.md's nodes together —
+    /// Gabor Noise's `value` feeding Base Color, Scattered Streaks'
+    /// `height` feeding a second Output.
+    #[test]
+    fn gabor_noise_and_scattered_streaks_evaluate_through_the_graph() {
+        let mut graph = mc_core::Graph::new();
+        let gabor = graph.add_node(mc_core::Node::new("gabor_noise"));
+        let streaks = graph.add_node(mc_core::Node::new("scattered_streaks"));
+        let gabor_output = graph.add_node(mc_core::Node::new("output_base_color"));
+        let streaks_output = graph.add_node(mc_core::Node::new("output_height"));
+        graph
+            .connect(gabor, "value", gabor_output, "input")
+            .unwrap();
+        graph
+            .connect(streaks, "height", streaks_output, "input")
+            .unwrap();
+        graph.settings.resolution = 64;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let gabor_key =
+            resolve_texture_key(&graph, gabor_output).expect("gabor output resolves to a texture");
+        let gabor_pixels = gpu.read_rgba8(pool.texture(&gabor_key).expect("texture exists"), 64);
+        assert_eq!(gabor_pixels.len(), 64 * 64 * 4);
+
+        let streaks_key = resolve_texture_key(&graph, streaks_output)
+            .expect("streaks output resolves to a texture");
+        let streaks_pixels =
+            gpu.read_rgba8(pool.texture(&streaks_key).expect("texture exists"), 64);
+        assert_eq!(streaks_pixels.len(), 64 * 64 * 4);
+
+        for id in [gabor, streaks, gabor_output, streaks_output] {
+            assert!(
+                !graph.needs_evaluation(id),
+                "node {id:?} should be marked up to date after evaluate()"
+            );
+        }
+    }
+
+    /// End-to-end through the real graph/registry path: a Shape node's
+    /// output feeds Image Trace's `Image` input, traced into both a real
+    /// Preview Mask texture and this node's own `path` param. The second
+    /// `evaluate()` call (nothing changed in between) is the point of
+    /// this test — it directly exercises `set_computed_param`'s own
+    /// reason for existing (its doc comment on `mc_core::Graph`): writing
+    /// the traced path into this node's own params during its own
+    /// evaluation must *not* re-dirty anything, or every node downstream
+    /// of an Image Trace would needlessly re-evaluate on every single
+    /// pass forever.
+    #[test]
+    fn image_trace_evaluates_through_the_graph_without_re_dirtying_itself() {
+        let mut graph = mc_core::Graph::new();
+        let shape = graph.add_node(mc_core::Node::new("shape"));
+        let tracer = graph.add_node(mc_core::Node::new("image_trace"));
+        graph.connect(shape, "output", tracer, "image").unwrap();
+        graph.settings.resolution = 64;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let preview_key = texture_key(tracer, "preview_mask");
+        let pixels = gpu.read_rgba8(
+            pool.texture(&preview_key)
+                .expect("preview mask texture exists"),
+            64,
+        );
+        assert_eq!(pixels.len(), 64 * 64 * 4);
+
+        let path = graph
+            .node(tracer)
+            .and_then(|n| n.params.get("path"))
+            .and_then(mc_core::ParamValue::as_path)
+            .expect("image_trace wrote its own computed path param");
+        assert!(
+            !path.subpaths.is_empty(),
+            "tracing a Shape node's own disc should find at least one boundary"
+        );
+
+        for id in [shape, tracer] {
+            assert!(
+                !graph.needs_evaluation(id),
+                "node {id:?} should be marked up to date after evaluate()"
+            );
+        }
+
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("second no-op evaluate");
+        for id in [shape, tracer] {
+            assert!(
+                !graph.needs_evaluation(id),
+                "node {id:?} must stay up to date after a no-op second evaluate() -- \
+                 re-dirtying here would mean set_computed_param regressed into the \
+                 dirty-cascading behavior it exists specifically to avoid"
+            );
+        }
+    }
+
+    /// Toggling `Invert` through the real UI-equivalent path
+    /// (`graph.set_param`, not calling `image_trace::dispatch` directly)
+    /// must actually reach a re-trace with the new value — added after
+    /// the owner reported the checkbox "doesn't seem to do anything."
+    /// It does: this traces a Shape node's own disc with and without
+    /// Invert and confirms the two resulting paths genuinely differ (not
+    /// just that the node got marked dirty). The owner's own report
+    /// turned out to be about *Preview Mask only ever stroking a
+    /// subpath's outline, never filling it* — inverting a mostly-solid
+    /// shape swaps which side is foreground, but an outline-only render
+    /// of "the same boundary curves, opposite fill" can look deceptively
+    /// similar at a glance, especially for line-art-style source images.
+    #[test]
+    fn invert_actually_changes_the_traced_path_through_the_real_graph() {
+        let mut graph = mc_core::Graph::new();
+        let shape = graph.add_node(mc_core::Node::new("shape"));
+        let tracer = graph.add_node(mc_core::Node::new("image_trace"));
+        graph.connect(shape, "output", tracer, "image").unwrap();
+        graph.settings.resolution = 64;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+        let path_normal = graph
+            .node(tracer)
+            .and_then(|n| n.params.get("path"))
+            .and_then(mc_core::ParamValue::as_path)
+            .cloned()
+            .expect("image_trace wrote its own computed path param");
+
+        graph
+            .set_param(tracer, "invert", mc_core::ParamValue::Bool(true))
+            .expect("invert is a real param on image_trace");
+        assert!(
+            graph.needs_evaluation(tracer),
+            "toggling Invert via the normal set_param path should dirty this node"
+        );
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates again");
+        let path_inverted = graph
+            .node(tracer)
+            .and_then(|n| n.params.get("path"))
+            .and_then(mc_core::ParamValue::as_path)
+            .cloned()
+            .expect("image_trace wrote its own computed path param");
+
+        let same_structure = path_normal.subpaths.len() == path_inverted.subpaths.len()
+            && path_normal
+                .subpaths
+                .iter()
+                .zip(&path_inverted.subpaths)
+                .all(|(a, b)| a.points.len() == b.points.len());
+        assert!(
+            !same_structure,
+            "inverting should trace the opposite side of the same boundary -- got the same \
+             subpath/point structure both times ({} subpaths) for Normal and Inverted",
+            path_normal.subpaths.len()
+        );
+    }
+
+    /// The actual feature request this was all built for: Image Trace's
+    /// `Path` output wired into a Path node's own `Reference` input picks
+    /// up the traced curve with zero changes to the Path node — it
+    /// already reads whatever's at `upstream_node.params["path"]`
+    /// (`path::resolve_effective_path`), regardless of the upstream
+    /// node's own `kind`.
+    #[test]
+    fn image_trace_path_output_feeds_a_path_nodes_reference_input() {
+        let mut graph = mc_core::Graph::new();
+        let shape = graph.add_node(mc_core::Node::new("shape"));
+        let tracer = graph.add_node(mc_core::Node::new("image_trace"));
+        let path_node = graph.add_node(mc_core::Node::new("path"));
+        graph.connect(shape, "output", tracer, "image").unwrap();
+        graph
+            .connect(tracer, "path", path_node, "reference")
+            .unwrap();
+        graph.settings.resolution = 64;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let effective = path::resolve_effective_path(&graph, path_node);
+        assert!(
+            !effective.subpaths.is_empty(),
+            "the Path node should see Image Trace's own traced subpaths through Reference"
+        );
+
+        let traced = graph
+            .node(tracer)
+            .and_then(|n| n.params.get("path"))
+            .and_then(mc_core::ParamValue::as_path)
+            .expect("image_trace wrote its own computed path param");
+        assert_eq!(
+            effective.subpaths.len(),
+            traced.subpaths.len(),
+            "the Path node (with no points of its own) should pick up exactly Image Trace's \
+             subpaths, unmodified"
+        );
+    }
+
+    /// Path Simplify chained after Image Trace — the actual workflow it
+    /// was built for (a dense trace overwhelming the Path node's own
+    /// Stamp Spacing floor). Also exercises the same `set_computed_param`
+    /// no-redirty guarantee `image_trace_evaluates_through_the_graph_
+    /// without_re_dirtying_itself` checks, since this is the second node
+    /// kind to use it.
+    #[test]
+    fn path_simplify_reduces_an_image_trace_result_through_the_real_graph() {
+        let mut graph = mc_core::Graph::new();
+        let shape = graph.add_node(mc_core::Node::new("shape"));
+        let tracer = graph.add_node(mc_core::Node::new("image_trace"));
+        let simplifier = graph.add_node(mc_core::Node::new("path_simplify"));
+        graph.connect(shape, "output", tracer, "image").unwrap();
+        graph.connect(tracer, "path", simplifier, "input").unwrap();
+        graph.settings.resolution = 128;
+        graph
+            .set_param(simplifier, "tolerance", mc_core::ParamValue::Float(0.05))
+            .unwrap();
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let traced = graph
+            .node(tracer)
+            .and_then(|n| n.params.get("path"))
+            .and_then(mc_core::ParamValue::as_path)
+            .cloned()
+            .expect("image_trace wrote its own computed path param");
+        let simplified = graph
+            .node(simplifier)
+            .and_then(|n| n.params.get("path"))
+            .and_then(mc_core::ParamValue::as_path)
+            .cloned()
+            .expect("path_simplify wrote its own computed path param");
+
+        let traced_points: usize = traced.subpaths.iter().map(|sp| sp.points.len()).sum();
+        let simplified_points: usize = simplified.subpaths.iter().map(|sp| sp.points.len()).sum();
+        assert!(
+            simplified_points < traced_points,
+            "simplifying at a non-trivial tolerance should reduce the point count: \
+             traced {traced_points}, simplified {simplified_points}"
+        );
+        assert_eq!(
+            simplified.subpaths.len(),
+            traced.subpaths.len(),
+            "simplifying shouldn't merge or drop whole subpaths, just thin their points"
+        );
+
+        for id in [shape, tracer, simplifier] {
+            assert!(
+                !graph.needs_evaluation(id),
+                "node {id:?} should be marked up to date after evaluate()"
+            );
+        }
+        evaluate(&mut gpu, &mut pool, &mut graph).expect("second no-op evaluate");
+        for id in [shape, tracer, simplifier] {
+            assert!(
+                !graph.needs_evaluation(id),
+                "node {id:?} must stay up to date after a no-op second evaluate()"
+            );
+        }
     }
 }

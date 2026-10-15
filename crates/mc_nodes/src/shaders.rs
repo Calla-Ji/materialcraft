@@ -40,10 +40,12 @@ fn embedded_source(file_name: &str) -> &'static str {
     match file_name {
         "common.wgsl" => include_str!("../shaders/common.wgsl"),
         "perlin_noise.wgsl" => include_str!("../shaders/perlin_noise.wgsl"),
+        "anisotropic_noise.wgsl" => include_str!("../shaders/anisotropic_noise.wgsl"),
         "levels.wgsl" => include_str!("../shaders/levels.wgsl"),
         "bevel_box_blur.wgsl" => include_str!("../shaders/bevel_box_blur.wgsl"),
         "bevel_remap.wgsl" => include_str!("../shaders/bevel_remap.wgsl"),
         "blend.wgsl" => include_str!("../shaders/blend.wgsl"),
+        "channel_pack.wgsl" => include_str!("../shaders/channel_pack.wgsl"),
         "voronoi.wgsl" => include_str!("../shaders/voronoi.wgsl"),
         "fractal_sum.wgsl" => include_str!("../shaders/fractal_sum.wgsl"),
         "tile_generator.wgsl" => include_str!("../shaders/tile_generator.wgsl"),
@@ -87,6 +89,13 @@ fn embedded_source(file_name: &str) -> &'static str {
         "path_stamp.wgsl" => include_str!("../shaders/path_stamp.wgsl"),
         "knit_stitch_info.wgsl" => include_str!("../shaders/knit_stitch_info.wgsl"),
         "stitch_info.wgsl" => include_str!("../shaders/stitch_info.wgsl"),
+        "knot_info.wgsl" => include_str!("../shaders/knot_info.wgsl"),
+        "gabor_noise.wgsl" => include_str!("../shaders/gabor_noise.wgsl"),
+        "gabor_phasor.wgsl" => include_str!("../shaders/gabor_phasor.wgsl"),
+        "scattered_streaks.wgsl" => include_str!("../shaders/scattered_streaks.wgsl"),
+        "scattered_streaks_direction.wgsl" => {
+            include_str!("../shaders/scattered_streaks_direction.wgsl")
+        }
         other => panic!("mc_nodes: unknown shader file {other:?}"),
     }
 }

@@ -1,0 +1,6 @@
+<!-- two subpaths in one d (hole); closing point equal to start is merged (no zero segment) -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
+
+  <path d="M10 10 H90 V90 H10 Z M30 30 V70 H70 V30 Z"/>
+  <path d="M50 20 C60 20 60 30 50 30 C40 30 40 20 50 20 Z"/>
+ </svg>

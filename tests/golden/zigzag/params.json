@@ -1,0 +1,850 @@
+{
+ "zz_single_v_hand": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "hand",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 3.0,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 0.0,
+   "pull_comp_mm": 0.0,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": null,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.375,
+        0.5
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.08333333333333333,
+        0.0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.625,
+        0.5
+       ],
+       "h_in": [
+        -0.08333333333333333,
+        -0.0
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": false
+  }
+ },
+ "zz_single_v_machine": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "machine",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 3.0,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 0.0,
+   "pull_comp_mm": 0.0,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": null,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.375,
+        0.5
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.08333333333333333,
+        0.0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.625,
+        0.5
+       ],
+       "h_in": [
+        -0.08333333333333333,
+        -0.0
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": false
+  }
+ },
+ "zz_straight_hand": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "hand",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 3.0,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 0.0,
+   "pull_comp_mm": 0.0,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": null,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.1,
+        0.5
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.26666666666666666,
+        0.0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.9,
+        0.5
+       ],
+       "h_in": [
+        -0.26666666666666666,
+        -0.0
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": false
+  }
+ },
+ "zz_straight_machine": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "machine",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 3.0,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 0.0,
+   "pull_comp_mm": 0.0,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": null,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.1,
+        0.5
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.26666666666666666,
+        0.0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.9,
+        0.5
+       ],
+       "h_in": [
+        -0.26666666666666666,
+        -0.0
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": false
+  }
+ },
+ "zz_dense_machine": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "machine",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 0.8,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 0.0,
+   "pull_comp_mm": 0.0,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": null,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.1,
+        0.5
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.26666666666666666,
+        0.0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.9,
+        0.5
+       ],
+       "h_in": [
+        -0.26666666666666666,
+        -0.0
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": false
+  }
+ },
+ "zz_angle30": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "machine",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 3.0,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 30.0,
+   "pull_comp_mm": 0.0,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": null,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.1,
+        0.5
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.26666666666666666,
+        0.0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.9,
+        0.5
+       ],
+       "h_in": [
+        -0.26666666666666666,
+        -0.0
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": false
+  }
+ },
+ "zz_pull_comp": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "machine",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 3.0,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 0.0,
+   "pull_comp_mm": 0.3,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": null,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.1,
+        0.5
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.26666666666666666,
+        0.0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.9,
+        0.5
+       ],
+       "h_in": [
+        -0.26666666666666666,
+        -0.0
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": false
+  }
+ },
+ "zz_taper": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "machine",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 3.0,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 0.0,
+   "pull_comp_mm": 0.0,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": null,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.1,
+        0.5
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.26666666666666666,
+        0.0
+       ],
+       "kind": "corner",
+       "width": 0.3
+      },
+      {
+       "pos": [
+        0.9,
+        0.5
+       ],
+       "h_in": [
+        -0.26666666666666666,
+        -0.0
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "corner",
+       "width": 1.6
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": false
+  }
+ },
+ "zz_corner": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "hand",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 3.0,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 0.0,
+   "pull_comp_mm": 0.0,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": null,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.2,
+        0.15
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.0,
+        0.19999999999999998
+       ],
+       "kind": "corner",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.2,
+        0.75
+       ],
+       "h_in": [
+        -0.0,
+        -0.19999999999999998
+       ],
+       "h_out": [
+        0.19999999999999998,
+        0.0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.8,
+        0.75
+       ],
+       "h_in": [
+        -0.19999999999999998,
+        -0.0
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": false
+  }
+ },
+ "zz_curve": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "hand",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 3.0,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 0.0,
+   "pull_comp_mm": 0.0,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": null,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.1,
+        0.62
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.15,
+        -0.08
+       ],
+       "kind": "smooth",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.5,
+        0.5
+       ],
+       "h_in": [
+        -0.15,
+        0.0
+       ],
+       "h_out": [
+        0.15,
+        0.0
+       ],
+       "kind": "smooth",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.9,
+        0.38
+       ],
+       "h_in": [
+        -0.15,
+        0.08
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "smooth",
+       "width": 1.0
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": false
+  }
+ },
+ "zz_loose": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "hand",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 3.0,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 0.0,
+   "pull_comp_mm": 0.0,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": 0.2,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.1,
+        0.5
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.26666666666666666,
+        0.0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        0.9,
+        0.5
+       ],
+       "h_in": [
+        -0.26666666666666666,
+        -0.0
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": false
+  }
+ },
+ "zz_tiling": {
+  "params": {
+   "resolution": 512,
+   "stitch": "zigzag",
+   "look": "machine",
+   "tile_mm": 12.0,
+   "stitch_length_mm": 2.0,
+   "gap_mm": null,
+   "width_mm": 2.5,
+   "stem_width_mm": null,
+   "density_mm": null,
+   "bean_repeats": 1,
+   "stem_side": "stem",
+   "zigzag_angle": 0.0,
+   "pull_comp_mm": 0.0,
+   "satin_mitre": true,
+   "corner_threshold": 30.0,
+   "thread_mm": null,
+   "plies": null,
+   "twist_angle": null,
+   "ply_direction": "S",
+   "regularity": null,
+   "height_range": 4.0,
+   "seed": 1
+  },
+  "path": {
+   "subpaths": [
+    {
+     "points": [
+      {
+       "pos": [
+        0.0,
+        0.5
+       ],
+       "h_in": [
+        0,
+        0
+       ],
+       "h_out": [
+        0.3333333333333333,
+        0.0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      },
+      {
+       "pos": [
+        1.0,
+        0.5
+       ],
+       "h_in": [
+        -0.3333333333333333,
+        -0.0
+       ],
+       "h_out": [
+        0,
+        0
+       ],
+       "kind": "corner",
+       "width": 1.0
+      }
+     ],
+     "closed": false
+    }
+   ],
+   "wrap": true
+  }
+ }
+}

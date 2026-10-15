@@ -1,0 +1,6 @@
+<!-- Q/T/q/t elevated to cubics; T reflects -> symmetric -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
+
+  <path d="M10 40 Q30 5 50 40 T90 40"/>
+  <path d="M10 80 q20 -25 40 0 t40 0"/>
+ </svg>

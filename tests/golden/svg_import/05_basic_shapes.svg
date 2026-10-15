@@ -1,0 +1,11 @@
+<!-- rect, rounded rect (rx clamped to half width), circle, ellipse, line, polygon -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
+
+  <rect x="5" y="5" width="40" height="25"/>
+  <rect x="55" y="5" width="40" height="25" rx="8"/>
+  <rect x="55" y="38" width="40" height="20" rx="30" ry="4"/>
+  <circle cx="25" cy="50" r="15"/>
+  <ellipse cx="25" cy="85" rx="20" ry="10"/>
+  <line x1="55" y1="70" x2="95" y2="95"/>
+  <polygon points="60,95 75,65 90,95"/>
+ </svg>

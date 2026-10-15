@@ -12,6 +12,12 @@ log = "0.4.34"
 mc_core = { version = "0.1.0", path = "../mc_core" }
 mc_export = { version = "0.1.0", path = "../mc_export" }
 mc_gpu = { version = "0.1.0", path = "../mc_gpu" }
+# Read-only XML tree for SVG Import (crates/mc_nodes/src/svg_import.rs) —
+# its `.children()`/`.attribute()` API maps closely onto the owner's own
+# reference package's use of Python's `xml.etree.ElementTree`. The actual
+# SVG path-data grammar (the part that needs to match that reference
+# exactly) is hand-ported, not delegated to this or any other library.
+roxmltree = "0.21.1"
 thiserror = "2.0.21"
 wgpu = "30.0.1"
 
@@ -21,4 +27,9 @@ wgpu = "30.0.1"
 # parsing it by hand would be its own source of bugs. Already an approved,
 # in-use workspace dependency (mc_core); this just wires it into mc_nodes
 # too, and only for tests.
-serde_json = "1.0.151"
+# `float_roundtrip`: serde_json's default f64 parser isn't guaranteed
+# round-trip-exact (can be off by 1 ULP on some inputs) — fine for
+# approximate comparisons, but golden fixtures doing *exact* f64 equality
+# checks (e.g. gabor_noise.rs's hash01 triples) need this on, or an
+# otherwise-correct value fails to match by a single bit.
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

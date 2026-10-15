@@ -6,10 +6,12 @@
 //! Each node's tests live alongside it in its own `#[cfg(test)] mod tests`,
 //! sharing the helpers in `test_support`.
 
+pub mod anisotropic_noise;
 pub mod bevel;
 pub mod blend;
 pub mod block_shift;
 pub mod blur;
+pub mod channel_pack;
 pub mod channel_split;
 pub mod checker;
 pub mod clamp;
@@ -26,6 +28,8 @@ pub mod edge_detect;
 pub mod export;
 pub mod fabric_generator;
 pub mod fractal_sum;
+pub mod french_knot;
+pub mod gabor_noise;
 pub mod gradient_linear;
 pub mod gradient_map;
 pub mod gradient_radial;
@@ -35,20 +39,25 @@ pub mod height_to_normal;
 pub mod histogram_scan;
 pub mod hsl_adjust;
 pub mod image_import;
+pub mod image_trace;
 pub mod invert;
 pub mod knit;
 pub mod levels;
 pub mod ordered_dither;
 pub mod palette_dither;
 pub mod path;
+pub mod path_simplify;
+pub mod path_to_mask;
 pub mod perlin;
 pub mod registry;
 pub mod scanline_jitter;
+pub mod scattered_streaks;
 mod shaders;
 pub mod shape;
 pub mod simplex_noise;
 pub mod slope_blur;
 pub mod stitch;
+pub mod svg_import;
 #[cfg(test)]
 mod test_support;
 pub mod thread_shape;

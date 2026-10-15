@@ -1,0 +1,8 @@
+<!-- fill:none + stroke:none is still geometry; a bad character stops the path there; an incomplete command is dropped -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
+
+  <path fill="none" stroke="none" d="M10 10 H90 V40 H10 Z"/>
+  <path d="M10 60 L50 60 L50 90 L x30 90 L10 90"/>
+  <path d="M60 60 C70 50 80 50 90 60 C"/>
+  <path d=""/>
+ </svg>

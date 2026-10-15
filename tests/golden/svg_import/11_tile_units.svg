@@ -1,0 +1,6 @@
+<!-- drawn directly in tile units (viewBox 0 0 1 1), imported with fit = none: coordinates unchanged -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1 1">
+
+  <path d="M0 0.3 C0.2 0.1 0.3 0.5 0.5 0.3 S0.8 0.1 1 0.3"/>
+  <circle cx="0.5" cy="0.7" r="0.15"/>
+ </svg>

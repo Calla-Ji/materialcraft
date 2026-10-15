@@ -1,0 +1,11 @@
+<!-- nested groups; translate, rotate, rotate(a cx cy), scale, skewX, matrix; order = left to right -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
+
+  <g transform="translate(50 50)">
+    <g transform="rotate(30)">
+      <rect x="-30" y="-5" width="60" height="10"/>
+      <g transform="scale(0.5) skewX(20)"><rect x="-20" y="20" width="40" height="40"/></g>
+    </g>
+    <path transform="matrix(1 0 0 -1 0 0) rotate(45 0 30)" d="M-10 30 h20 l-10 15 z"/>
+  </g>
+ </svg>

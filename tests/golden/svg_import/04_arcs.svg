@@ -1,0 +1,10 @@
+<!-- large/sweep flags, rotated ellipse, radius too small (scaled up), compact flags '1110', rx = 0 -> line -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
+
+  <path d="M10 30 A20 20 0 0 1 50 30"/>
+  <path d="M55 30 A20 20 0 1 0 95 30"/>
+  <path d="M10 70 A30 15 30 0 1 45 80"/>
+  <path d="M55 70 a5 5 0 0 1 30 0"/>
+  <path d="M60 92 a 10 10 0 1110 0"/>
+  <path d="M10 95 A0 10 0 0 1 40 95"/>
+ </svg>

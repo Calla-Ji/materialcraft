@@ -16,23 +16,38 @@
 
 use crate::path::Section;
 
-pub const STITCH_KINDS: [StitchKind; 7] = [
+pub const STITCH_KINDS: [StitchKind; 5] = [
     StitchKind::Running,
-    StitchKind::Back,
     StitchKind::Bean,
     StitchKind::Stem,
-    StitchKind::Split,
     StitchKind::Zigzag,
     StitchKind::Satin,
 ];
 
+/// French Knot isn't one of these — it has its own [`crate::french_knot`]
+/// module entirely (its own `KnotParams`, its own centre-line model, its
+/// own GPU raster), not a `rule_*` function here, since its data shape is
+/// genuinely different from every type below. The Stitch node's own
+/// `"stitch"` dropdown still offers it; `mc_nodes::registry`'s own
+/// dispatch branches to the right module before it ever builds a
+/// `StitchParams`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StitchKind {
+    /// Covers Back and Split too, not just Running proper — with exactly
+    /// one stitch spanning its own whole tile (`render_tile_mm`), all
+    /// three render pixel-identical: Running's own gap can never show (the
+    /// tile fills with thread regardless of its value, see
+    /// `render_tile_mm`'s own doc comment), and Split has no sideways
+    /// offset at `n == 1` the way Stem does, so it collapses to the same
+    /// straight line Back draws. Confirmed via testing — caught as "they
+    /// all look the same" across real test renders of each. `rule_back`/
+    /// `rule_split` still exist (Bean's own base is `rule_back`, and both
+    /// stay validated against the reference package's own golden fixtures
+    /// via `rule_fn_by_name` in this module's own tests) — they're just
+    /// not their own separate, user-selectable option anymore.
     Running,
-    Back,
     Bean,
     Stem,
-    Split,
     Zigzag,
     Satin,
 }
@@ -66,7 +81,6 @@ pub enum SatinMode {
 /// are `Option` here for the same reason.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StitchParams {
-    pub resolution: u32,
     pub stitch: StitchKind,
     pub look: Look,
     pub tile_mm: f64,
@@ -93,8 +107,7 @@ pub struct StitchParams {
 impl Default for StitchParams {
     fn default() -> Self {
         Self {
-            resolution: 768,
-            stitch: StitchKind::Back,
+            stitch: StitchKind::Running,
             look: Look::Hand,
             tile_mm: 50.0,
             stitch_length_mm: 3.0,
@@ -113,22 +126,38 @@ impl Default for StitchParams {
             twist_angle_deg: None,
             ply_direction: PlyDirection::S,
             regularity: None,
-            height_range: 4.0,
+            // `height = (z + thread-cross-section-bulge) / (height_range *
+            // thread)`, and an *isolated* single stitch's own peak ridge
+            // pixel (its own resting z, r, plus the capsule's own +r bulge
+            // at the dead center, d=0) always comes out to exactly
+            // `2 * thread radius` — so `height_range == 1.0` (the slider's
+            // own documented minimum) is exactly the point where that peak
+            // reaches a full `1.0`, the brightest the Height output can
+            // read. The old default of `4.0` was tuned for the pre-
+            // `render_tile_mm` multi-stitch-per-tile swatch, where several
+            // threads could stack up to `MAX_LAYERS` deep and needed the
+            // extra headroom — a single isolated stitch never stacks on
+            // anything, so that headroom just read as "too dim to look
+            // raised" (reported via testing: "missing lighter values").
+            height_range: 1.0,
             seed: 1,
         }
     }
 }
 
-struct LookDefaults {
-    thread_mm: f64,
-    plies: u32,
-    twist_angle_deg: f64,
-    regularity: f64,
-    satin_mode: SatinMode,
-    density_factor: f64,
+/// A Look preset's own canonical values — also used directly by
+/// `mc_app::params_panel`'s Look picker to reset the dependent sliders when
+/// the user switches Look, so the UI never duplicates these numbers.
+pub struct LookDefaults {
+    pub thread_mm: f64,
+    pub plies: u32,
+    pub twist_angle_deg: f64,
+    pub regularity: f64,
+    pub satin_mode: SatinMode,
+    pub density_factor: f64,
 }
 
-fn look_defaults(look: Look) -> LookDefaults {
+pub fn look_defaults(look: Look) -> LookDefaults {
     match look {
         // Two strands of stranded cotton lying nearly flat, small human
         // irregularity.
@@ -188,6 +217,204 @@ impl StitchParams {
             density: self.density_mm.unwrap_or(thread_mm * look.density_factor) / self.tile_mm,
             pull: self.pull_comp_mm / self.tile_mm,
         }
+    }
+
+    /// Reads a complete `StitchParams` straight off the graph's own node
+    /// params — unlike the Python reference's own CLI-script convenience,
+    /// this node's UI never leaves a field genuinely unset: the Look
+    /// preset picker (`mc_app::params_panel`) writes concrete values into
+    /// every look-dependent field the moment it's clicked, the same
+    /// "preset resets these sliders, they stay independently editable
+    /// after" pattern Knit's own preset picker already established. So
+    /// every `Option` field here is always `Some` in practice; they stay
+    /// `Option`-typed only so [`Self::resolved`] keeps behaving exactly
+    /// like `stitch_reference.py`'s own `resolved()` if a field is ever
+    /// genuinely absent (a node graph loaded from an older file version,
+    /// say).
+    pub fn from_graph(params: &std::collections::BTreeMap<String, mc_core::ParamValue>) -> Self {
+        let defaults = Self::default();
+
+        fn f64_of(
+            params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+            name: &str,
+            default: f64,
+        ) -> f64 {
+            params
+                .get(name)
+                .and_then(mc_core::ParamValue::as_float)
+                .map(f64::from)
+                .unwrap_or(default)
+        }
+        fn u32_of(
+            params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+            name: &str,
+            default: u32,
+        ) -> u32 {
+            params
+                .get(name)
+                .and_then(mc_core::ParamValue::as_int)
+                .map(|v| v.max(0) as u32)
+                .unwrap_or(default)
+        }
+        fn bool_of(
+            params: &std::collections::BTreeMap<String, mc_core::ParamValue>,
+            name: &str,
+            default: bool,
+        ) -> bool {
+            params
+                .get(name)
+                .and_then(mc_core::ParamValue::as_bool)
+                .unwrap_or(default)
+        }
+        fn enum_str<'a>(
+            params: &'a std::collections::BTreeMap<String, mc_core::ParamValue>,
+            name: &str,
+        ) -> Option<&'a str> {
+            match params.get(name) {
+                Some(mc_core::ParamValue::Enum(s)) => Some(s.as_str()),
+                _ => None,
+            }
+        }
+
+        let stitch = match enum_str(params, "stitch") {
+            // "back"/"split" aren't their own dropdown option anymore
+            // (merged into Running — see `StitchKind::Running`'s own doc
+            // comment), but still map a graph file saved before the merge
+            // onto the option that now covers them, rather than silently
+            // falling through to the overall default.
+            Some("running") | Some("back") | Some("split") => StitchKind::Running,
+            Some("bean") => StitchKind::Bean,
+            Some("stem") => StitchKind::Stem,
+            Some("zigzag") => StitchKind::Zigzag,
+            Some("satin") => StitchKind::Satin,
+            // "french_knot" has its own `KnotParams`/`crate::french_knot`
+            // entirely, never a live `StitchKind` — `mc_nodes::registry`'s
+            // own dispatch branches to that module before this function
+            // is ever called for it. Falls through to the overall default
+            // here defensively, same as any other value this doesn't
+            // recognize.
+            _ => defaults.stitch,
+        };
+        let look = match enum_str(params, "look") {
+            Some("machine") => Look::Machine,
+            Some("hand") => Look::Hand,
+            _ => defaults.look,
+        };
+        let stem_side = match enum_str(params, "stem_side") {
+            Some("outline") => StemSide::Outline,
+            Some("stem") => StemSide::Stem,
+            _ => defaults.stem_side,
+        };
+        let ply_direction = match enum_str(params, "ply_direction") {
+            Some("Z") => PlyDirection::Z,
+            Some("S") => PlyDirection::S,
+            _ => defaults.ply_direction,
+        };
+
+        // Magic-number fallbacks below mirror the "hand" look's own
+        // resolved defaults (LookDefaults::thread_mm=0.45,
+        // density_factor=0.85, etc.) — the values a freshly-instantiated
+        // node's own ParamSpec defaults already carry, repeated here only
+        // for the (normally unreachable) case of a param genuinely
+        // missing from the graph.
+        Self {
+            stitch,
+            look,
+            // Not exposed in the UI: `dispatch_render` always substitutes
+            // `render_tile_mm`'s own one-stitch value in for this before
+            // rendering (checked via testing — editing this slider had no
+            // visible effect at all), so it stays a fixed internal value.
+            tile_mm: f64_of(params, "tile_mm", defaults.tile_mm),
+            stitch_length_mm: f64_of(params, "stitch_length_mm", defaults.stitch_length_mm),
+            // Not exposed in the UI: `rule_running` is the only reader of
+            // this, and with `render_tile_mm`'s own one-stitch framing its
+            // own stitch count is provably `1` regardless of this value
+            // (the `+ gap` term appears identically in both the numerator
+            // and denominator of its own count formula) — the single
+            // stitch fills the whole tile edge to edge either way.
+            gap_mm: Some(f64_of(params, "gap_mm", 3.0)),
+            width_mm: f64_of(params, "width_mm", defaults.width_mm),
+            stem_width_mm: Some(f64_of(params, "stem_width_mm", 0.45)),
+            density_mm: Some(f64_of(params, "density_mm", 0.3825)),
+            bean_repeats: u32_of(params, "bean_repeats", defaults.bean_repeats).max(1),
+            stem_side,
+            zigzag_angle_deg: f64_of(params, "zigzag_angle", defaults.zigzag_angle_deg),
+            pull_comp_mm: f64_of(params, "pull_comp_mm", defaults.pull_comp_mm),
+            // Not exposed in the UI: mitring only ever activates at a path
+            // *corner* (`Section::start_corner`/`end_corner`), and the
+            // node's own synthetic local unit (a single straight open
+            // segment) never has one.
+            satin_mitre: bool_of(params, "satin_mitre", defaults.satin_mitre),
+            // Not exposed in the UI: the node's own synthetic local unit
+            // (a single straight open segment) never has a corner for
+            // this to threshold.
+            corner_threshold_deg: defaults.corner_threshold_deg,
+            thread_mm: Some(f64_of(params, "thread_mm", 0.45)),
+            plies: Some(u32_of(params, "plies", 2).max(1)),
+            twist_angle_deg: Some(f64_of(params, "twist_angle", 10.0)),
+            ply_direction,
+            regularity: Some(f64_of(params, "regularity", 0.7).clamp(0.0, 1.0)),
+            height_range: f64_of(params, "height_range", defaults.height_range),
+            seed: params
+                .get("seed")
+                .and_then(mc_core::ParamValue::as_seed)
+                .unwrap_or(defaults.seed),
+        }
+    }
+}
+
+/// A single straight open segment, centered at `y = 0.5` — paired with
+/// [`render_tile_mm`], which scales the physical period that fits along
+/// it down to exactly one stitch, this is the node's own self-contained
+/// "one stitch" unit. Downstream, a Path node's own Stamp input repeats/
+/// orients copies of this node's output along a real curve — this module
+/// has no opinion about that, same separation of concerns as Shape (a
+/// single disc, centered) not knowing anything about Tile Generator's own
+/// grid.
+///
+/// Spans the *entire* `[0, 1]` tile width edge to edge only when the
+/// along-path period is what [`render_tile_mm`] actually used to size the
+/// tile; when Zigzag/Satin's own independent `Width`/`Density` is the
+/// larger number instead (`stitch_extents_mm`'s own `across` winning the
+/// `max`), stretching the path to match would force-fit the along-path
+/// period into a tile sized for a *different* dimension, stretching a
+/// real embroidery stitch length into something it isn't — so the path is
+/// shortened to its own true length-to-tile-size ratio and centered
+/// instead, leaving padding on both sides rather than distorting it.
+/// Confirmed via testing: without this, Zigzag/Satin's own `width_at`
+/// lateral offset could reach several multiples of the tile's own `[0,1]`
+/// span, rendering as the wrap-addressed sampler's own garbage spillover
+/// from the opposite edge instead of a recognizable stitch shape.
+///
+/// `wrap: false`, not `true`: with a single stitch spanning at most the
+/// *full* `[0,1]` width (not a short run repeated many times across it,
+/// like before `render_tile_mm` existed), its own two endpoints can sit
+/// right at the tile's own seam — `wrap: true` would make `drape`/
+/// `thread_angle`'s own `wrap_delta` read that near-full-tile-width
+/// endpoint-to-endpoint vector as "the short way around" the seam instead
+/// and collapse it to near zero, rendering as two stray fragments at the
+/// tile's left and right edges with nothing connecting them (a real
+/// regression caught by testing — see
+/// `render_tile_mm_always_yields_exactly_one_stitch`'s own doc comment).
+/// `wrap` has no bearing on the *texture*'s own seamless tiling either way
+/// — `tube_raster.wgsl` always does its own per-pixel minimum-image
+/// distance test regardless of it; this flag only feeds `drape`'s
+/// inter-stitch proximity test (irrelevant here — there's only ever one
+/// stitch) and a stitch's own a-to-b direction/length math, which is
+/// exactly what must *not* wrap for a stitch this long.
+pub fn synthetic_local_path(params: &StitchParams) -> mc_core::Path {
+    let (along_mm, _) = stitch_extents_mm(params);
+    let tile_mm = render_tile_mm(params);
+    let half_len = 0.5 * (along_mm / tile_mm).min(1.0);
+    mc_core::Path {
+        subpaths: vec![mc_core::SubPath::new(
+            vec![
+                mc_core::Point::new([0.5 - half_len, 0.5]),
+                mc_core::Point::new([0.5 + half_len, 0.5]),
+            ],
+            false,
+        )],
+        wrap: false,
     }
 }
 
@@ -391,6 +618,13 @@ fn rule_stem(sec: &Section, p: &StitchParams, r: &Resolved, h: &mut HoleMaker) -
 
 /// RSN: each new stitch comes up through the centre of the previous one
 /// (splitting it, `dip_a = false`) and goes down one stitch length on.
+///
+/// `#[cfg(test)]`: Split isn't its own `StitchKind` anymore (folded into
+/// Running — see `StitchKind::Running`'s own doc comment), so nothing in
+/// live code calls this directly; it only still exists so
+/// `rule_fn_by_name` can keep validating it against the reference
+/// package's own golden fixture for the retired `"split"` case.
+#[cfg(test)]
 fn rule_split(sec: &Section, _p: &StitchParams, r: &Resolved, h: &mut HoleMaker) -> Vec<Stitch> {
     let n = even_count(sec.length(), r.length);
     let st = sec.length() / n as f64;
@@ -542,22 +776,21 @@ fn rule_satin(sec: &Section, p: &StitchParams, r: &Resolved, h: &mut HoleMaker) 
     out
 }
 
-/// Every stitch for `path` under `params`, in sewing order (section by
-/// section, along increasing arc length) — `stitch_reference.py`'s own
-/// `generate`.
-pub fn generate(path: &mc_core::Path, params: &StitchParams) -> Vec<Stitch> {
+/// A single `rule_*` function's own signature — every stitch rule in §4
+/// shares it, so [`generate`] (the live, `StitchKind`-driven dispatch) and
+/// this module's own tests (which still validate `rule_back`/`rule_split`
+/// directly against the reference package's golden fixtures, even though
+/// neither is its own live `StitchKind` anymore — see
+/// `StitchKind::Running`'s own doc comment) can both drive the same
+/// shared section-by-section loop.
+type Rule = fn(&Section, &StitchParams, &Resolved, &mut HoleMaker) -> Vec<Stitch>;
+
+/// Every stitch for `path` under `params` and `rule`, in sewing order
+/// (section by section, along increasing arc length) —
+/// `stitch_reference.py`'s own `generate`.
+fn generate_with_rule(path: &mc_core::Path, params: &StitchParams, rule: Rule) -> Vec<Stitch> {
     let resolved = params.resolved();
     let mut holes = HoleMaker::new(params, &resolved);
-    let rule: fn(&Section, &StitchParams, &Resolved, &mut HoleMaker) -> Vec<Stitch> =
-        match params.stitch {
-            StitchKind::Running => rule_running,
-            StitchKind::Back => rule_back,
-            StitchKind::Bean => rule_bean,
-            StitchKind::Stem => rule_stem,
-            StitchKind::Split => rule_split,
-            StitchKind::Zigzag => rule_zigzag,
-            StitchKind::Satin => rule_satin,
-        };
     let mut out = Vec::new();
     for sec in crate::path::sections(path, params.corner_threshold_deg) {
         out.extend(rule(&sec, params, &resolved, &mut holes));
@@ -566,6 +799,20 @@ pub fn generate(path: &mc_core::Path, params: &StitchParams) -> Vec<Stitch> {
         s.order = i as u32;
     }
     out
+}
+
+/// Every stitch for `path` under `params`, dispatched by its own live
+/// `StitchKind` — see [`generate_with_rule`] for the shared loop every
+/// rule runs through.
+pub fn generate(path: &mc_core::Path, params: &StitchParams) -> Vec<Stitch> {
+    let rule: Rule = match params.stitch {
+        StitchKind::Running => rule_running,
+        StitchKind::Bean => rule_bean,
+        StitchKind::Stem => rule_stem,
+        StitchKind::Zigzag => rule_zigzag,
+        StitchKind::Satin => rule_satin,
+    };
+    generate_with_rule(path, params, rule)
 }
 
 // ---------------------------------------------------------------------
@@ -743,7 +990,7 @@ pub fn drape(
 /// that `n` touching plies of radius `r_p` pack into an overall footprint
 /// of radius `R`. `n <= 1` has nothing to pack: the single "ply" just *is*
 /// the stitch's own full radius.
-fn packing(radius: f64, n: u32) -> (f64, f64) {
+pub(crate) fn packing(radius: f64, n: u32) -> (f64, f64) {
     if n <= 1 {
         return (0.0, radius);
     }
@@ -752,14 +999,14 @@ fn packing(radius: f64, n: u32) -> (f64, f64) {
     (r / s, r)
 }
 
-fn normalize3_py(v: [f64; 3]) -> [f64; 3] {
+pub(crate) fn normalize3_py(v: [f64; 3]) -> [f64; 3] {
     // Matches `stitch_reference.py`'s own `v / (norm(v) + 1e-15)` — an
     // epsilon added to the denominator, not a branch on near-zero input.
     let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() + 1e-15;
     [v[0] / len, v[1] / len, v[2] / len]
 }
 
-fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+pub(crate) fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
@@ -775,7 +1022,7 @@ fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 /// output samples are at uniform `u` steps, not uniform arc length, but
 /// `render`'s own tangent-frame code still asks for the plain unit-spacing
 /// gradient, so this matches that exactly rather than reusing the 2D one.
-fn gradient_3d_unit_spacing(points: &[[f64; 3]]) -> Vec<[f64; 3]> {
+pub(crate) fn gradient_3d_unit_spacing(points: &[[f64; 3]]) -> Vec<[f64; 3]> {
     let n = points.len();
     let mut out = vec![[0.0; 3]; n];
     if n < 2 {
@@ -938,21 +1185,152 @@ pub struct RenderOutputKeys<'a> {
     pub direction: &'a str,
 }
 
+/// `(along_path_mm, across_path_mm)` — the physical length one repeat of
+/// `params.stitch` needs along the synthetic path's own direction, and
+/// (Zigzag/Satin only, where `Width`/`Pull Compensation` are set
+/// independently of the along-path length) perpendicular to it. `0.0`
+/// where there's no independent across-path extent to worry about — every
+/// other kind's own lateral reach (thread radius, stem offset, bean bow)
+/// is already small relative to its own along-path period by construction,
+/// not a free-standing mm value that can run away from it.
+fn stitch_extents_mm(params: &StitchParams) -> (f64, f64) {
+    match params.stitch {
+        StitchKind::Running | StitchKind::Bean | StitchKind::Stem => (params.stitch_length_mm, 0.0),
+        // `stitch_length_mm` is peak to peak (ZIGZAG_SPEC.md §1: "One V
+        // (a zig and a zag) is 2 stitches... its length along the path is
+        // the stitch length L") — using the raw value, not half of it,
+        // makes the tile's own along-path period a full V (both the zig
+        // and the zag), not just one diagonal half of one. Confirmed
+        // directly against a real run of the unmodified
+        // `stitch_reference.py`: `rule_zigzag`'s own holes already match
+        // it exactly either way (`spacing = L/2` is internal to that
+        // rule, already correct) — this only changes how big a piece of
+        // it one Stitch tile shows.
+        StitchKind::Zigzag => (params.stitch_length_mm, width_extent_mm(params)),
+        StitchKind::Satin => {
+            let look = look_defaults(params.look);
+            let thread_mm = params.thread_mm.unwrap_or(look.thread_mm);
+            let density_mm = params.density_mm.unwrap_or(thread_mm * look.density_factor);
+            let along = match look.satin_mode {
+                SatinMode::Parallel => density_mm,
+                SatinMode::Zigzag => density_mm / 2.0,
+            };
+            (along, width_extent_mm(params))
+        }
+    }
+}
+
+/// Zigzag/Satin's own full lateral reach (mm): `width_at`'s own peak-to-
+/// peak span (`width_mm`, widened further by `Pull Compensation` on each
+/// side) plus one thread diameter of margin so the capsule's own radius
+/// at the very outer edge doesn't get clipped by the tile boundary either
+/// — same "+ one thread radius each side" margin `stitch_extents_mm`'s own
+/// French Knot branch already adds for the same reason.
+fn width_extent_mm(params: &StitchParams) -> f64 {
+    let look = look_defaults(params.look);
+    let thread_mm = params.thread_mm.unwrap_or(look.thread_mm);
+    params.width_mm + 2.0 * params.pull_comp_mm + thread_mm
+}
+
+/// The physical length (mm) [`synthetic_local_path`] sizes its own tile
+/// to. [`dispatch_render`] substitutes this in for `tile_mm` — only for
+/// its own internal generation/rendering, never the node's stored param —
+/// so the Stitch node always produces exactly one stitch *unit*, never
+/// several packed in side by side (Zigzag's own "one unit" is a full V —
+/// 2 `Stitch` entries, per ZIGZAG_SPEC.md §1 — same "one recognizable
+/// repeat, not a fragment of one" idea as Bean's own 3 overlapping passes
+/// or French Knot's coil of short segments, just not literally `n == 1`).
+/// Path's own Stamp distribution (not Stitch) is what repeats it along a
+/// curve, per this node's own NodeDef tooltip.
+///
+/// `stitch_extents_mm`'s own larger of `(along, across)` — for most kinds
+/// that's always `along` (see that function's own doc comment), so this
+/// still resolves to exactly `stitch_extents_mm(params).0` and
+/// `synthetic_local_path` fills the whole `[0, 1]` tile edge to edge
+/// unchanged. For Zigzag/Satin, `across` can win instead, in which case
+/// `synthetic_local_path` shortens its own span to compensate rather than
+/// stretching the along-path period to match a tile that had to grow for
+/// an unrelated reason (checked via testing — before this, Zigzag/Satin's
+/// own lateral reach could run to several multiples of the tile's own
+/// `[0, 1]` span).
+///
+/// Each `rule_*` function (§4) picks its own stitch count from
+/// `sec.length()` divided by a period that's some fraction of `tile_mm`;
+/// `synthetic_local_path`'s own span is sized so that division always
+/// lands on `1.0` (`stitch_extents_mm(params).0 / render_tile_mm(params)`
+/// is always exactly `1.0`), and the rule's own `even_count`/
+/// `round_half_even` selection lands on exactly one stitch *unit*
+/// regardless of which of `along`/`across` actually won — `1` stitch for
+/// most kinds, but Zigzag's own rule halves its own target period
+/// internally (`spacing = L / 2`, ZIGZAG_SPEC.md §2), so the same `1.0`
+/// ratio lands it on `2` (a full V) instead, by design. Confirmed against
+/// each rule's own formula:
+/// Running's own `n` collapses to `1` regardless of `gap_mm` once
+/// `stitch_length_mm == tile_mm` (the `+ gap` term appears identically in
+/// both its numerator and denominator), which is why Running shares the
+/// same period as Back/Bean/Stem/Split rather than needing its own
+/// `stitch_length_mm + gap_mm` — the whole tile fills with thread, no
+/// gap baked in; the dashed-running look comes from Path's own Stamp
+/// Spacing vs. Stamp Size instead.
+fn render_tile_mm(params: &StitchParams) -> f64 {
+    let (along, across) = stitch_extents_mm(params);
+    along.max(across)
+}
+
 /// Generates, drapes and rasterizes `path` under `params` into `keys`' six
-/// output textures. A `path` whose own stitch rule produces no stitches at
-/// all (a degenerate, e.g. zero-length, curve) fills every output blank
-/// rather than dispatching a degenerate GPU pass, same fallback
-/// `dispatch_preview_mask` already uses.
+/// output textures — exactly [`render_at_scale`], except `tile_mm` is
+/// first substituted for [`render_tile_mm`]'s own one-stitch value, which
+/// is what every real caller (the node's own registry dispatch) wants.
+/// Split out from `render_at_scale` so the golden-PNG regression test
+/// below can still validate the actual rendering pipeline — generate,
+/// drape, rasterize — against the reference package's own fixed-`tile_mm`
+/// output, independent of this node's own single-stitch framing decision.
 pub fn dispatch_render(
     gpu: &mut mc_gpu::Context,
     pool: &mut mc_gpu::TexturePool,
     keys: RenderOutputKeys,
     path: &mc_core::Path,
     params: &StitchParams,
+    resolution: u32,
 ) {
-    let resolution = params.resolution;
-    let resolved = params.resolved();
+    let params = StitchParams {
+        tile_mm: render_tile_mm(params),
+        ..*params
+    };
+    render_at_scale(gpu, pool, keys, path, &params, resolution);
+}
+
+/// The actual generate/drape/rasterize pipeline, at whatever `tile_mm`
+/// `params` already carries — see [`dispatch_render`]'s own doc comment
+/// for why this is split out.
+fn render_at_scale(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    keys: RenderOutputKeys,
+    path: &mc_core::Path,
+    params: &StitchParams,
+    resolution: u32,
+) {
     let stitches = generate(path, params);
+    render_stitches(gpu, pool, keys, path, params, resolution, stitches);
+}
+
+/// Everything [`render_at_scale`] does after its own call to [`generate`]
+/// — split out so this module's own tests can drive a `rule_*` function
+/// that no longer has a live `StitchKind` of its own (`rule_back`/
+/// `rule_split`, see `StitchKind::Running`'s own doc comment) straight
+/// through [`generate_with_rule`] instead, while still exercising the
+/// exact same drape/raster/info pipeline real rendering uses.
+fn render_stitches(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    keys: RenderOutputKeys,
+    path: &mc_core::Path,
+    params: &StitchParams,
+    resolution: u32,
+    stitches: Vec<Stitch>,
+) {
+    let resolved = params.resolved();
 
     if stitches.is_empty() {
         gpu.fill_rgba8(pool, keys.height, resolution, [0, 0, 0, 255]);
@@ -1074,7 +1452,7 @@ fn dispatch_stitch_info(
             &gpu.device,
             scratch_height_key,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
     let height_view = pool
@@ -1082,7 +1460,7 @@ fn dispatch_stitch_info(
             &gpu.device,
             height_key,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
     let thread_id_view = pool
@@ -1090,7 +1468,7 @@ fn dispatch_stitch_info(
             &gpu.device,
             thread_id_key,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
     let order_view = pool
@@ -1098,7 +1476,7 @@ fn dispatch_stitch_info(
             &gpu.device,
             order_key,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
     let direction_view = pool
@@ -1106,7 +1484,7 @@ fn dispatch_stitch_info(
             &gpu.device,
             direction_key,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
 
@@ -1195,13 +1573,35 @@ mod tests {
         }
     }
 
+    /// The `rule_*` function a golden fixture case's own `"stitch"`
+    /// string names — unlike [`generate`]'s own `StitchKind`-keyed
+    /// dispatch, this still recognizes `"back"`/`"split"` directly, since
+    /// the golden fixtures (ported straight from the reference package)
+    /// predate — and are independent of — this module's own live
+    /// `StitchKind` options (see `StitchKind::Running`'s own doc comment).
+    fn rule_fn_by_name(name: &str) -> Rule {
+        match name {
+            "running" => rule_running,
+            "back" => rule_back,
+            "bean" => rule_bean,
+            "stem" => rule_stem,
+            "split" => rule_split,
+            "zigzag" => rule_zigzag,
+            "satin" => rule_satin,
+            other => panic!("unknown stitch kind {other:?}"),
+        }
+    }
+
+    /// `rule_fn_by_name` (not this `stitch` field) is what actually
+    /// decides which `rule_*` function a golden case runs through —
+    /// "back"/"split" are mapped to `Running` here purely to produce a
+    /// valid, inert placeholder for the struct literal, same reasoning as
+    /// `knot_wraps` just below.
     fn params_from_json(v: &serde_json::Value) -> StitchParams {
         let stitch = match v["stitch"].as_str().unwrap() {
-            "running" => StitchKind::Running,
-            "back" => StitchKind::Back,
+            "running" | "back" | "split" => StitchKind::Running,
             "bean" => StitchKind::Bean,
             "stem" => StitchKind::Stem,
-            "split" => StitchKind::Split,
             "zigzag" => StitchKind::Zigzag,
             "satin" => StitchKind::Satin,
             other => panic!("unknown stitch kind {other:?}"),
@@ -1222,7 +1622,6 @@ mod tests {
             other => panic!("unknown ply_direction {other:?}"),
         };
         StitchParams {
-            resolution: v["resolution"].as_u64().unwrap() as u32,
             stitch,
             look,
             tile_mm: v["tile_mm"].as_f64().unwrap(),
@@ -1279,11 +1678,12 @@ mod tests {
 
         for (case_name, case_params) in cases {
             let params = params_from_json(case_params);
+            let rule = rule_fn_by_name(case_params["stitch"].as_str().unwrap());
             let golden_list = stitches_json[case_name]
                 .as_array()
                 .unwrap_or_else(|| panic!("missing golden stitches for case {case_name:?}"));
 
-            let generated = generate(&path, &params);
+            let generated = generate_with_rule(&path, &params, rule);
 
             assert_eq!(
                 generated.len(),
@@ -1316,6 +1716,121 @@ mod tests {
                     st.bow
                 );
             }
+        }
+    }
+
+    // ZIGZAG_SPEC.md's own close-up package: isolates one zigzag stitch
+    // (a single V, a straight run, a corner, a curve, a taper, each
+    // parameter on its own) on simple paths, rather than only the
+    // original acceptance suite's single complex demo ornament — so a
+    // divergence in the port is easier to localize to a specific hole or
+    // sample. `ZIGZAG_PARAMS_JSON`'s own per-case `"params"` sub-object is
+    // the identical schema `params_from_json` above already parses (same
+    // field set, "stitch": "zigzag" always), so it's reused directly
+    // rather than duplicating a parser; `"path"` is a real `mc_core::Path`
+    // JSON object (same `pos`/`h_in`/`h_out`/`kind`/`width` shape
+    // `mc_core::path`'s own doc comment already documents), deserialized
+    // straight through `serde`.
+    const ZIGZAG_PARAMS_JSON: &str = include_str!("../../../tests/golden/zigzag/params.json");
+
+    fn zigzag_golden_stitches(case: &str) -> &'static str {
+        match case {
+            "zz_single_v_hand" => {
+                include_str!("../../../tests/golden/zigzag/zz_single_v_hand_stitches.json")
+            }
+            "zz_single_v_machine" => {
+                include_str!("../../../tests/golden/zigzag/zz_single_v_machine_stitches.json")
+            }
+            "zz_straight_hand" => {
+                include_str!("../../../tests/golden/zigzag/zz_straight_hand_stitches.json")
+            }
+            "zz_straight_machine" => {
+                include_str!("../../../tests/golden/zigzag/zz_straight_machine_stitches.json")
+            }
+            "zz_dense_machine" => {
+                include_str!("../../../tests/golden/zigzag/zz_dense_machine_stitches.json")
+            }
+            "zz_angle30" => include_str!("../../../tests/golden/zigzag/zz_angle30_stitches.json"),
+            "zz_pull_comp" => {
+                include_str!("../../../tests/golden/zigzag/zz_pull_comp_stitches.json")
+            }
+            "zz_taper" => include_str!("../../../tests/golden/zigzag/zz_taper_stitches.json"),
+            "zz_corner" => include_str!("../../../tests/golden/zigzag/zz_corner_stitches.json"),
+            "zz_curve" => include_str!("../../../tests/golden/zigzag/zz_curve_stitches.json"),
+            "zz_loose" => include_str!("../../../tests/golden/zigzag/zz_loose_stitches.json"),
+            "zz_tiling" => include_str!("../../../tests/golden/zigzag/zz_tiling_stitches.json"),
+            other => panic!("unknown zigzag close-up case {other:?}"),
+        }
+    }
+
+    /// ZIGZAG_SPEC.md §4 step 1: stitch counts identical, every hole
+    /// within 1e-6 tile units, flags identical — for all 12 close-up
+    /// cases. Order follows the spec's own suggestion: start with
+    /// `zz_single_v_machine` (no jitter), then `zz_single_v_hand` (tests
+    /// the jitter hash), covered here by `ZZ_CASES`'s own declared order.
+    #[test]
+    fn zigzag_close_up_holes_match_golden_for_every_case() {
+        const ZZ_CASES: [&str; 12] = [
+            "zz_single_v_machine",
+            "zz_single_v_hand",
+            "zz_straight_hand",
+            "zz_straight_machine",
+            "zz_dense_machine",
+            "zz_angle30",
+            "zz_pull_comp",
+            "zz_taper",
+            "zz_corner",
+            "zz_curve",
+            "zz_loose",
+            "zz_tiling",
+        ];
+        let params_json: serde_json::Value = serde_json::from_str(ZIGZAG_PARAMS_JSON).unwrap();
+
+        for case in ZZ_CASES {
+            let case_json = &params_json[case];
+            let params = params_from_json(&case_json["params"]);
+            let path: mc_core::Path = serde_json::from_value(case_json["path"].clone())
+                .unwrap_or_else(|e| panic!("{case}: bad path JSON: {e}"));
+
+            let golden_text = zigzag_golden_stitches(case);
+            let golden: serde_json::Value = serde_json::from_str(golden_text).unwrap();
+            let golden_stitches = golden["stitches"].as_array().unwrap();
+
+            let generated = generate(&path, &params);
+
+            assert_eq!(
+                generated.len(),
+                golden["stitch_count"].as_u64().unwrap() as usize,
+                "{case}: stitch count"
+            );
+            assert_eq!(
+                generated.len(),
+                golden_stitches.len(),
+                "{case}: stitch count"
+            );
+
+            for (i, (st, g)) in generated.iter().zip(golden_stitches).enumerate() {
+                assert_close2(st.a, arr(&g["a"]), 1e-6, &format!("{case}[{i}].a"));
+                assert_close2(st.b, arr(&g["b"]), 1e-6, &format!("{case}[{i}].b"));
+                assert_eq!(st.dip_a, g["dip_a"].as_bool().unwrap(), "{case}[{i}].dip_a");
+                assert_eq!(st.dip_b, g["dip_b"].as_bool().unwrap(), "{case}[{i}].dip_b");
+                assert_eq!(st.stack, g["stack"].as_bool().unwrap(), "{case}[{i}].stack");
+                let gbow = g["bow"].as_f64().unwrap();
+                assert!(
+                    (st.bow - gbow).abs() < 1e-6,
+                    "{case}[{i}].bow: actual={} expected={gbow}",
+                    st.bow
+                );
+            }
+            // Every hole is a stitch's own `a` or `b` (a section boundary
+            // can mean consecutive stitches *don't* share one — confirmed
+            // directly against a real run of the unmodified
+            // `stitch_reference.py` for `zz_corner`, ZIGZAG_SPEC.md §2's
+            // own "the next section's first stitch can therefore cross
+            // the last one" — so the per-stitch checks above already
+            // cover every hole position and flag; a separately
+            // reconstructed hole list would have to guess at that
+            // chaining and isn't needed on top of them.
         }
     }
 
@@ -1359,7 +1874,6 @@ mod tests {
             let wrap = case["wrap"].as_bool().unwrap();
             let params = StitchParams {
                 stitch: stitch_kind,
-                resolution,
                 ..Default::default()
             };
 
@@ -1477,12 +1991,153 @@ mod tests {
         );
     }
 
-    fn back_hand_params(resolution: u32) -> StitchParams {
+    /// Named for the golden fixture case ("back_hand" in
+    /// `tests/golden/stitch/params.json`), not a live `StitchKind` — Back
+    /// isn't its own option anymore (see `StitchKind::Running`'s own doc
+    /// comment). `stitch: Running` here only matters for the three tests
+    /// below that go through the *live* `dispatch_render`/`generate`
+    /// dispatch (determinism, seamless tiling, middle-fill) — none of them
+    /// care whether it's specifically Back's own math, just that *some*
+    /// real stitch renders through the real pipeline. The golden PNG
+    /// comparison test itself drives `rule_back` directly instead (see its
+    /// own comment), so this field is never actually consulted there.
+    fn back_hand_params() -> StitchParams {
         StitchParams {
-            stitch: StitchKind::Back,
+            stitch: StitchKind::Running,
             look: Look::Hand,
-            resolution,
+            // Pinned explicitly, not left to `Default::default()` — the
+            // golden PNG below was rendered by the reference package at
+            // `height_range: 4.0` (see `tests/golden/stitch/params.json`'s
+            // own `"back_hand"` entry), independent of whatever
+            // `StitchParams::default()`'s own height_range is tuned to for
+            // live rendering.
+            height_range: 4.0,
             ..Default::default()
+        }
+    }
+
+    /// The whole point of `render_tile_mm`: every stitch type, at its own
+    /// default params, generates exactly one stitch *unit* on the
+    /// synthetic local path — never several packed into the same tile.
+    /// Regression test for the "clunky when stamped along a Path" report
+    /// — the old behavior packed ~16 back stitches into one tile, which
+    /// Path's own Stamp distribution then repeated *again*, compounding
+    /// into a dense, muddy look instead of clean individual stitches.
+    ///
+    /// Bean and Zigzag are the exceptions: Bean's own `Stitch` *count* is
+    /// `2 * bean_repeats + 1` by design (the thread sewn forward-back-
+    /// forward over the same two holes for a plump look); Zigzag is 2
+    /// (ZIGZAG_SPEC.md §1: "One V... is 2 stitches" — `stitch_length_mm`
+    /// is peak to peak, so one full V is the actual "one stitch unit"
+    /// here, not one diagonal half of one) — both still exactly one
+    /// stitch *unit*, just made of several `Stitch` entries. French Knot
+    /// isn't one of `STITCH_KINDS` at all — see `StitchKind`'s own doc
+    /// comment.
+    #[test]
+    fn render_tile_mm_always_yields_exactly_one_stitch() {
+        for &kind in &STITCH_KINDS {
+            let params = StitchParams {
+                stitch: kind,
+                ..Default::default()
+            };
+            let path = synthetic_local_path(&params);
+            let expected = match kind {
+                StitchKind::Bean => (2 * params.bean_repeats + 1) as usize,
+                StitchKind::Zigzag => 2,
+                _ => 1,
+            };
+            let render_params = StitchParams {
+                tile_mm: render_tile_mm(&params),
+                ..params
+            };
+            let stitches = generate(&path, &render_params);
+            assert_eq!(
+                stitches.len(),
+                expected,
+                "{kind:?} should generate one stitch unit ({expected} thread segment(s)) on \
+                 its own tile, got {}",
+                stitches.len()
+            );
+        }
+    }
+
+    /// Regression test for the exact bug a real test render caught: with
+    /// the single stitch spanning the *entire* tile width, its own two
+    /// endpoints sit right at the seam — `synthetic_local_path`'s own
+    /// `wrap: true` (before it was fixed to `false`) made `drape`'s
+    /// `wrap_delta` read that nearly-full-tile-width endpoint-to-endpoint
+    /// vector as "the short way around" and collapse it to near zero,
+    /// rendering as two disconnected fragments at the tile's left and
+    /// right edges with the middle completely blank. Checks the mask is
+    /// actually lit at the tile's own horizontal center, not just near its
+    /// edges.
+    #[test]
+    fn dispatch_render_fills_the_middle_of_its_own_tile_not_just_the_edges() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let params = back_hand_params();
+        let path = synthetic_local_path(&params);
+        let res = 128u32;
+
+        dispatch_render(
+            &mut gpu,
+            &mut pool,
+            RenderOutputKeys {
+                height: "middle_height",
+                mask: "middle_mask",
+                ply_id: "middle_ply_id",
+                thread_id: "middle_thread_id",
+                order: "middle_order",
+                direction: "middle_direction",
+            },
+            &path,
+            &params,
+            res,
+        );
+
+        let pixels = gpu.read_rgba8(pool.texture("middle_mask").unwrap(), res);
+        let center = (res / 2) as usize;
+        let mask_at = |x: usize, y: usize| pixels[(y * res as usize + x) * 4];
+        assert!(
+            mask_at(center, center) > 0,
+            "the single stitch should cover the tile's own horizontal \
+             center, not just its left/right edges"
+        );
+    }
+
+    /// Regression test for a real test render: Zigzag/Satin's own
+    /// `Width`/`Pull Compensation` are set independently of their own
+    /// along-path period, and at ordinary default values the lateral
+    /// reach that implies is several times the tile's own `[0, 1]` span —
+    /// rendered as the wrap-addressed sampler's own garbage spillover
+    /// from the opposite edge (a thick diagonal smear with stray
+    /// fragments at the corners) instead of a recognizable zigzag/satin
+    /// shape. `render_tile_mm`/`synthetic_local_path` now take whichever
+    /// of the along- or across-path extent is larger, shortening and
+    /// centering the path instead of stretching it when the across-path
+    /// one wins.
+    #[test]
+    fn zigzag_and_satin_geometry_stays_within_their_own_tile() {
+        for kind in [StitchKind::Zigzag, StitchKind::Satin] {
+            let params = StitchParams {
+                stitch: kind,
+                ..Default::default()
+            };
+            let path = synthetic_local_path(&params);
+            let render_params = StitchParams {
+                tile_mm: render_tile_mm(&params),
+                ..params
+            };
+            let stitches = generate(&path, &render_params);
+            assert!(!stitches.is_empty(), "{kind:?} generated no stitches");
+            for st in &stitches {
+                for p in [st.a, st.b] {
+                    assert!(
+                        (0.0..=1.0).contains(&p[0]) && (0.0..=1.0).contains(&p[1]),
+                        "{kind:?} point {p:?} falls outside its own [0, 1] tile"
+                    );
+                }
+            }
         }
     }
 
@@ -1491,7 +2146,7 @@ mod tests {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
         let mut pool = mc_gpu::TexturePool::default();
         let path = demo_path();
-        let params = back_hand_params(128);
+        let params = back_hand_params();
 
         for suffix in ["a", "b"] {
             dispatch_render(
@@ -1507,6 +2162,7 @@ mod tests {
                 },
                 &path,
                 &params,
+                128,
             );
         }
         let height_a = gpu.read_rgba8(pool.texture("height_a").unwrap(), 128);
@@ -1522,7 +2178,7 @@ mod tests {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
         let mut pool = mc_gpu::TexturePool::default();
         let path = demo_path();
-        let params = back_hand_params(128);
+        let params = back_hand_params();
 
         dispatch_render(
             &mut gpu,
@@ -1537,6 +2193,7 @@ mod tests {
             },
             &path,
             &params,
+            128,
         );
         let res = 128usize;
         let pixels = gpu.read_rgba8(pool.texture("seam_height").unwrap(), res as u32);
@@ -1603,9 +2260,17 @@ mod tests {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
         let mut pool = mc_gpu::TexturePool::default();
         let path = demo_path();
-        let params = back_hand_params(768);
+        let params = back_hand_params();
 
-        dispatch_render(
+        // `rule_back` directly (via `generate_with_rule`/`render_stitches`),
+        // not the live `generate`/`render_at_scale` — Back no longer has
+        // its own `StitchKind` (see `StitchKind::Running`'s own doc
+        // comment), but `rule_back`'s own math still needs validating
+        // against the reference package's fixed-`tile_mm` golden,
+        // independent of `render_tile_mm`'s one-stitch-per-tile framing
+        // (see `dispatch_render`'s own doc comment).
+        let stitches = generate_with_rule(&path, &params, rule_back);
+        render_stitches(
             &mut gpu,
             &mut pool,
             RenderOutputKeys {
@@ -1618,6 +2283,8 @@ mod tests {
             },
             &path,
             &params,
+            768,
+            stitches,
         );
 
         let res = 768usize;

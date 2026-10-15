@@ -1,0 +1,9 @@
+<!-- absolute/relative M L H V Z, implicit lineto, compact numbers ('55.5.5', '60-.5'), open vs closed -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
+
+  <path d="M10,10 L40,10 40,40 H10 Z"/>
+  <path d="m55 10 l30 0 0 30 h-30 z"/>
+  <path d="M10 60h30v30h-30V60"/>
+  <path d="M55.5.5 60-.5" transform="translate(0,70)"/>
+  <polyline points="55,75 70,90 85,75"/>
+ </svg>

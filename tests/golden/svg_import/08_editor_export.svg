@@ -1,0 +1,14 @@
+<!-- Illustrator/Figma-style file: defs + use, style/class, hidden element, text (warned), comma-less compact syntax -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 200 120">
+
+  <defs><path id="petal" d="M0 0 C10 -20 30 -20 40 0 C30 20 10 20 0 0 Z"/></defs>
+  <style>.a{fill:#c33}</style>
+  <title>exported</title>
+  <g id="Layer_1">
+    <use xlink:href="#petal" x="20" y="60"/>
+    <use href="#petal" transform="translate(140 60) rotate(180)"/>
+    <path class="a" style="fill:#333;stroke:none" d="M70,60c0-16.6,13.4-30,30-30s30,13.4,30,30-13.4,30-30,30-30-13.4-30-30z"/>
+    <rect x="0" y="0" width="200" height="120" style="display:none"/>
+    <text x="10" y="110">ignored</text>
+  </g>
+ </svg>

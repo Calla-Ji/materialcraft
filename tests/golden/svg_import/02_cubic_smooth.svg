@@ -1,0 +1,7 @@
+<!-- C/S/c/s: S reflects the previous control point -> symmetric; collinear but unequal handles -> smooth -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
+
+  <path d="M10 50 C10 20 40 20 40 50 S70 80 70 50 S90 20 90 50"/>
+  <path d="M10 85 c10 -10 20 -10 30 0 s20 10 30 0" />
+  <path d="M10 98 C20 91 30 91 40 98 C60 112 80 98 90 93"/>
+ </svg>

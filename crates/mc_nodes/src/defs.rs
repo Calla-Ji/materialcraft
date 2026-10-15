@@ -426,6 +426,59 @@ pub fn param_is_relevant(
         }
         return true;
     }
+    if node_kind == "stitch" {
+        let stitch_kind = current_params
+            .get("stitch")
+            .and_then(|v| match v {
+                ParamValue::Enum(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .unwrap_or("running");
+        // French Knot's own params (`KnotParams`) and every other kind's
+        // own (`StitchParams`) are close to disjoint — Look/Thread
+        // Diameter/Plies/Ply Direction don't apply to a knot (it has its
+        // own Knot Look/Knot Strand Diameter/Knot Strands instead), and
+        // the knot-only params obviously don't apply to the other 5.
+        // Height Range and Twist Angle are both split the same way (a
+        // knot's own wraps genuinely stack, unlike a single stitch, and
+        // its own strands are short and tightly bundled — see
+        // "knot_height_range"/"knot_twist_angle"'s own tooltips);
+        // Regularity/Seed are the real overlap (see
+        // `KnotParams::from_graph`'s own doc comment for why those two
+        // are shared, not duplicated). Hole Gap and Wrap Direction aren't
+        // exposed at all anymore — neither one earned its own slider
+        // (Hole Gap only ever moves the short rise stub, which mostly
+        // dives back under the fabric regardless; Wrap Direction is a
+        // mirror-image flip nobody reached for), so both are pinned to a
+        // fixed value in `KnotParams::from_graph` instead, same "delete
+        // the dead control, keep the field" move already made for
+        // Stitch's own Tile Size/Gap/Satin Mitre.
+        if stitch_kind == "french_knot" {
+            return matches!(
+                param_name,
+                "stitch"
+                    | "knot_wraps"
+                    | "knot_strands"
+                    | "knot_strand_mm"
+                    | "knot_looseness"
+                    | "knot_look"
+                    | "knot_twist_angle"
+                    | "regularity"
+                    | "knot_height_range"
+                    | "seed"
+            );
+        }
+        return match param_name {
+            "knot_wraps" | "knot_strands" | "knot_strand_mm" | "knot_looseness" | "knot_look"
+            | "knot_twist_angle" | "knot_height_range" => false,
+            "width_mm" | "pull_comp_mm" => matches!(stitch_kind, "zigzag" | "satin"),
+            "stem_width_mm" | "stem_side" => stitch_kind == "stem",
+            "density_mm" => stitch_kind == "satin",
+            "bean_repeats" => stitch_kind == "bean",
+            "zigzag_angle" => stitch_kind == "zigzag",
+            _ => true,
+        };
+    }
     if node_kind != "shape" {
         return true;
     }
@@ -516,6 +569,171 @@ static NODE_DEFS: &[NodeDef] = &[
                 kind: ParamSpecKind::Seed { default: 0 },
             },
             tiling_mode_param(),
+        ],
+    },
+    NodeDef {
+        kind: "anisotropic_noise",
+        display_name: "Anisotropic Noise",
+        category: "Generators/Noise",
+        tooltip: "Directional gradient noise — different frequency per axis for streaky, brushed-metal or wood-grain-like variation.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "scale_x",
+                display_name: "Scale X",
+                tooltip: "How many noise cells tile across the texture along X.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 32,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "scale_y",
+                display_name: "Scale Y",
+                tooltip: "How many noise cells tile across the texture along Y. A different value from Scale X is what stretches the noise into streaks.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 32,
+                    default: 16,
+                },
+            },
+            ParamSpec {
+                name: "octaves",
+                display_name: "Octaves",
+                tooltip: "How many layers of noise are summed.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 8,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "persistence",
+                display_name: "Persistence",
+                tooltip: "How much each octave's contribution shrinks.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the pattern without changing its character.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+            ParamSpec {
+                name: "sharpness",
+                display_name: "Sharpness",
+                tooltip: "Boosts contrast around mid-gray to make the noise read as crisper and less blurry. 1 = unchanged.",
+                kind: ParamSpecKind::Float {
+                    min: 1.0,
+                    max: 6.0,
+                    default: 1.0,
+                },
+            },
+            tiling_mode_param(),
+        ],
+    },
+    NodeDef {
+        kind: "gabor_noise",
+        display_name: "Gabor Noise",
+        category: "Generators/Noise",
+        tooltip: "Directional, band-limited noise with exact control of direction, frequency \
+                  and spread — brushed metal, wood-grain bands, sand ripples, wave patterns, \
+                  anisotropic roughness.",
+        inputs: &[],
+        outputs: &[
+            PortSpec {
+                name: "value",
+                display_name: "Value",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "phasor",
+                display_name: "Phasor",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "phase",
+                display_name: "Phase",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "intensity",
+                display_name: "Intensity",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "raw",
+                display_name: "Raw",
+                port_type: PortType::Gray,
+            },
+        ],
+        params: &[
+            ParamSpec {
+                name: "cells",
+                display_name: "Cells",
+                tooltip: "Grid cells per tile; kernel radius is 1/cells (bigger = smaller blobs).",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 16,
+                },
+            },
+            ParamSpec {
+                name: "frequency",
+                display_name: "Frequency",
+                tooltip: "Stripes (cycles) per tile along the angle.",
+                kind: ParamSpecKind::Float {
+                    min: 1.0,
+                    max: 200.0,
+                    default: 48.0,
+                },
+            },
+            ParamSpec {
+                name: "angle",
+                display_name: "Angle",
+                tooltip: "Direction the values change along, in degrees (0 gives vertical bands).",
+                kind: ParamSpecKind::Float {
+                    min: -360.0,
+                    max: 360.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "spread",
+                display_name: "Spread",
+                tooltip: "0 = one direction, 1 = every direction (isotropic).",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "impulses",
+                display_name: "Impulses",
+                tooltip: "Kernels per cell (2 is already enough for most looks; 1 looks patchy).",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 8,
+                    default: 4,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the pattern without changing its character.",
+                kind: ParamSpecKind::Seed { default: 1 },
+            },
         ],
     },
     NodeDef {
@@ -1156,9 +1374,185 @@ static NODE_DEFS: &[NodeDef] = &[
         ],
     },
     NodeDef {
+        kind: "scattered_streaks",
+        display_name: "Streaks",
+        category: "Generators/Noise",
+        tooltip: "Many thin stretched strokes — wood fibres and rays, scratches, hair and fur \
+                  clumps, rain, grass blades seen from above, brushed and anisotropic detail.",
+        inputs: &[PortSpec {
+            name: "angle_map",
+            display_name: "Angle Map",
+            port_type: PortType::Gray,
+        }],
+        outputs: &[
+            PortSpec {
+                name: "height",
+                display_name: "Height",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "mask",
+                display_name: "Mask",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "streak_id",
+                display_name: "Streak ID",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "along",
+                display_name: "Along",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "direction",
+                display_name: "Direction",
+                port_type: PortType::Color,
+            },
+        ],
+        params: &[
+            ParamSpec {
+                name: "cells",
+                display_name: "Cells",
+                tooltip: "Grid cells per tile.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 24,
+                },
+            },
+            ParamSpec {
+                name: "per_cell",
+                display_name: "Per Cell",
+                tooltip: "Streaks per cell.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 8,
+                    default: 2,
+                },
+            },
+            ParamSpec {
+                name: "length",
+                display_name: "Length",
+                tooltip: "Streak length, in tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.001,
+                    max: 1.0,
+                    default: 0.10,
+                },
+            },
+            ParamSpec {
+                name: "length_random",
+                display_name: "Length Random",
+                tooltip: "Shortens length by up to this fraction, randomly per streak.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "width",
+                display_name: "Width",
+                tooltip: "Streak width, in tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0001,
+                    max: 0.2,
+                    default: 0.004,
+                },
+            },
+            ParamSpec {
+                name: "width_random",
+                display_name: "Width Random",
+                tooltip: "Narrows width by up to this fraction, randomly per streak.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.3,
+                },
+            },
+            ParamSpec {
+                name: "angle",
+                display_name: "Angle",
+                tooltip: "Main direction, in degrees.",
+                kind: ParamSpecKind::Float {
+                    min: -360.0,
+                    max: 360.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "angle_spread",
+                display_name: "Angle Spread",
+                tooltip: "0 = all streaks parallel, 1 = any direction.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.05,
+                },
+            },
+            ParamSpec {
+                name: "bend",
+                display_name: "Bend",
+                tooltip: "Sideways bow, as a fraction of length; random sign per streak.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.03,
+                },
+            },
+            ParamSpec {
+                name: "taper",
+                display_name: "Taper",
+                tooltip: "Fraction of each half-length that fades out at the ends. 0 = hard cutoff.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.35,
+                },
+            },
+            ParamSpec {
+                name: "profile",
+                display_name: "Profile",
+                tooltip: "Cross-section shape across a streak's width.",
+                kind: ParamSpecKind::Enum {
+                    options: &["round", "soft", "flat"],
+                    default: "round",
+                },
+            },
+            ParamSpec {
+                name: "brightness_random",
+                display_name: "Brightness Random",
+                tooltip: "Dims brightness by up to this fraction, randomly per streak.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "blend",
+                display_name: "Blend",
+                tooltip: "How overlapping streaks combine: Max keeps the brightest; Add sums \
+                          them (clamped at 1).",
+                kind: ParamSpecKind::Enum {
+                    options: &["max", "add"],
+                    default: "max",
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the pattern without changing its character.",
+                kind: ParamSpecKind::Seed { default: 1 },
+            },
+        ],
+    },
+    NodeDef {
         kind: "path",
         display_name: "Path",
-        category: "Generators/Patterns",
+        category: "Generators/Path",
         tooltip: "An editable vector curve — draw an ornament by hand (click a segment \
                   to add a point, drag handles to curve it) or paste an SVG, then feed it \
                   into a Stitch node.",
@@ -1224,9 +1618,17 @@ static NODE_DEFS: &[NodeDef] = &[
                 name: "stamp_spacing",
                 display_name: "Stamp Spacing",
                 tooltip: "Distance along the curve between repeats of whatever's connected \
-                          to the Stamp input, in tile units. Smaller = more, denser copies.",
+                          to the Stamp input, in tile units. Smaller = more, denser copies \
+                          \u{2014} a long or highly detailed curve (e.g. an Image Trace result) \
+                          may need a much smaller value than a simple hand-drawn one to read as \
+                          continuous rather than sparse.",
                 kind: ParamSpecKind::Float {
-                    min: 0.005,
+                    // Was 0.005 — too coarse a floor for a curve with
+                    // thousands of points (an Image Trace result, say):
+                    // the owner hit this exact ceiling hand-stamping one,
+                    // with no way to go denser even at the slider's own
+                    // minimum.
+                    min: 0.0002,
                     max: 0.5,
                     default: 0.1,
                 },
@@ -1262,6 +1664,216 @@ static NODE_DEFS: &[NodeDef] = &[
                           point (useful for anything directional, like a stitch). Off: every \
                           stamp keeps the same upright orientation.",
                 kind: ParamSpecKind::Bool { default: true },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "image_trace",
+        display_name: "Image Trace",
+        category: "Generators/Path",
+        tooltip: "Traces a grey or colour image into a smooth vector outline (a Potrace-style \
+                  bitmap tracer). Feed Path into a Path node's own Reference input to edit or \
+                  stamp along the traced curve.",
+        inputs: &[
+            // `Color`, not `Gray` — a Gray source already broadcasts into
+            // a Color input (CLAUDE.md §5's implicit Gray->Color
+            // conversion), so this genuinely accepts either, matching
+            // TRACE_SPEC.md's own "a grey or colour image."
+            PortSpec {
+                name: "image",
+                display_name: "Image",
+                port_type: PortType::Color,
+            },
+        ],
+        // Preview Mask stays first, same reasoning as the Path node's own
+        // comment just above: the Path output is never written into the
+        // texture pool (PortType::Path bypasses it entirely), so the 2D
+        // View needs a real texture port to default to.
+        outputs: &[
+            PortSpec {
+                name: "preview_mask",
+                display_name: "Preview Mask",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "path",
+                display_name: "Path",
+                port_type: PortType::Path,
+            },
+        ],
+        params: &[
+            // Written by this node's own dispatch (the traced result),
+            // not user-editable here — same role and same `ParamSpecKind`
+            // as the Path node's own `path` param.
+            ParamSpec {
+                name: "path",
+                display_name: "Path",
+                tooltip: "The traced curve's own point/handle data — computed from Image, not \
+                          edited here.",
+                kind: ParamSpecKind::Path,
+            },
+            ParamSpec {
+                name: "threshold",
+                display_name: "Threshold",
+                tooltip: "Luminance below this becomes the traced (black) area.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "invert",
+                display_name: "Invert",
+                tooltip: "Trace the light areas instead of the dark ones.",
+                kind: ParamSpecKind::Bool { default: false },
+            },
+            ParamSpec {
+                name: "turn_policy",
+                display_name: "Turn Policy",
+                tooltip: "How to resolve a diagonal ambiguity while walking a boundary \
+                          (TRACE_SPEC.md's own \"Turn policies\"). Minority is the default and \
+                          usually the most natural-looking; the others matter mostly for \
+                          checkerboard-like patterns.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::image_trace::TurnPolicy::NAMES,
+                    default: "Minority",
+                },
+            },
+            ParamSpec {
+                name: "despeckle",
+                display_name: "Despeckle",
+                tooltip: "Drop traced regions smaller than this many pixels — removes stray \
+                          flecks from a noisy source image.",
+                kind: ParamSpecKind::Int {
+                    min: 0,
+                    max: 1000,
+                    default: 2,
+                },
+            },
+            ParamSpec {
+                name: "alpha_max",
+                display_name: "Alpha Max",
+                tooltip: "The corner-vs-curve threshold. Lower = sharper corners kept as \
+                          corners; below 0 keeps every vertex a corner (a pure polygon); above \
+                          about 1.33 smooths every vertex into a curve (no corners at all).",
+                kind: ParamSpecKind::Float {
+                    min: -1.0,
+                    max: 2.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
+                name: "optimize",
+                display_name: "Optimize",
+                tooltip: "Join consecutive curves where one smooth Bezier fits within \
+                          Tolerance, for a cleaner curve with fewer points.",
+                kind: ParamSpecKind::Bool { default: true },
+            },
+            ParamSpec {
+                name: "opt_tolerance",
+                display_name: "Tolerance",
+                tooltip: "How far a joined curve may drift from the original traced outline. \
+                          Only matters while Optimize is on.",
+                kind: ParamSpecKind::Float {
+                    min: 0.01,
+                    max: 2.0,
+                    default: 0.2,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "path_simplify",
+        display_name: "Path Simplify",
+        category: "Generators/Path",
+        tooltip: "Reduces a Path's own point count (Ramer-Douglas-Peucker vertex decimation) \u{2014} \
+                  useful before stamping or exporting a very dense curve (an Image Trace result, \
+                  say). Corner points always survive, regardless of Tolerance.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Path",
+            port_type: PortType::Path,
+        }],
+        // Preview Mask stays first, same reasoning as Path's and Image
+        // Trace's own comments above: the Path output is never written
+        // into the texture pool, so the 2D View needs a real texture
+        // port to default to.
+        outputs: &[
+            PortSpec {
+                name: "preview_mask",
+                display_name: "Preview Mask",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "path",
+                display_name: "Path",
+                port_type: PortType::Path,
+            },
+        ],
+        params: &[
+            // Written by this node's own dispatch (the simplified
+            // result), not user-editable here — same role and same
+            // `ParamSpecKind` as the Path node's own and Image Trace's
+            // own `path` params.
+            ParamSpec {
+                name: "path",
+                display_name: "Path",
+                tooltip: "The simplified curve's own point/handle data \u{2014} computed from the \
+                          Path input, not edited here.",
+                kind: ParamSpecKind::Path,
+            },
+            ParamSpec {
+                name: "tolerance",
+                display_name: "Tolerance",
+                tooltip: "How far a dropped point may have strayed from the straight line \
+                          between its surviving neighbors, in tile units. Higher = fewer \
+                          points, looser fit.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0001,
+                    max: 0.1,
+                    default: 0.002,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "path_to_mask",
+        display_name: "Path to Mask",
+        category: "Generators/Path",
+        tooltip: "Rasterizes a Path into a real Gray output \u{2014} Fill (nonzero-winding \
+                  polygon fill, holes handled automatically) or Outline (a constant-width \
+                  stroke).",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Path",
+            port_type: PortType::Path,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Mask",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "mode",
+                display_name: "Mode",
+                tooltip: "Fill: solid interior, holes left blank automatically (nonzero \
+                          winding). Outline: a stroke of Outline Width along every subpath.",
+                kind: ParamSpecKind::Enum {
+                    options: &["Fill", "Outline"],
+                    default: "Fill",
+                },
+            },
+            ParamSpec {
+                name: "outline_width",
+                display_name: "Outline Width",
+                tooltip: "Stroke width in tile units. Only used in Outline mode.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0005,
+                    max: 0.2,
+                    default: 0.01,
+                },
             },
         ],
     },
@@ -1523,13 +2135,37 @@ static NODE_DEFS: &[NodeDef] = &[
                 },
             },
             ParamSpec {
+                name: "scale_x",
+                display_name: "Scale X",
+                tooltip: "Independent horizontal stretch on top of Size — 1.0 is no stretch. \
+                          Lower makes a Disc into a tall ellipse or a Square into a tall \
+                          rectangle; higher makes it wide. Applied before Rotation, so a \
+                          stretched shape tilts as a whole when rotated.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 4.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
+                name: "scale_y",
+                display_name: "Scale Y",
+                tooltip: "Independent vertical stretch on top of Size — same as Scale X, for \
+                          the other axis.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 4.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
                 name: "softness",
                 display_name: "Softness",
                 tooltip: "How soft the edge is.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
-                    default: 0.05,
+                    default: 0.0,
                 },
             },
             ParamSpec {
@@ -1601,6 +2237,322 @@ static NODE_DEFS: &[NodeDef] = &[
                     max: 0.85,
                     default: 0.5,
                 },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "stitch",
+        display_name: "Stitch",
+        category: "Generators/Patterns",
+        tooltip: "A single embroidery stitch's own real thread-physics geometry (height, drape, \
+                  plies) spanning one tile — like Shape, self-contained, with no curve of its \
+                  own. Feed the output into a Path node's own Stamp input to repeat it along a \
+                  real curve.",
+        inputs: &[],
+        outputs: &[
+            PortSpec {
+                name: "height",
+                display_name: "Height",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "mask",
+                display_name: "Mask",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "thread_id",
+                display_name: "Thread ID",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "order",
+                display_name: "Order",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "ply_id",
+                display_name: "Ply ID",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "direction",
+                display_name: "Direction",
+                port_type: PortType::Color,
+            },
+        ],
+        params: &[
+            ParamSpec {
+                name: "stitch",
+                display_name: "Stitch",
+                tooltip: "Which embroidery stitch type to simulate. Back and Split aren't \
+                          their own options — with exactly one stitch spanning its own whole \
+                          tile, both render pixel-identical to Running, so they're folded \
+                          into it rather than offering a choice with no visible difference.",
+                kind: ParamSpecKind::Enum {
+                    options: &["running", "bean", "stem", "zigzag", "satin", "french_knot"],
+                    default: "running",
+                },
+            },
+            ParamSpec {
+                name: "look",
+                display_name: "Look",
+                tooltip: "Hand: stranded cotton, nearly flat twist, small human irregularity. \
+                          Machine: tight 40wt twist, perfect spacing, satin zig-zags between \
+                          its own rails instead of lying flat. Picking a Look resets Thread \
+                          Diameter, Plies, Twist Angle, Regularity, Stem Width and Density to \
+                          its own defaults — each stays independently editable afterward.",
+                kind: ParamSpecKind::Enum {
+                    options: &["hand", "machine"],
+                    default: "hand",
+                },
+            },
+            ParamSpec {
+                name: "stitch_length_mm",
+                display_name: "Stitch Length (mm)",
+                tooltip: "How far apart the needle holes are, roughly — the exact meaning \
+                          depends on the stitch type (RSN satin is about 3mm by hand).",
+                kind: ParamSpecKind::Float {
+                    min: 0.5,
+                    max: 20.0,
+                    default: 3.0,
+                },
+            },
+            ParamSpec {
+                name: "width_mm",
+                display_name: "Width (mm)",
+                tooltip: "Zigzag/satin column width.",
+                kind: ParamSpecKind::Float {
+                    min: 0.5,
+                    max: 30.0,
+                    default: 2.5,
+                },
+            },
+            ParamSpec {
+                name: "stem_width_mm",
+                display_name: "Stem Width (mm)",
+                tooltip: "Stem stitch only: how far the thread slants to each side.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 5.0,
+                    default: 0.45,
+                },
+            },
+            ParamSpec {
+                name: "density_mm",
+                display_name: "Density (mm)",
+                tooltip: "Satin stitch only: spacing between its own parallel stitches — \
+                          smaller is denser coverage.",
+                kind: ParamSpecKind::Float {
+                    min: 0.05,
+                    max: 5.0,
+                    default: 0.3825,
+                },
+            },
+            ParamSpec {
+                name: "bean_repeats",
+                display_name: "Bean Repeats",
+                tooltip: "Bean stitch only: 1 = each stitch worked three times (triple), 2 = \
+                          five times (quintuple).",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 4,
+                    default: 1,
+                },
+            },
+            ParamSpec {
+                name: "stem_side",
+                display_name: "Stem Side",
+                tooltip: "Stem stitch only: which way the rope twists — Stem leans \"/\", \
+                          Outline leans \"\\\".",
+                kind: ParamSpecKind::Enum {
+                    options: &["stem", "outline"],
+                    default: "stem",
+                },
+            },
+            ParamSpec {
+                name: "zigzag_angle",
+                display_name: "Zigzag Angle",
+                tooltip: "Zigzag stitch only: rotates which direction the holes alternate \
+                          toward.",
+                kind: ParamSpecKind::Float {
+                    min: -90.0,
+                    max: 90.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "pull_comp_mm",
+                display_name: "Pull Compensation (mm)",
+                tooltip: "Zigzag/satin only: widens the column on each side, compensating for \
+                          thread pulling the fabric inward.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 3.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "thread_mm",
+                display_name: "Thread Diameter (mm)",
+                tooltip: "How thick the thread itself is.",
+                kind: ParamSpecKind::Float {
+                    min: 0.05,
+                    max: 3.0,
+                    default: 0.45,
+                },
+            },
+            ParamSpec {
+                name: "plies",
+                display_name: "Plies",
+                tooltip: "How many strands are twisted together into one thread.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 6,
+                    default: 2,
+                },
+            },
+            ParamSpec {
+                name: "twist_angle",
+                display_name: "Twist Angle",
+                tooltip: "How tightly the plies twist around each other — low is nearly flat, \
+                          high is a tight cord.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 60.0,
+                    default: 10.0,
+                },
+            },
+            ParamSpec {
+                name: "ply_direction",
+                display_name: "Ply Direction",
+                tooltip: "Which way the plies twist — S or Z, same convention as the Thread \
+                          node's own.",
+                kind: ParamSpecKind::Enum {
+                    options: &["S", "Z"],
+                    default: "S",
+                },
+            },
+            ParamSpec {
+                name: "regularity",
+                display_name: "Regularity",
+                tooltip: "1.0 = machine-perfect spacing. Lower values jitter each needle hole \
+                          by hand-sewn irregularity, both along and across the stitch line.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.7,
+                },
+            },
+            ParamSpec {
+                name: "knot_wraps",
+                display_name: "Knot Wraps",
+                tooltip: "French Knot only: how many times the thread wraps around the \
+                          needle. 1 is a pin dot, 2 is the standard bead, 3 is medium, 4 is a \
+                          \"tower\" (allowed, but loose and floppy).",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 4,
+                    default: 2,
+                },
+            },
+            ParamSpec {
+                name: "knot_strands",
+                display_name: "Knot Strands",
+                tooltip: "French Knot only: how many strands of floss make up the knot — the \
+                          real size control (for a bigger knot, add strands, not wraps).",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 6,
+                    default: 2,
+                },
+            },
+            ParamSpec {
+                name: "knot_strand_mm",
+                display_name: "Knot Strand Diameter (mm)",
+                tooltip: "French Knot only: the diameter of one strand of stranded cotton. \
+                          Clamped to a narrower range than the reference's own 0.1-0.5mm — \
+                          past these ends a knot stops reading as a knot (too thin to show \
+                          its own coil, or so thick it dominates whatever it's stamped onto).",
+                kind: ParamSpecKind::Float {
+                    min: 0.15,
+                    max: 0.3,
+                    default: 0.2,
+                },
+            },
+            ParamSpec {
+                name: "knot_looseness",
+                display_name: "Knot Looseness",
+                tooltip: "French Knot only: 0 is pulled tight and neat, 1 is loose and loopy \
+                          (the wraps don't sit snugly around the needle).",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.15,
+                },
+            },
+            ParamSpec {
+                name: "knot_look",
+                display_name: "Knot Look",
+                tooltip: "French Knot only: Hand is stranded cotton with small human \
+                          irregularity. Neat is very even (sample-book, machine-like). Loose \
+                          is beginner/textured work. Sets Regularity and Knot Twist Angle \
+                          below, both still independently editable afterward.",
+                kind: ParamSpecKind::Enum {
+                    options: &["hand", "neat", "loose"],
+                    default: "hand",
+                },
+            },
+            ParamSpec {
+                name: "knot_twist_angle",
+                display_name: "Knot Twist Angle",
+                tooltip: "French Knot only: how tightly the strands twist around each other. \
+                          Clamped tighter than Stitch's own Twist Angle (10-40, not 0-60) — a \
+                          knot's own strands are short and tightly bundled, so the extremes of \
+                          the full range read as either indistinguishable from straight or \
+                          implausibly over-twisted.",
+                kind: ParamSpecKind::Float {
+                    min: 10.0,
+                    max: 40.0,
+                    default: 10.0,
+                },
+            },
+            ParamSpec {
+                name: "height_range",
+                display_name: "Height Range",
+                tooltip: "How many thread diameters map to a Height output of 1.0. A thicker \
+                          thread always looks taller at the same setting — this never \
+                          re-normalizes per image. Raise it to deliberately dim/flatten the \
+                          stitch; at the default (1.0) a single stitch's own highlight ridge \
+                          reaches full brightness.",
+                kind: ParamSpecKind::Float {
+                    min: 1.0,
+                    max: 20.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
+                name: "knot_height_range",
+                display_name: "Knot Height Range",
+                tooltip: "French Knot only: how many bundle diameters map to a Height output \
+                          of 1.0. Unlike a single stitch, a knot's own wraps genuinely pile up \
+                          on top of each other — a value tuned for a flat isolated stitch \
+                          clips that stacking and washes out the individual strands, so this \
+                          defaults higher (4.0, matching the reference). Clamped tighter than \
+                          Stitch's own Height Range (4-8, not 1-20) — below 4 the strands wash \
+                          out, and much above 8 the knot reads as flat.",
+                kind: ParamSpecKind::Float {
+                    min: 4.0,
+                    max: 8.0,
+                    default: 4.0,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes which thread gets which random Thread ID/twist phase, \
+                          without changing the stitch pattern itself.",
+                kind: ParamSpecKind::Seed { default: 1 },
             },
         ],
     },
@@ -2385,9 +3337,20 @@ static NODE_DEFS: &[NodeDef] = &[
         }],
         params: &[
             ParamSpec {
-                name: "scale",
-                display_name: "Scale",
-                tooltip: "Cells spanning the texture.",
+                name: "scale_x",
+                display_name: "Scale X",
+                tooltip: "Cells spanning the texture along X.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 16,
+                },
+            },
+            ParamSpec {
+                name: "scale_y",
+                display_name: "Scale Y",
+                tooltip: "Cells spanning the texture along Y. A different value from Scale X \
+                          stretches the cells into rectangles.",
                 kind: ParamSpecKind::Int {
                     min: 1,
                     max: 64,
@@ -2629,11 +3592,15 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "intensity",
                 display_name: "Intensity",
-                tooltip: "Multiplier on the occlusion strength.",
+                tooltip: "Multiplier on the occlusion strength. Kept fairly low by default — \
+                          `ao = clamp(1 - occlusion * intensity, 0, 1)` saturates to pure black \
+                          surprisingly fast at high values, clipping away the soft Gaussian \
+                          falloff the occlusion sampling itself produces and leaving a harsh \
+                          silhouette instead of a gentle shadow.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 8.0,
-                    default: 2.0,
+                    default: 0.6,
                 },
             },
             tiling_mode_param(),
@@ -2667,6 +3634,38 @@ static NODE_DEFS: &[NodeDef] = &[
             },
             tiling_mode_param(),
         ],
+    },
+    NodeDef {
+        kind: "channel_pack",
+        display_name: "Channel Packer",
+        category: "Converters",
+        tooltip: "Pack three grayscale inputs into one texture's R/G/B channels — e.g. \
+                  Ambient Occlusion, Roughness, and Metallic into an ORM map for Unreal Engine. \
+                  The R/G/B suggestions on each input are just that — wire up whatever three \
+                  grayscale sources you actually want packed.",
+        inputs: &[
+            PortSpec {
+                name: "r",
+                display_name: "R (AO)",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "g",
+                display_name: "G (Roughness)",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "b",
+                display_name: "B (Metallic)",
+                port_type: PortType::Gray,
+            },
+        ],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Color,
+        }],
+        params: &[],
     },
     NodeDef {
         kind: "channel_split",
@@ -3144,6 +4143,7 @@ static NODE_DEFS: &[NodeDef] = &[
     output_node_def("output_metallic", "Output: Metallic"),
     output_node_def("output_height", "Output: Height"),
     output_node_def("output_ambient_occlusion", "Output: Ambient Occlusion"),
+    output_node_def("output_orm", "Output: ORM"),
     output_node_def("output_emissive", "Output: Emissive"),
     output_node_def("output_alpha", "Output: Alpha"),
 ];

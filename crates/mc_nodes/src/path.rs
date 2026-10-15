@@ -798,7 +798,7 @@ pub fn dispatch_stamp(
         &gpu.device,
         output_key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -847,15 +847,10 @@ pub fn dispatch_stamp(
     gpu.queue.submit(Some(encoder.finish()));
 }
 
-/// Renders `path` as a thin outline into `keys`' Preview Mask texture —
-/// every subpath's own polyline, as constant-radius capsules
-/// ([`crate::tube_raster`]), with wrap-around handled the same way Knit's
-/// own closing segments are (raw, possibly out-of-`[0,1)` coordinates;
-/// `tube_raster`'s minimum-image test does the rest). `path.wrap == false`
-/// isn't specially handled yet — Preview Mask always renders as if
-/// wrapping, matching `tube_raster`'s own native behavior; a true
-/// wrap-off clip is Stitch's own concern once its GPU raster step adds it
-/// (STITCH_NODE_SPEC.md §7: "Wrap off: clip at the tile edge").
+/// Renders `path` as a thin outline into `keys`' Preview Mask texture, at
+/// the editor's own fixed preview width — see [`dispatch_stroke_mask`] for
+/// the actual rasterization, shared with Path to Mask's own Outline mode
+/// (which uses a real, user-controlled width instead of this fixed one).
 pub fn dispatch_preview_mask(
     gpu: &mut mc_gpu::Context,
     pool: &mut mc_gpu::TexturePool,
@@ -863,8 +858,28 @@ pub fn dispatch_preview_mask(
     resolution: u32,
     path: &Path,
 ) {
-    const SAMPLES_PER_SEGMENT: usize = 32;
     let radius = PREVIEW_HALF_WIDTH_PX / resolution as f32;
+    dispatch_stroke_mask(gpu, pool, key, resolution, path, radius);
+}
+
+/// Renders `path` as an outline of `radius` (tile-UV units) into `key`'s
+/// texture — every subpath's own polyline, as constant-radius capsules
+/// ([`crate::tube_raster`]), with wrap-around handled the same way Knit's
+/// own closing segments are (raw, possibly out-of-`[0,1)` coordinates;
+/// `tube_raster`'s minimum-image test does the rest). `path.wrap == false`
+/// isn't specially handled yet — this always renders as if wrapping,
+/// matching `tube_raster`'s own native behavior; a true wrap-off clip is
+/// Stitch's own concern once its GPU raster step adds it (STITCH_NODE_SPEC.md
+/// §7: "Wrap off: clip at the tile edge").
+pub fn dispatch_stroke_mask(
+    gpu: &mut mc_gpu::Context,
+    pool: &mut mc_gpu::TexturePool,
+    key: &str,
+    resolution: u32,
+    path: &Path,
+    radius: f32,
+) {
+    const SAMPLES_PER_SEGMENT: usize = 32;
 
     let mut segs = Vec::new();
     for (tag, sp) in path.subpaths.iter().enumerate() {
