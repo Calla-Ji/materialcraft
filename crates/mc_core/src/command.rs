@@ -37,6 +37,16 @@ pub enum Command {
         id: NodeId,
         name: String,
     },
+    /// A node's editor canvas position, undo-tracked — unlike
+    /// `Graph::set_node_position` (plain drag-to-move, deliberately *not*
+    /// undo-tracked; see that method's own doc comment), this exists for
+    /// the one case where silently rewriting position is a bigger deal
+    /// than a single accidental drag: Auto Layout, which can move every
+    /// node in the graph in one click.
+    MoveNode {
+        id: NodeId,
+        position: [f32; 2],
+    },
 }
 
 /// One or more [`Command`]s that undo/redo together as a single step.
@@ -181,6 +191,17 @@ impl Graph {
                         value: old,
                     },
                     None => Command::RemoveParam { id, name },
+                })
+            }
+            Command::MoveNode { id, position } => {
+                let node = self.nodes.get_mut(&id).ok_or(GraphError::NoSuchNode(id))?;
+                let previous = node.position;
+                node.position = position;
+                // Cosmetic only, same as `set_node_position` — doesn't
+                // affect evaluation, so no `mark_dirty_downstream`.
+                Ok(Command::MoveNode {
+                    id,
+                    position: previous,
                 })
             }
         }

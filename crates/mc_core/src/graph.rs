@@ -174,6 +174,36 @@ impl Graph {
         .map(|_| ())
     }
 
+    /// Writes `value` into node `id`'s own params directly — no undo
+    /// history, no [`mark_dirty_downstream`](Self::mark_dirty_downstream)
+    /// cascade, unlike [`set_param`](Self::set_param). For a node's own
+    /// evaluation to record a *computed* result into its own params
+    /// (e.g. Image Trace's traced path, read back out by a downstream
+    /// Path node's `Reference` input — [`mc_core::PortType::Path`]'s own
+    /// doc comment), not a user edit.
+    ///
+    /// This has to skip the dirty cascade specifically *because* it only
+    /// ever runs from inside a node's own evaluation: calling the normal,
+    /// cascading `set_param` there would re-mark this node's entire
+    /// downstream chain dirty on every single evaluation pass forever
+    /// (even once nothing has actually changed), since the write always
+    /// happens as a side effect of evaluating this node again — defeating
+    /// [`needs_evaluation`](Self::needs_evaluation)'s caching for
+    /// everything downstream. Whatever actually triggered this
+    /// re-evaluation (a param edit, an upstream change) already cascaded
+    /// the dirty flag correctly through the normal edit path, so nothing
+    /// downstream is missed.
+    pub fn set_computed_param(
+        &mut self,
+        id: NodeId,
+        name: &str,
+        value: ParamValue,
+    ) -> Result<(), GraphError> {
+        let node = self.nodes.get_mut(&id).ok_or(GraphError::NoSuchNode(id))?;
+        node.params.insert(name.to_string(), value);
+        Ok(())
+    }
+
     /// Connect `from_node:from_port` to `to_node:to_port`, replacing any
     /// existing connection into `to_node:to_port` (each input takes one
     /// connection; outputs can fan out). Rejected without changing the graph
