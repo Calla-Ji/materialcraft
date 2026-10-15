@@ -63,10 +63,10 @@ struct ThreadShapeParams {
 }
 
 @group(0) @binding(0) var<uniform> params: ThreadShapeParams;
-@group(0) @binding(1) var height_out: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(2) var ply_id_out: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(3) var fiber_out: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(4) var mask_out: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(1) var height_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var ply_id_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var fiber_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(4) var mask_out: texture_storage_2d<rgba16float, write>;
 
 const PI: f32 = 3.14159265358979;
 const TWO_PI: f32 = 6.28318530717958;

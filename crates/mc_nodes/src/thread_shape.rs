@@ -497,7 +497,7 @@ pub fn dispatch(
             &gpu.device,
             keys.height,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
     let ply_id_view = pool
@@ -505,7 +505,7 @@ pub fn dispatch(
             &gpu.device,
             keys.ply_id,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
     let fiber_view = pool
@@ -513,7 +513,7 @@ pub fn dispatch(
             &gpu.device,
             keys.fiber,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
     let mask_view = pool
@@ -521,7 +521,7 @@ pub fn dispatch(
             &gpu.device,
             keys.mask,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
 
