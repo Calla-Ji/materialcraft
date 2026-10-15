@@ -132,12 +132,190 @@ impl Context {
         );
     }
 
-    /// Read a square `Rgba8Unorm` texture back to a tightly-packed `Vec<u8>`
-    /// of `resolution * resolution * 4` bytes (one row after another, no
-    /// padding) — used for PNG export and for tests that inspect pixels.
+    /// Read a square `Rgba8Unorm` or `Rgba16Float` texture back to a
+    /// tightly-packed `Vec<u8>` of `resolution * resolution * 4` bytes (one
+    /// row after another, no padding) — used for PNG export and for tests
+    /// that inspect pixels.
+    ///
+    /// Every node's own output texture has been `Rgba16Float` since the
+    /// banding fix (see `mc_nodes`' node files' own doc comments) — storing
+    /// each node's result at 16-bit float instead of 8-bit keeps a chain of
+    /// several filters from re-quantizing to 256 levels at *every single
+    /// hop*, which is what caused visible banding in smooth gradients after
+    /// a few nodes. This function still always hands callers back plain
+    /// 8-bit RGBA, by downconverting here, at the one point precision
+    /// actually needs to drop to match what a screen or a PNG can hold —
+    /// so every existing caller (PNG export, the 2D View's display-encode
+    /// pass, every node's own tests) keeps working completely unchanged.
+    /// A handful of textures are deliberately still `Rgba8Unorm` (flat
+    /// fallback colors, imported images, the bundled blue-noise mask, and
+    /// the app's own final-display/3D-viewport surfaces) — none of those
+    /// lose anything by staying 8-bit, since they either have no gradient
+    /// to begin with or are already the last step before the screen.
     pub fn read_rgba8(&self, texture: &wgpu::Texture, resolution: u32) -> Vec<u8> {
-        const BYTES_PER_PIXEL: u32 = 4;
-        let unpadded_bytes_per_row = resolution * BYTES_PER_PIXEL;
+        match texture.format() {
+            wgpu::TextureFormat::Rgba16Float => {
+                let raw = self.read_raw(texture, resolution, 8);
+                raw.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|half_bytes| {
+                        let half = u16::from_le_bytes(*half_bytes);
+                        (half_to_f32(half).clamp(0.0, 1.0) * 255.0).round() as u8
+                    })
+                    .collect()
+            }
+            wgpu::TextureFormat::Rgba32Float => {
+                let raw = self.read_raw(texture, resolution, 16);
+                raw.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|f_bytes| {
+                        (f32::from_le_bytes(*f_bytes).clamp(0.0, 1.0) * 255.0).round() as u8
+                    })
+                    .collect()
+            }
+            _ => self.read_raw(texture, resolution, 4),
+        }
+    }
+
+    /// Fill `key`'s texture in `pool` with a single solid RGBA color, as
+    /// `Rgba16Float` — same purpose as [`Self::fill_rgba8`] (a node's
+    /// optional input defaulting to a flat value when nothing's connected),
+    /// but for inputs that need real floating-point values rather than
+    /// 0..1 display colors (e.g. Scattered Streaks' `angle_map` input,
+    /// which defaults to a flat 0.0 radians — "no extra rotation" — when
+    /// unconnected, and must be able to hold a connected upstream node's
+    /// genuine `Rgba16Float` output, not just 0..255).
+    pub fn fill_rgba16f(&self, pool: &mut TexturePool, key: &str, size: u32, value: [f32; 4]) {
+        let pixel = value.map(f32_to_half);
+        let pixels: Vec<u16> = pixel.repeat((size * size) as usize);
+        self.write_rgba16f_raw(pool, key, size, u16s_to_le_bytes(&pixels));
+    }
+
+    /// Write `pixels` (one `[f32; 4]` per texel, row by row) into `key`'s
+    /// texture in `pool`, as `Rgba16Float`. Used by tests that need to seed
+    /// a node's input with specific float data (e.g. an `.npy`-sourced
+    /// golden angle map) rather than a flat fallback.
+    pub fn write_rgba16f(&self, pool: &mut TexturePool, key: &str, size: u32, pixels: &[[f32; 4]]) {
+        assert_eq!(
+            pixels.len(),
+            (size * size) as usize,
+            "write_rgba16f: expected {} pixels, got {}",
+            size * size,
+            pixels.len()
+        );
+        let halves: Vec<u16> = pixels.iter().flat_map(|p| p.map(f32_to_half)).collect();
+        self.write_rgba16f_raw(pool, key, size, u16s_to_le_bytes(&halves));
+    }
+
+    fn write_rgba16f_raw(&self, pool: &mut TexturePool, key: &str, size: u32, bytes: Vec<u8>) {
+        pool.get_or_create(&self.device, key, size, wgpu::TextureFormat::Rgba16Float);
+        let texture = pool.texture(key).expect("just created above");
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size * 8),
+                rows_per_image: Some(size),
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Write `pixels` (one `[f32; 4]` per texel, row by row) into `key`'s
+    /// texture in `pool`, as full-precision `Rgba32Float` — for tests that
+    /// need to feed a node a float input at the same precision its own
+    /// golden fixture was generated at, where `Rgba16Float`'s ~3-4
+    /// significant decimal digits would introduce error the comparison
+    /// itself isn't supposed to be measuring (confirmed concretely for
+    /// Scattered Streaks' `angle_map` input: switching from `Rgba16Float`
+    /// to this dropped `streaks_flowmap`'s `height` max error from ~0.13,
+    /// with 0.29% of pixels outside tolerance, to ~0.002 with none).
+    pub fn write_rgba32f(&self, pool: &mut TexturePool, key: &str, size: u32, pixels: &[[f32; 4]]) {
+        assert_eq!(
+            pixels.len(),
+            (size * size) as usize,
+            "write_rgba32f: expected {} pixels, got {}",
+            size * size,
+            pixels.len()
+        );
+        pool.get_or_create(&self.device, key, size, wgpu::TextureFormat::Rgba32Float);
+        let texture = pool.texture(key).expect("just created above");
+        let bytes: Vec<u8> = pixels
+            .iter()
+            .flat_map(|p| p.iter().flat_map(|c| c.to_le_bytes()))
+            .collect();
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size * 16),
+                rows_per_image: Some(size),
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Reads a square `Rgba16Float` texture back to `resolution * resolution
+    /// * 4` `f32`s (R, G, B, A per pixel, row by row), with no 0..1 clamp —
+    /// unlike `read_rgba8`, which is for display/export and intentionally
+    /// clamps. Needed for node outputs that are genuinely allowed outside
+    /// 0..1 but don't need full `f32` storage precision.
+    pub fn read_rgba16f(&self, texture: &wgpu::Texture, resolution: u32) -> Vec<f32> {
+        let raw = self.read_raw(texture, resolution, 8);
+        raw.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|half_bytes| half_to_f32(u16::from_le_bytes(*half_bytes)))
+            .collect()
+    }
+
+    /// Reads a square `Rgba32Float` texture back to `resolution * resolution
+    /// * 4` `f32`s, unclamped, full precision.
+    ///
+    /// Needed for node outputs whose required precision exceeds
+    /// `Rgba16Float`'s ~3-4 significant decimal digits. Gabor Noise's `raw`
+    /// output is the motivating case: a unit-variance float reaching
+    /// magnitude ~3-4, where `Rgba16Float`'s mantissa only resolves to
+    /// about 2e-3 there, too coarse for the reference package's own 1e-3
+    /// tolerance on that output. Confirmed by measuring the exact
+    /// quantization step before switching this one output's texture
+    /// format.
+    pub fn read_rgba32f(&self, texture: &wgpu::Texture, resolution: u32) -> Vec<f32> {
+        let raw = self.read_raw(texture, resolution, 16);
+        raw.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|f_bytes| f32::from_le_bytes(*f_bytes))
+            .collect()
+    }
+
+    /// Reads a square texture back to a tightly-packed `Vec<u8>` of
+    /// `resolution * resolution * bytes_per_pixel` bytes (one row after
+    /// another, no padding), undoing wgpu's own row-alignment padding.
+    fn read_raw(&self, texture: &wgpu::Texture, resolution: u32, bytes_per_pixel: u32) -> Vec<u8> {
+        let unpadded_bytes_per_row = resolution * bytes_per_pixel;
         let padded_bytes_per_row = unpadded_bytes_per_row
             .div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
             * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -201,6 +379,92 @@ impl Context {
         drop(mapped);
         buffer.unmap();
         pixels
+    }
+}
+
+/// Encodes an `f32` to an IEEE 754 half-precision bit pattern — the inverse
+/// of [`half_to_f32`] below, same algorithm as `mc_app::hdri`'s own
+/// `f32_to_f16_bits` (truncates rather than rounds the mantissa, same as
+/// that function). Duplicated rather than shared across the crate boundary
+/// since `mc_app` depends on `mc_gpu`, not the other way around.
+fn f32_to_half(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exponent = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+    let mantissa = bits & 0x007f_ffff;
+
+    if exponent <= 0 {
+        sign
+    } else if exponent >= 0x1f {
+        sign | 0x7c00
+    } else {
+        sign | ((exponent as u16) << 10) | ((mantissa >> 13) as u16)
+    }
+}
+
+fn u16s_to_le_bytes(values: &[u16]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+/// Decodes an IEEE 754 half-precision float's raw bit pattern to `f32` — the
+/// inverse of `mc_app::hdri`'s `f32_to_f16_bits`. Hand-rolled rather than
+/// pulling in the `half` crate, same rationale as that function's own doc
+/// comment: a one-off ~15-line conversion isn't worth a new dependency.
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = u32::from(bits >> 15) << 31;
+    let exponent = u32::from((bits >> 10) & 0x1f);
+    let mantissa = u32::from(bits & 0x3ff);
+
+    if exponent == 0 && mantissa == 0 {
+        return f32::from_bits(sign);
+    }
+    if exponent == 0x1f {
+        // Inf/NaN.
+        return f32::from_bits(sign | (0xff << 23) | (mantissa << 13));
+    }
+    if exponent == 0 {
+        // Subnormal half: normalize by shifting the mantissa's leading 1 up
+        // into bit 10, adjusting the resulting float exponent to match.
+        let mut e: i32 = 0;
+        let mut m = mantissa;
+        while m & 0x400 == 0 {
+            m <<= 1;
+            e -= 1;
+        }
+        e += 1;
+        m &= 0x3ff;
+        let float_exponent = ((e + 127 - 15) as u32) << 23;
+        return f32::from_bits(sign | float_exponent | (m << 13));
+    }
+
+    let float_exponent = (exponent + (127 - 15)) << 23;
+    f32::from_bits(sign | float_exponent | (mantissa << 13))
+}
+
+#[cfg(test)]
+mod half_to_f32_tests {
+    use super::half_to_f32;
+
+    #[test]
+    fn matches_known_bit_patterns() {
+        assert_eq!(half_to_f32(0x0000), 0.0);
+        assert_eq!(half_to_f32(0x3C00), 1.0);
+        assert_eq!(half_to_f32(0xBC00), -1.0);
+        assert_eq!(half_to_f32(0x3800), 0.5);
+        assert_eq!(half_to_f32(0x4000), 2.0);
+    }
+
+    /// Subnormal halves (exponent field 0, nonzero mantissa) are the one
+    /// branch with real arithmetic in it — worth its own check rather than
+    /// trusting the normal-case tests to exercise it too.
+    #[test]
+    fn decodes_the_smallest_subnormal_half() {
+        // 0x0001 is the smallest positive half-precision value: 2^-24.
+        let value = half_to_f32(0x0001);
+        assert!(
+            (value - 2f32.powi(-24)).abs() < 1e-10,
+            "expected ~2^-24, got {value}"
+        );
     }
 }
 
