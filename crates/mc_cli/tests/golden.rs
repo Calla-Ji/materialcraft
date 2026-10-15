@@ -150,7 +150,11 @@ fn glitch_dither_demo_matches_golden() {
     // test-build.yml) side by side with this golden: same dither pattern,
     // same macro structure, no visible difference, 100% confirmed not a
     // real regression — not just assumed from the "cross-GPU noise" theory
-    // every other graph here already accounts for.
+    // every other graph here already accounts for. Re-confirmed the same way
+    // (rendered + looked at side by side, still indistinguishable) when the
+    // node pipeline moved from `Rgba8Unorm` to `Rgba16Float` — that migration
+    // nudges every upstream node's exact float value by the same kind of
+    // tiny amount cross-GPU noise does, so it trips this same amplifier.
     let (pixels, resolution) =
         render_base_color("../../examples/graphs/glitch_dither_demo.mcgraph");
     assert_matches_golden_with_tolerance(

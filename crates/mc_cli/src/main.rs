@@ -661,7 +661,23 @@ fn main() -> anyhow::Result<()> {
         mc_export::naming::Preset::Blender,
         mc_export::naming::Preset::Unreal,
     ] {
-        let export_dir = format!("{out_dir}/export_{}", preset.name().to_lowercase());
+        // A filesystem-safe directory slug, independent of `preset.name()`'s
+        // own UI-facing display string (which can contain spaces, e.g.
+        // "Unreal Engine").
+        let slug = match preset {
+            mc_export::naming::Preset::Blender => "blender",
+            mc_export::naming::Preset::Unreal => "unreal",
+        };
+        let export_dir = format!("{out_dir}/export_{slug}");
+        // Exercise the full optional-output surface for Unreal so this
+        // smoke test actually covers it, not just the required outputs.
+        let options = match preset {
+            mc_export::naming::Preset::Unreal => mc_nodes::export::ExportOptions {
+                opacity: mc_nodes::export::OpacityMode::SeparateFile,
+                ..mc_nodes::export::ExportOptions::default()
+            },
+            mc_export::naming::Preset::Blender => mc_nodes::export::ExportOptions::default(),
+        };
         let written = mc_nodes::export::export_material(
             &mut gpu,
             &mut pool,
@@ -670,6 +686,7 @@ fn main() -> anyhow::Result<()> {
             export_resolution,
             "bricks",
             std::path::Path::new(&export_dir),
+            &options,
         )
         .with_context(|| format!("failed to export {preset:?} preset"))?;
         for path in &written {
