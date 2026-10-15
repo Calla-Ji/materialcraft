@@ -1129,7 +1129,7 @@ fn dispatch_stitch_info(
             &gpu.device,
             keys.stitch_id,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
     let stitch_type_view = pool
@@ -1137,7 +1137,7 @@ fn dispatch_stitch_info(
             &gpu.device,
             keys.stitch_type,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
 

@@ -66,7 +66,7 @@ struct FabricGeneratorParams {
 
 @group(0) @binding(0) var<uniform> params: FabricGeneratorParams;
 @group(0) @binding(1) var fiber_tex: texture_2d<f32>;
-@group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var output: texture_storage_2d<rgba16float, write>;
 
 const WEAVE_PLAIN: u32 = 0u;
 const WEAVE_TWILL: u32 = 1u;

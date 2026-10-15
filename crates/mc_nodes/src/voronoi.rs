@@ -118,7 +118,7 @@ pub fn dispatch(
         &gpu.device,
         key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);

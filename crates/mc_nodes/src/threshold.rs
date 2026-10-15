@@ -61,7 +61,7 @@ pub fn dispatch(
         &gpu.device,
         output_key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -127,11 +127,10 @@ mod tests {
     fn output_is_binary() {
         let pixels = render(&ThresholdParams::default());
         for px in pixels.as_chunks::<4>().0 {
-            for c in 0..3 {
+            for &channel in &px[..3] {
                 assert!(
-                    px[c] == 0 || px[c] == 255,
-                    "channel {} is not a hard 0/255 cutoff",
-                    px[c]
+                    channel == 0 || channel == 255,
+                    "channel {channel} is not a hard 0/255 cutoff"
                 );
             }
         }
@@ -147,6 +146,17 @@ mod tests {
     /// Rust is the real test for a pointwise node: it would catch an actual
     /// implementation bug (e.g. sampling the wrong pixel, an off-by-one in
     /// the cutoff comparison) that a tiling check could miss entirely.
+    ///
+    /// `input`'s own node texture is `Rgba16Float` (see the banding fix in
+    /// `mc_gpu::Context::read_rgba8`'s own doc comment), so `threshold.wgsl`
+    /// compares against the real, un-rounded value — while `input` here is
+    /// `gpu.read_rgba8`'s necessarily-8-bit *readback* of it. The two only
+    /// disagree on which side of the cutoff a pixel falls within one 8-bit
+    /// step of `threshold` itself (where the readback's own rounding is the
+    /// uncertain part, not the shader), so pixels in that narrow band are
+    /// skipped rather than asserted on — everywhere else still gets a
+    /// strict check, which is what actually catches a sampling or off-by-
+    /// one bug.
     #[test]
     fn matches_thresholding_the_input_directly() {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -164,7 +174,7 @@ mod tests {
         dispatch(&mut gpu, &mut pool, "input", "output", RESOLUTION, &params);
         let output = gpu.read_rgba8(pool.texture("output").unwrap(), RESOLUTION);
 
-        let cutoff_u8 = (params.threshold * 255.0).round() as u8;
+        let cutoff_u8 = (params.threshold * 255.0).round() as i32;
         for (input_px, output_px) in input
             .as_chunks::<4>()
             .0
@@ -172,7 +182,14 @@ mod tests {
             .zip(output.as_chunks::<4>().0)
         {
             for c in 0..3 {
-                let expected = if input_px[c] >= cutoff_u8 { 255 } else { 0 };
+                if (i32::from(input_px[c]) - cutoff_u8).abs() <= 1 {
+                    continue;
+                }
+                let expected = if i32::from(input_px[c]) >= cutoff_u8 {
+                    255
+                } else {
+                    0
+                };
                 assert_eq!(
                     output_px[c], expected,
                     "channel {c} didn't match a direct threshold of the input"

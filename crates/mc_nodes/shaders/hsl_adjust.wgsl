@@ -18,7 +18,7 @@ struct HslAdjustParams {
 
 @group(0) @binding(0) var<uniform> params: HslAdjustParams;
 @group(0) @binding(1) var input_tex: texture_2d<f32>;
-@group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var output: texture_storage_2d<rgba16float, write>;
 
 fn rgb_to_hsl(c: vec3<f32>) -> vec3<f32> {
     let max_c = max(c.r, max(c.g, c.b));

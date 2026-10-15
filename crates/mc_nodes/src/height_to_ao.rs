@@ -108,7 +108,7 @@ fn dilate_pass(
         &gpu.device,
         output_key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -161,7 +161,9 @@ impl Default for HeightToAoParams {
     fn default() -> Self {
         Self {
             radius: 0.02,
-            intensity: 2.0,
+            // Kept in sync with defs.rs's own ParamSpec default — see that
+            // comment for why 2.0 saturated to near-pure-black too easily.
+            intensity: 0.6,
             tiling_mode: TilingMode::default(),
         }
     }
@@ -251,7 +253,7 @@ pub fn dispatch(
         &gpu.device,
         output_key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);

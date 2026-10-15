@@ -140,7 +140,7 @@ fn box_blur_pass(
         &gpu.device,
         output_key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -242,7 +242,7 @@ pub fn dispatch(
         &gpu.device,
         output_key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);

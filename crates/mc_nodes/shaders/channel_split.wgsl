@@ -26,7 +26,7 @@ struct ChannelSplitParams {
 @group(0) @binding(0) var<uniform> params: ChannelSplitParams;
 @group(0) @binding(1) var image_tex: texture_2d<f32>;
 @group(0) @binding(2) var mask_tex: texture_2d<f32>;
-@group(0) @binding(3) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(3) var output: texture_storage_2d<rgba16float, write>;
 
 fn sample_channel(coords: vec2<i32>, offset_uv: vec2<f32>, size: i32, channel: u32) -> f32 {
     let offset_px = vec2<i32>(round(offset_uv * f32(size)));

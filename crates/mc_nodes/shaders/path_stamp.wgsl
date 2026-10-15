@@ -36,7 +36,7 @@ struct StampInstance {
 @group(0) @binding(1) var<storage, read> instances: array<StampInstance>;
 @group(0) @binding(2) var stamp_tex: texture_2d<f32>;
 @group(0) @binding(3) var base_tex: texture_2d<f32>;
-@group(0) @binding(4) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;
 
 const WRAP_OFFSETS = array<vec2<f32>, 9>(
     vec2<f32>(0.0, 0.0),

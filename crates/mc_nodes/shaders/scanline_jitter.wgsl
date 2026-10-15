@@ -33,7 +33,7 @@ struct ScanlineJitterParams {
 @group(0) @binding(0) var<uniform> params: ScanlineJitterParams;
 @group(0) @binding(1) var image_tex: texture_2d<f32>;
 @group(0) @binding(2) var mask_tex: texture_2d<f32>;
-@group(0) @binding(3) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(3) var output: texture_storage_2d<rgba16float, write>;
 
 const ORIENTATION_HORIZONTAL: u32 = 0u;
 

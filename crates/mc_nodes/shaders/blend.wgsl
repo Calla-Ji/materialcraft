@@ -22,7 +22,7 @@ struct BlendParams {
 @group(0) @binding(1) var base_tex: texture_2d<f32>;
 @group(0) @binding(2) var blend_tex: texture_2d<f32>;
 @group(0) @binding(3) var mask_tex: texture_2d<f32>;
-@group(0) @binding(4) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;
 
 fn combine(base: vec3<f32>, blend: vec3<f32>) -> vec3<f32> {
     switch params.mode {

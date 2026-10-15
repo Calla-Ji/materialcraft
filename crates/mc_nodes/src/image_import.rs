@@ -196,7 +196,11 @@ mod tests {
     fn nothing_loaded_is_a_flat_neutral_gray() {
         let pixels = render(&ImageImportParams::default());
         assert!(
-            pixels.chunks_exact(4).all(|p| p == [128, 128, 128, 255]),
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [128, 128, 128, 255]),
             "an Image Import with nothing loaded should be flat mid-gray"
         );
     }
@@ -233,7 +237,11 @@ mod tests {
             grayscale: false,
         };
         let pixels = render(&params);
-        assert!(pixels.chunks_exact(4).all(|p| p == [128, 128, 128, 255]));
+        assert!(pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [128, 128, 128, 255]));
     }
 
     #[test]
@@ -251,7 +259,11 @@ mod tests {
         };
         let pixels = render(&params);
         assert!(
-            !pixels.chunks_exact(4).all(|p| p == [128, 128, 128, 255]),
+            !pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [128, 128, 128, 255]),
             "embedded data should be used even though the path is bogus"
         );
     }
@@ -268,7 +280,11 @@ mod tests {
         };
         let pixels = render(&params);
         assert!(
-            pixels.chunks_exact(4).all(|p| p[0] == p[1] && p[1] == p[2]),
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p[0] == p[1] && p[1] == p[2]),
             "grayscale output should have R == G == B on every pixel"
         );
         // The red and blue halves of the source image should no longer read

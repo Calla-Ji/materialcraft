@@ -41,20 +41,15 @@ struct StitchInfoParams {
 @group(0) @binding(1) var<storage, read> thread_angles: array<f32>;
 @group(0) @binding(2) var cell_in: texture_2d<u32>;
 @group(0) @binding(3) var scratch_height_in: texture_2d<f32>;
-@group(0) @binding(4) var height_out: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(5) var thread_id_out: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(6) var order_out: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(7) var direction_out: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(4) var height_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var thread_id_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(6) var order_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(7) var direction_out: texture_storage_2d<rgba16float, write>;
 
 const CELL_MISS: u32 = 0xFFFFFFFFu;
 
-fn hash01(i: u32, j: u32, seed: u32) -> f32 {
-    var h: u32 = (i * 73856093u) ^ (j * 19349663u) ^ (seed * 83492791u);
-    h = h ^ (h >> 13u);
-    h = h * 0x5BD1E995u;
-    h = h ^ (h >> 15u);
-    return f32(h & 0xFFFFFFu) / f32(0x1000000u);
-}
+// hash01() is now shared via common.wgsl (also used by Knit and Gabor
+// Noise), which `full_source` always prepends.
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {

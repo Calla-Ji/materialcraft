@@ -20,7 +20,7 @@ struct DirectionalWarpParams {
 @group(0) @binding(0) var<uniform> params: DirectionalWarpParams;
 @group(0) @binding(1) var input_tex: texture_2d<f32>;
 @group(0) @binding(2) var intensity_tex: texture_2d<f32>;
-@group(0) @binding(3) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(3) var output: texture_storage_2d<rgba16float, write>;
 
 const PI: f32 = 3.14159265358979;
 

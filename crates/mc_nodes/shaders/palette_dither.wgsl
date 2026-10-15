@@ -30,7 +30,7 @@ struct PaletteDitherParams {
 @group(0) @binding(0) var<uniform> params: PaletteDitherParams;
 @group(0) @binding(1) var image_tex: texture_2d<f32>;
 @group(0) @binding(2) var blue_noise: texture_2d<f32>;
-@group(0) @binding(3) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(3) var output: texture_storage_2d<rgba16float, write>;
 
 const PATTERN_BAYER_4X4: u32 = 1u;
 const PATTERN_BAYER_8X8: u32 = 2u;

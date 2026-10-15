@@ -18,7 +18,7 @@ struct HistogramScanParams {
 
 @group(0) @binding(0) var<uniform> params: HistogramScanParams;
 @group(0) @binding(1) var input_tex: texture_2d<f32>;
-@group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var output: texture_storage_2d<rgba16float, write>;
 
 fn scan(value: f32) -> f32 {
     let band = max(1.0 - params.contrast, 0.001);

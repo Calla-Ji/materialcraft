@@ -40,7 +40,7 @@ struct BevelRemapParams {
 @group(0) @binding(0) var<uniform> params: BevelRemapParams;
 @group(0) @binding(1) var original_tex: texture_2d<f32>;
 @group(0) @binding(2) var blurred_tex: texture_2d<f32>;
-@group(0) @binding(3) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(3) var output: texture_storage_2d<rgba16float, write>;
 
 fn shape_delta(d: f32, exponent: f32) -> f32 {
     return sign(d) * pow(abs(d), exponent);

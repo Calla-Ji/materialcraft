@@ -76,7 +76,7 @@ pub fn dispatch(
         &gpu.device,
         output_key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -210,9 +210,9 @@ mod tests {
         let pixels = render(&params);
         let expected = (0.5f32 * 255.0).round() as i32;
         for px in pixels.as_chunks::<4>().0 {
-            for c in 0..3 {
+            for &channel in &px[..3] {
                 assert!(
-                    (px[c] as i32 - expected).abs() <= 1,
+                    (channel as i32 - expected).abs() <= 1,
                     "a flat curve at 0.5 must flatten every pixel to ~128"
                 );
             }

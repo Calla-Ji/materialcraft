@@ -18,6 +18,19 @@ fn hash2(cell: vec2<i32>, seed: u32) -> f32 {
     return f32(x) / 4294967295.0;
 }
 
+// Hashes 3 integers to a pseudo-random float in [0, 1) — the same hash as
+// Stitch/Knit/French Knot's own `crate::stitch::hash01` on the Rust side and
+// `noise_reference.py`'s `hash01` in the Gabor/Streaks reference package;
+// port bit-exactly, since Gabor Noise and Scattered Streaks must match that
+// package's golden fixtures exactly.
+fn hash01(a: u32, b: u32, c: u32) -> f32 {
+    var h: u32 = (a * 73856093u) ^ (b * 19349663u) ^ (c * 83492791u);
+    h = h ^ (h >> 13u);
+    h = h * 0x5BD1E995u;
+    h = h ^ (h >> 15u);
+    return f32(h & 0xFFFFFFu) / f32(0x1000000u);
+}
+
 // A pseudo-random unit gradient vector for a lattice point, wrapped to
 // `period` on each axis where that axis's `wrap_*` is true — this is what
 // makes Perlin noise below tile on that axis. When an axis's wrap is false,
@@ -56,6 +69,58 @@ fn perlin_2d(uv: vec2<f32>, period: i32, seed: u32, wrap_x: bool, wrap_y: bool) 
     let g10 = gradient(cell + vec2<i32>(1, 0), period, seed, wrap_x, wrap_y);
     let g01 = gradient(cell + vec2<i32>(0, 1), period, seed, wrap_x, wrap_y);
     let g11 = gradient(cell + vec2<i32>(1, 1), period, seed, wrap_x, wrap_y);
+
+    let d00 = local - vec2<f32>(0.0, 0.0);
+    let d10 = local - vec2<f32>(1.0, 0.0);
+    let d01 = local - vec2<f32>(0.0, 1.0);
+    let d11 = local - vec2<f32>(1.0, 1.0);
+
+    let n00 = dot(g00, d00);
+    let n10 = dot(g10, d10);
+    let n01 = dot(g01, d01);
+    let n11 = dot(g11, d11);
+
+    let u = fade(local.x);
+    let v = fade(local.y);
+
+    let nx0 = mix(n00, n10, u);
+    let nx1 = mix(n01, n11, u);
+    return mix(nx0, nx1, v);
+}
+
+// Like `gradient`, but wraps each axis to its own period — the lattice is
+// then an axis-aligned rectangle of cells rather than a square, which is
+// what lets `perlin_2d_aniso` below sample a different frequency per axis
+// while each axis still wraps exactly at the texture edge.
+fn gradient_aniso(cell: vec2<i32>, period: vec2<i32>, seed: u32, wrap_x: bool, wrap_y: bool) -> vec2<f32> {
+    var cx = cell.x;
+    var cy = cell.y;
+    if wrap_x {
+        cx = ((cx % period.x) + period.x) % period.x;
+    }
+    if wrap_y {
+        cy = ((cy % period.y) + period.y) % period.y;
+    }
+    let angle = hash2(vec2<i32>(cx, cy), seed) * 6.28318530718;
+    return vec2<f32>(cos(angle), sin(angle));
+}
+
+// Tileable 2D Perlin noise with an independent period per axis (see
+// `gradient_aniso` above) — same lattice-interpolation shape as
+// `perlin_2d`, just sampling `period.x` cells across X and `period.y`
+// cells across Y instead of one shared period. Stretching one axis
+// relative to the other is what makes the result anisotropic (streaky
+// along whichever axis has the larger period). Returns a value in
+// roughly [-1, 1].
+fn perlin_2d_aniso(uv: vec2<f32>, period: vec2<i32>, seed: u32, wrap_x: bool, wrap_y: bool) -> f32 {
+    let p = uv * vec2<f32>(period);
+    let cell = vec2<i32>(floor(p));
+    let local = fract(p);
+
+    let g00 = gradient_aniso(cell + vec2<i32>(0, 0), period, seed, wrap_x, wrap_y);
+    let g10 = gradient_aniso(cell + vec2<i32>(1, 0), period, seed, wrap_x, wrap_y);
+    let g01 = gradient_aniso(cell + vec2<i32>(0, 1), period, seed, wrap_x, wrap_y);
+    let g11 = gradient_aniso(cell + vec2<i32>(1, 1), period, seed, wrap_x, wrap_y);
 
     let d00 = local - vec2<f32>(0.0, 0.0);
     let d10 = local - vec2<f32>(1.0, 0.0);

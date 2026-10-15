@@ -22,7 +22,7 @@ struct GradientMapParams {
 
 @group(0) @binding(0) var<uniform> params: GradientMapParams;
 @group(0) @binding(1) var input_tex: texture_2d<f32>;
-@group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var output: texture_storage_2d<rgba16float, write>;
 
 fn stop_pos(i: u32) -> f32 {
     return params.positions[i / 4u][i % 4u];

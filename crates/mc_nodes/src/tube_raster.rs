@@ -148,9 +148,9 @@ fn pack_params(resolution: u32, grid_n: u32, total_plies: u32, zmax: f32) -> [u8
 /// `ply01 = mask.astype(float)` fallback when `plies <= 1`), `0.0`
 /// elsewhere. `cell` is the winning segment's raw `tag` (or
 /// [`CELL_MISS`] where nothing was hit) — an `R32Uint` texture, not an
-/// `Rgba8Unorm` one like the others, so a caller can decode its own
-/// tag-packing scheme exactly rather than through 8-bit-quantized
-/// normalized channels. Knit's own stitch-info pass
+/// `Rgba16Float` one like the others, so a caller can decode its own
+/// tag-packing scheme exactly as a raw integer rather than through a
+/// normalized float channel. Knit's own stitch-info pass
 /// (`knit_stitch_info.wgsl`) is the reason this exists: it needs the
 /// *wale and course* a pixel's winning capsule belongs to, which only the
 /// raw tag carries.
@@ -240,7 +240,7 @@ pub fn dispatch(
             &gpu.device,
             keys.height,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
     let mask_view = pool
@@ -248,7 +248,7 @@ pub fn dispatch(
             &gpu.device,
             keys.mask,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
     let ply_id_view = pool
@@ -256,7 +256,7 @@ pub fn dispatch(
             &gpu.device,
             keys.ply_id,
             resolution,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
         )
         .clone();
     let cell_view = pool

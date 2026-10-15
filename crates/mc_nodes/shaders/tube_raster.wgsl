@@ -49,9 +49,9 @@ struct RasterParams {
 @group(0) @binding(1) var<storage, read> segments: array<Segment>;
 @group(0) @binding(2) var<storage, read> cell_offsets: array<u32>;
 @group(0) @binding(3) var<storage, read> cell_indices: array<u32>;
-@group(0) @binding(4) var height_out: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(5) var mask_out: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(6) var ply_id_out: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(4) var height_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var mask_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(6) var ply_id_out: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(7) var cell_out: texture_storage_2d<r32uint, write>;
 
 const CELL_MISS: u32 = 0xFFFFFFFFu;

@@ -23,7 +23,7 @@ struct CurveParams {
 
 @group(0) @binding(0) var<uniform> params: CurveParams;
 @group(0) @binding(1) var input_tex: texture_2d<f32>;
-@group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var output: texture_storage_2d<rgba16float, write>;
 
 fn apply_curve(x: f32) -> f32 {
     let t = clamp(x, 0.0, 1.0) * 4.0;

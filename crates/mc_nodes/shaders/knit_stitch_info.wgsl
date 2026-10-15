@@ -32,19 +32,13 @@ struct StitchParams {
 @group(0) @binding(1) var<storage, read> widths_cumsum: array<f32>;
 @group(0) @binding(2) var<storage, read> chart_is_knit: array<u32>;
 @group(0) @binding(3) var cell_in: texture_2d<u32>;
-@group(0) @binding(4) var stitch_id_out: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(5) var stitch_type_out: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(4) var stitch_id_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var stitch_type_out: texture_storage_2d<rgba16float, write>;
 
 const CELL_MISS: u32 = 0xFFFFFFFFu;
 
-// knit_reference.py's own hash01(), ported bit for bit.
-fn hash01(i: u32, j: u32, seed: u32) -> f32 {
-    var h: u32 = (i * 73856093u) ^ (j * 19349663u) ^ (seed * 83492791u);
-    h = h ^ (h >> 13u);
-    h = h * 0x5BD1E995u;
-    h = h ^ (h >> 15u);
-    return f32(h & 0xFFFFFFu) / f32(0x1000000u);
-}
+// knit_reference.py's own hash01() — now shared via common.wgsl (also used
+// by Stitch and Gabor Noise), which `full_source` always prepends.
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {

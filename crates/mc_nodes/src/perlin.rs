@@ -4,7 +4,7 @@
 //! Display name: "Perlin Noise". Tooltip: "Classic gradient noise — smooth,
 //! organic variation."
 //!
-//! Output is stored as an `Rgba8Unorm` texture (gray value broadcast to RGB,
+//! Output is stored as an `Rgba16Float` texture (gray value broadcast to RGB,
 //! alpha = 1) so it can be shown directly in egui's 2D view and read back for
 //! PNG export without a separate conversion step.
 
@@ -99,7 +99,7 @@ pub fn dispatch(
         &gpu.device,
         key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);

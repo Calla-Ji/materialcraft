@@ -66,7 +66,7 @@ pub fn dispatch(
         &gpu.device,
         output_key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -166,8 +166,8 @@ mod tests {
         let low_u8 = (0.3f32 * 255.0).round() as i32;
         let high_u8 = (0.6f32 * 255.0).round() as i32;
         for px in pixels.as_chunks::<4>().0 {
-            for c in 0..3 {
-                let v = px[c] as i32;
+            for &channel in &px[..3] {
+                let v = channel as i32;
                 assert!(
                     v >= low_u8 - 1 && v <= high_u8 + 1,
                     "channel {v} outside [{low_u8}, {high_u8}]"

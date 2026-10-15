@@ -9,13 +9,18 @@ use crate::shaders::full_source;
 const NODE_KIND: &str = "white_noise";
 
 pub struct WhiteNoiseParams {
-    pub scale: u32,
+    pub scale_x: u32,
+    pub scale_y: u32,
     pub seed: u32,
 }
 
 impl Default for WhiteNoiseParams {
     fn default() -> Self {
-        Self { scale: 16, seed: 0 }
+        Self {
+            scale_x: 16,
+            scale_y: 16,
+            seed: 0,
+        }
     }
 }
 
@@ -23,11 +28,16 @@ impl WhiteNoiseParams {
     pub fn from_graph(params: &std::collections::BTreeMap<String, mc_core::ParamValue>) -> Self {
         let defaults = Self::default();
         Self {
-            scale: params
-                .get("scale")
+            scale_x: params
+                .get("scale_x")
                 .and_then(mc_core::ParamValue::as_int)
                 .map(|v| v.max(1) as u32)
-                .unwrap_or(defaults.scale),
+                .unwrap_or(defaults.scale_x),
+            scale_y: params
+                .get("scale_y")
+                .and_then(mc_core::ParamValue::as_int)
+                .map(|v| v.max(1) as u32)
+                .unwrap_or(defaults.scale_y),
             seed: params
                 .get("seed")
                 .and_then(mc_core::ParamValue::as_seed)
@@ -48,8 +58,9 @@ pub fn dispatch(
 
     let mut param_bytes = [0u8; 16];
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
-    param_bytes[4..8].copy_from_slice(&params.scale.to_le_bytes());
-    param_bytes[8..12].copy_from_slice(&params.seed.to_le_bytes());
+    param_bytes[4..8].copy_from_slice(&params.scale_x.to_le_bytes());
+    param_bytes[8..12].copy_from_slice(&params.scale_y.to_le_bytes());
+    param_bytes[12..16].copy_from_slice(&params.seed.to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("white_noise_params"),
         size: param_bytes.len() as u64,
@@ -62,7 +73,7 @@ pub fn dispatch(
         &gpu.device,
         key,
         resolution,
-        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba16Float,
     );
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -119,14 +130,26 @@ mod tests {
 
     #[test]
     fn is_deterministic() {
-        let params = WhiteNoiseParams { scale: 8, seed: 7 };
+        let params = WhiteNoiseParams {
+            scale_x: 8,
+            scale_y: 8,
+            seed: 7,
+        };
         assert_eq!(render(&params), render(&params));
     }
 
     #[test]
     fn seed_changes_output() {
-        let a = render(&WhiteNoiseParams { scale: 8, seed: 1 });
-        let b = render(&WhiteNoiseParams { scale: 8, seed: 2 });
+        let a = render(&WhiteNoiseParams {
+            scale_x: 8,
+            scale_y: 8,
+            seed: 1,
+        });
+        let b = render(&WhiteNoiseParams {
+            scale_x: 8,
+            scale_y: 8,
+            seed: 2,
+        });
         assert_ne!(a, b, "different seeds produced identical pixels");
     }
 
@@ -135,13 +158,50 @@ mod tests {
     /// a continuous noise function instead of a per-cell hash.
     #[test]
     fn pixels_within_a_cell_are_identical() {
-        let pixels = render(&WhiteNoiseParams { scale: 4, seed: 3 });
+        let pixels = render(&WhiteNoiseParams {
+            scale_x: 4,
+            scale_y: 4,
+            seed: 3,
+        });
         let cell_px = RESOLUTION / 4;
         let a = pixel(&pixels, RESOLUTION, 0, 0);
         let b = pixel(&pixels, RESOLUTION, cell_px - 1, cell_px - 1);
         assert_eq!(
             a, b,
             "pixels in the same white-noise cell must be identical"
+        );
+    }
+
+    /// `scale_x`/`scale_y` are independent axes of the same lattice, so
+    /// each must keep wrapping exactly at the texture edge even when the
+    /// other is wildly different.
+    #[test]
+    fn tiles_seamlessly_with_very_different_scales() {
+        let params = WhiteNoiseParams {
+            scale_x: 3,
+            scale_y: 17,
+            seed: 5,
+        };
+        assert_tiles_seamlessly(&render(&params), RESOLUTION);
+    }
+
+    /// The entire point of the split: an uneven `scale_x`/`scale_y` must
+    /// actually look different from the isotropic case (equal scales).
+    #[test]
+    fn uneven_scales_differ_from_isotropic() {
+        let isotropic = render(&WhiteNoiseParams {
+            scale_x: 8,
+            scale_y: 8,
+            seed: 1,
+        });
+        let anisotropic = render(&WhiteNoiseParams {
+            scale_x: 2,
+            scale_y: 24,
+            seed: 1,
+        });
+        assert_ne!(
+            isotropic, anisotropic,
+            "a stretched scale_x/scale_y split produced the same pixels as the isotropic case"
         );
     }
 }

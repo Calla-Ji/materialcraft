@@ -32,7 +32,7 @@ struct DitherPatternParams {
 }
 
 @group(0) @binding(0) var<uniform> params: DitherPatternParams;
-@group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(1) var output: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(2) var blue_noise: texture_2d<f32>;
 
 const PATTERN_BAYER_2X2: u32 = 0u;
