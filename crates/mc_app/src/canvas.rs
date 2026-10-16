@@ -476,12 +476,22 @@ fn duplicate_nodes(
 const AUTO_LAYOUT_COLUMN_GAP: f32 = 80.0;
 const AUTO_LAYOUT_ROW_GAP: f32 = 30.0;
 
-/// Rearranges every node in `graph` into a left-to-right layered layout:
-/// column = longest-path distance from a source node (no inputs), row =
-/// stacked within that column by each node's own real height (via
-/// `node_size`), ordered by a one-pass barycenter heuristic (each node
-/// sorted by the average row of its own upstream nodes) to cut down on
-/// wire crossings.
+/// Rearranges nodes in `graph` into a left-to-right layered layout: column =
+/// longest-path distance from a source node (no inputs, *within the laid-
+/// out set* — see `selection` below), row = stacked within that column by
+/// each node's own real height (via `node_size`), ordered by a one-pass
+/// barycenter heuristic (each node sorted by the average row of its own
+/// upstream nodes) to cut down on wire crossings.
+///
+/// `selection` scopes the layout: empty applies it to every node in the
+/// graph (anchored at the graph origin, the original whole-graph
+/// behavior); non-empty applies it only to those nodes, with every other
+/// node left untouched — connections to/from outside the selection are
+/// ignored for column/row purposes, so the selected subgraph is laid out
+/// by its own internal topology alone. A selection-scoped layout is
+/// anchored at the selected nodes' own current top-left corner (rather
+/// than the graph origin) so tidying up one small group doesn't fling it
+/// across the canvas into unrelated nodes.
 ///
 /// Recorded as one undo step of `Command::MoveNode`s — deliberately *not*
 /// following plain dragging's own "position isn't undo-tracked" rule (see
@@ -489,10 +499,22 @@ const AUTO_LAYOUT_ROW_GAP: f32 = 30.0;
 /// pixels, but this can silently rewrite every node's hand-placed position
 /// in a 50+ node graph in a single click, which is a big enough blast
 /// radius to deserve a real undo step.
-pub fn auto_layout(graph: &mut mc_core::Graph, history: &mut mc_core::History) {
-    let Ok(order) = graph.topological_order() else {
+pub fn auto_layout(
+    graph: &mut mc_core::Graph,
+    history: &mut mc_core::History,
+    selection: &HashSet<NodeId>,
+) {
+    let Ok(full_order) = graph.topological_order() else {
         return;
     };
+    if full_order.is_empty() {
+        return;
+    }
+    let scoped = !selection.is_empty();
+    let order: Vec<NodeId> = full_order
+        .into_iter()
+        .filter(|id| !scoped || selection.contains(id))
+        .collect();
     if order.is_empty() {
         return;
     }
@@ -502,7 +524,7 @@ pub fn auto_layout(graph: &mut mc_core::Graph, history: &mut mc_core::History) {
         let col = graph
             .connections()
             .iter()
-            .filter(|c| c.to_node == id)
+            .filter(|c| c.to_node == id && (!scoped || selection.contains(&c.from_node)))
             .filter_map(|c| column.get(&c.from_node))
             .max()
             .map(|&upstream_col| upstream_col + 1)
@@ -526,7 +548,7 @@ pub fn auto_layout(graph: &mut mc_core::Graph, history: &mut mc_core::History) {
                 let upstream_rows: Vec<f32> = graph
                     .connections()
                     .iter()
-                    .filter(|c| c.to_node == id)
+                    .filter(|c| c.to_node == id && (!scoped || selection.contains(&c.from_node)))
                     .filter_map(|c| row_of.get(&c.from_node).copied())
                     .collect();
                 if upstream_rows.is_empty() {
@@ -544,10 +566,23 @@ pub fn auto_layout(graph: &mut mc_core::Graph, history: &mut mc_core::History) {
         }
     }
 
+    let (start_x, start_y) = if scoped {
+        let mut min = Vec2::new(f32::INFINITY, f32::INFINITY);
+        for &id in &order {
+            if let Some(node) = graph.node(id) {
+                min.x = min.x.min(node.position[0]);
+                min.y = min.y.min(node.position[1]);
+            }
+        }
+        (min.x, min.y)
+    } else {
+        (0.0, 0.0)
+    };
+
     let mut transaction: mc_core::Transaction = Vec::new();
-    let mut x = 0.0f32;
+    let mut x = start_x;
     for nodes_in_column in &columns {
-        let mut y = 0.0f32;
+        let mut y = start_y;
         for &id in nodes_in_column {
             transaction.push(mc_core::Command::MoveNode {
                 id,
@@ -965,8 +1000,13 @@ pub fn show(
         let zoom = canvas.zoom;
         let is_selected = canvas.selected.contains(&id);
         let fill = crate::theme::WORMHOLE_GREY;
+        // Selection outline is Pink Dwarf, same color `theme::PINK_DWARF`
+        // already uses for a Color-type port pin on this same card — safe
+        // to share here since a thick full-card border and a tiny port dot
+        // never read as the same affordance (unlike the duplicate dot,
+        // which sits right next to a same-sized delete dot and would).
         let stroke = if is_selected {
-            Stroke::new(1.0, crate::theme::SUPERNOVA_LIGHT)
+            Stroke::new(2.0, crate::theme::PINK_DWARF)
         } else {
             Stroke::new(1.0, crate::theme::TWINKLING_GREY)
         };
@@ -976,7 +1016,13 @@ pub fn show(
         // category_color`, same palette the Node Library panel uses) — top
         // corners rounded to match the card, bottom corners square so it
         // sits flush with the body fill below rather than floating as a
-        // separately-rounded shape.
+        // separately-rounded shape. Dimmed the same way the Node Library
+        // panel's own icon badges already dim it (`main.rs`'s
+        // `show_node_library`, hovered-badge alpha): at full brightness
+        // this header sits directly behind the Supernova Light title text,
+        // and several category hues (the lighter yellows/greens especially)
+        // don't contrast well with that near-white against a full-strength
+        // fill the way they do against the sidebar's own dimmed badges.
         let header_rect =
             Rect::from_min_size(rect.min, Vec2::new(rect.width(), HEADER_HEIGHT * zoom));
         let header_radius = card_radius.round() as u8;
@@ -988,7 +1034,7 @@ pub fn show(
                 sw: 0,
                 se: 0,
             },
-            crate::theme::category_color(def.category),
+            crate::theme::category_color(def.category).gamma_multiply(0.55),
         );
         painter.rect_stroke(rect, card_radius, stroke, StrokeKind::Inside);
         painter.line_segment(
@@ -1082,7 +1128,7 @@ pub fn show(
             preview_dot_pos,
             PREVIEW_DOT_RADIUS * zoom,
             if *selected == Some(id) {
-                crate::theme::SUPERNOVA_LIGHT
+                crate::theme::PINK_DWARF
             } else {
                 crate::theme::TWINKLING_GREY.gamma_multiply(0.6)
             },
@@ -1415,11 +1461,15 @@ pub fn show(
         "canvas_auto_layout_button",
         AUTO_LAYOUT_GLYPH,
         false,
-        "Auto Layout — rearranges every node into a clean left-to-right layout.",
+        if canvas.selected.is_empty() {
+            "Auto Layout — rearranges every node into a clean left-to-right layout."
+        } else {
+            "Auto Layout — rearranges the selected nodes into a clean left-to-right layout."
+        },
     )
     .clicked()
     {
-        auto_layout(graph, history);
+        auto_layout(graph, history, &canvas.selected);
     }
     if corner_icon_button(
         ui,
@@ -1545,7 +1595,8 @@ mod tests {
         CanvasState, PinRef, DUPLICATE_OFFSET, GRID_BASE_SPACING, WIRE_DRAG_AUTOPAN_MAX_SPEED,
     };
     use egui::{Pos2, Rect, Vec2};
-    use mc_core::{Node, ParamValue};
+    use mc_core::{Node, NodeId, ParamValue};
+    use std::collections::HashSet;
 
     /// Regression test for a reported bug: with Snap to Grid on, dragging a
     /// node slowly made it stop moving entirely partway through the drag.
@@ -1721,7 +1772,7 @@ mod tests {
         let _ = graph.set_node_position(source, [500.0, 500.0]);
         let _ = graph.set_node_position(filter, [500.0, 500.0]);
 
-        auto_layout(&mut graph, &mut history);
+        auto_layout(&mut graph, &mut history, &HashSet::new());
 
         let source_x = graph.node(source).unwrap().position[0];
         let filter_x = graph.node(filter).unwrap().position[0];
@@ -1741,7 +1792,7 @@ mod tests {
         let _ = graph.set_node_position(a, [12.0, 34.0]);
         let _ = graph.set_node_position(b, [56.0, 78.0]);
 
-        auto_layout(&mut graph, &mut history);
+        auto_layout(&mut graph, &mut history, &HashSet::new());
         assert_ne!(graph.node(a).unwrap().position, [12.0, 34.0]);
 
         assert!(history.can_undo());
@@ -1754,8 +1805,59 @@ mod tests {
     fn auto_layout_on_an_empty_graph_does_nothing() {
         let mut graph = mc_core::Graph::new();
         let mut history = mc_core::History::new();
-        auto_layout(&mut graph, &mut history);
+        auto_layout(&mut graph, &mut history, &HashSet::new());
         assert!(!history.can_undo());
+    }
+
+    #[test]
+    fn auto_layout_with_a_selection_only_moves_the_selected_nodes() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        let a = graph.add_node(Node::new("perlin_noise"));
+        let b = graph.add_node(Node::new("voronoi"));
+        let c = graph.add_node(Node::new("levels"));
+        graph
+            .connect(a, "output", c, "input")
+            .expect("valid connection");
+        let _ = graph.set_node_position(a, [500.0, 500.0]);
+        let _ = graph.set_node_position(b, [999.0, 999.0]);
+        let _ = graph.set_node_position(c, [500.0, 500.0]);
+
+        let selection: HashSet<NodeId> = [a, c].into_iter().collect();
+        auto_layout(&mut graph, &mut history, &selection);
+
+        // `b` wasn't selected — left exactly where it was.
+        assert_eq!(graph.node(b).unwrap().position, [999.0, 999.0]);
+        // `a`/`c` were — `c` (downstream of `a`) lands in a later column.
+        let a_x = graph.node(a).unwrap().position[0];
+        let c_x = graph.node(c).unwrap().position[0];
+        assert!(c_x > a_x, "a_x={a_x} c_x={c_x}");
+    }
+
+    #[test]
+    fn auto_layout_with_a_selection_anchors_at_the_groups_own_top_left() {
+        let mut graph = mc_core::Graph::new();
+        let mut history = mc_core::History::new();
+        let a = graph.add_node(Node::new("perlin_noise"));
+        let b = graph.add_node(Node::new("voronoi"));
+        // Far from the graph origin, so a passing test can only mean the
+        // group was anchored at its own position, not the origin.
+        let _ = graph.set_node_position(a, [2000.0, 3000.0]);
+        let _ = graph.set_node_position(b, [2100.0, 3100.0]);
+
+        let selection: HashSet<NodeId> = [a, b].into_iter().collect();
+        auto_layout(&mut graph, &mut history, &selection);
+
+        let a_pos = graph.node(a).unwrap().position;
+        let b_pos = graph.node(b).unwrap().position;
+        assert!(
+            a_pos[0] >= 2000.0 && a_pos[1] >= 3000.0,
+            "expected the group to stay near its own top-left, got a_pos={a_pos:?}"
+        );
+        assert!(
+            b_pos[0] >= 2000.0 && b_pos[1] >= 3000.0,
+            "expected the group to stay near its own top-left, got b_pos={b_pos:?}"
+        );
     }
 
     #[test]
