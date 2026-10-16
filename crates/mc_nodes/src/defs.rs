@@ -2336,6 +2336,26 @@ static NODE_DEFS: &[NodeDef] = &[
                 },
             },
             ParamSpec {
+                name: "offset_x",
+                display_name: "Offset X",
+                tooltip: "Moves the circle's own center away from the tile's, tile units.",
+                kind: ParamSpecKind::Float {
+                    min: -1.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "offset_y",
+                display_name: "Offset Y",
+                tooltip: "Same as Offset X, for the vertical axis.",
+                kind: ParamSpecKind::Float {
+                    min: -1.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
                 name: "stamp_size",
                 display_name: "Stamp Size",
                 tooltip: "How large each copy is, in tile units.",

@@ -17,6 +17,13 @@ use crate::path::StampInstance;
 pub struct CircularPatternParams {
     pub count: u32,
     pub radius: f32,
+    /// Moves the circle's own center away from the tile's, tile units —
+    /// `dispatch_stamp`'s existing wrap handling already keeps instances
+    /// that land near or past a tile edge seamless, the same as it
+    /// already does for a large Radius, so no extra wrapping is needed
+    /// here beyond just offsetting `center`.
+    pub offset_x: f32,
+    pub offset_y: f32,
     pub start_angle_deg: f32,
     pub stamp_size: f32,
     pub rotation_jitter_deg: f32,
@@ -44,6 +51,8 @@ impl Default for CircularPatternParams {
         Self {
             count: 8,
             radius: 0.35,
+            offset_x: 0.0,
+            offset_y: 0.0,
             start_angle_deg: 0.0,
             stamp_size: 0.08,
             rotation_jitter_deg: 0.0,
@@ -70,6 +79,14 @@ impl CircularPatternParams {
                 .get("radius")
                 .and_then(mc_core::ParamValue::as_float)
                 .unwrap_or(defaults.radius),
+            offset_x: params
+                .get("offset_x")
+                .and_then(mc_core::ParamValue::as_float)
+                .unwrap_or(defaults.offset_x),
+            offset_y: params
+                .get("offset_y")
+                .and_then(mc_core::ParamValue::as_float)
+                .unwrap_or(defaults.offset_y),
             start_angle_deg: params
                 .get("start_angle")
                 .and_then(mc_core::ParamValue::as_float)
@@ -118,7 +135,10 @@ impl CircularPatternParams {
 pub fn circular_instances(params: &CircularPatternParams) -> Vec<StampInstance> {
     let count = params.count.max(1);
     let mut out = Vec::with_capacity(count as usize);
-    let center = [0.5f64, 0.5f64];
+    let center = [
+        0.5f64 + f64::from(params.offset_x),
+        0.5f64 + f64::from(params.offset_y),
+    ];
     let start = f64::from(params.start_angle_deg).to_radians();
     let radius = f64::from(params.radius).max(0.0);
 
@@ -247,6 +267,34 @@ mod tests {
             assert!(
                 (gap - expected_gap).abs() < 1e-6,
                 "expected every gap to be {expected_gap}, got {gap}"
+            );
+        }
+    }
+
+    /// Offset X/Y move the whole circle's center away from the tile's —
+    /// every instance should land exactly `radius` from the *offset*
+    /// center, not the tile's own [0.5, 0.5].
+    #[test]
+    fn offset_moves_the_whole_circle() {
+        let params = CircularPatternParams {
+            count: 4,
+            radius: 0.2,
+            offset_x: 0.15,
+            offset_y: -0.1,
+            position_jitter_radial: 0.0,
+            position_jitter_tangential: 0.0,
+            ..CircularPatternParams::default()
+        };
+        let instances = circular_instances(&params);
+        let center = [0.5f64 + 0.15, 0.5f64 - 0.1];
+        for inst in &instances {
+            let dx = f64::from(inst.pos[0]) - center[0];
+            let dy = f64::from(inst.pos[1]) - center[1];
+            let dist = dx.hypot(dy);
+            assert!(
+                (dist - 0.2).abs() < 1e-5,
+                "instance at {:?} should sit 0.2 from the offset center {center:?}, got {dist}",
+                inst.pos
             );
         }
     }
