@@ -48,6 +48,7 @@ pub mod knit;
 pub mod levels;
 pub mod ordered_dither;
 pub mod palette_dither;
+pub mod panel_layout;
 pub mod path;
 pub mod path_simplify;
 pub mod path_to_mask;

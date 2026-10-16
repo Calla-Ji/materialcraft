@@ -471,7 +471,12 @@ fn even_count(length: f64, target: f64) -> usize {
 /// stitch count depends on this at exact `.5` boundaries, so a plain
 /// `.round()` here could silently produce a different stitch count than
 /// the golden fixture at those boundaries — this matches Python exactly.
-fn round_half_even(x: f64) -> f64 {
+/// Python's banker's rounding (round-half-to-even) — Rust's own `f64::round`
+/// rounds half away from zero instead, which disagrees with the reference
+/// package at exact `.5` boundaries. Also reused by `panel_layout`'s own
+/// grid-snapping (`hs_reference.py`'s `panel_rects` calls Python's built-in
+/// `round()` the same way).
+pub(crate) fn round_half_even(x: f64) -> f64 {
     let floor = x.floor();
     let diff = x - floor;
     if diff < 0.5 {

@@ -15,9 +15,9 @@ use crate::{
     fabric_generator, fractal_sum, french_knot, gabor_noise, gradient_linear, gradient_map,
     gradient_radial, grayscale_conversion, height_to_ao, height_to_normal, histogram_scan,
     hsl_adjust, image_import, image_trace, invert, knit, levels, ordered_dither, palette_dither,
-    path, path_simplify, path_to_mask, perlin, redistance, scanline_jitter, scattered_streaks,
-    shape, shape_boolean, simplex_noise, slope_blur, stitch, thread_shape, threshold,
-    tile_generator, transform2d, type_text, uniform_color, voronoi, warp, white_noise,
+    panel_layout, path, path_simplify, path_to_mask, perlin, redistance, scanline_jitter,
+    scattered_streaks, shape, shape_boolean, simplex_noise, slope_blur, stitch, thread_shape,
+    threshold, tile_generator, transform2d, type_text, uniform_color, voronoi, warp, white_noise,
 };
 
 /// The default output port name every single-output `NodeDef` uses.
@@ -695,6 +695,29 @@ pub fn evaluate(
                         resolution,
                         &params,
                     );
+                }
+                "panel_layout" => {
+                    let sdf_key = texture_key(id, "sdf");
+                    let panel_id_key = texture_key(id, "panel_id");
+                    let panel_index_key = texture_key(id, "panel_index");
+                    let uv_u_key = texture_key(id, "uv_u");
+                    let uv_v_key = texture_key(id, "uv_v");
+                    let seam_key = texture_key(id, "seam");
+                    let params = panel_layout::PanelLayoutParams::from_graph(&node.params);
+                    computed_path_result = Some(panel_layout::dispatch(
+                        gpu,
+                        pool,
+                        panel_layout::PanelLayoutOutputKeys {
+                            sdf: &sdf_key,
+                            panel_id: &panel_id_key,
+                            panel_index: &panel_index_key,
+                            uv_u: &uv_u_key,
+                            uv_v: &uv_v_key,
+                            seam: &seam_key,
+                        },
+                        resolution,
+                        &params,
+                    ));
                 }
                 "image_trace" => {
                     let input_key = resolve_input("image")?;

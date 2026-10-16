@@ -2423,6 +2423,159 @@ static NODE_DEFS: &[NodeDef] = &[
         ],
     },
     NodeDef {
+        kind: "panel_layout",
+        display_name: "Panel Layout",
+        category: "Generators/Patterns",
+        tooltip: "A tileable guillotine-subdivided panel layout \u{2014} every pixel belongs to \
+                  exactly one panel, no flood fill needed.",
+        inputs: &[],
+        outputs: &[
+            PortSpec {
+                name: "sdf",
+                display_name: "Sdf",
+                port_type: PortType::Sdf,
+            },
+            PortSpec {
+                name: "panel_id",
+                display_name: "Panel ID",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "panel_index",
+                display_name: "Panel Index",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "uv_u",
+                display_name: "Panel UV U",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "uv_v",
+                display_name: "Panel UV V",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "seam",
+                display_name: "Seam",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "path",
+                display_name: "Path",
+                port_type: PortType::Path,
+            },
+        ],
+        params: &[
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the whole panel layout.",
+                kind: ParamSpecKind::Seed { default: 3 },
+            },
+            ParamSpec {
+                name: "grid_div",
+                display_name: "Grid Divisions",
+                tooltip: "Splits snap to 1 / this fraction of the tile.",
+                kind: ParamSpecKind::Int {
+                    min: 2,
+                    max: 64,
+                    default: 16,
+                },
+            },
+            ParamSpec {
+                name: "min_size",
+                display_name: "Min Size",
+                tooltip: "Smallest a panel's side is allowed to be, tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.01,
+                    max: 0.5,
+                    default: 0.125,
+                },
+            },
+            ParamSpec {
+                name: "max_depth",
+                display_name: "Max Depth",
+                tooltip: "Hard cap on how many times a panel can be split again.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 10,
+                    default: 6,
+                },
+            },
+            ParamSpec {
+                name: "min_depth",
+                display_name: "Min Depth",
+                tooltip: "Always splits at least this many times before chance decides whether \
+                          to keep going.",
+                kind: ParamSpecKind::Int {
+                    min: 0,
+                    max: 10,
+                    default: 3,
+                },
+            },
+            ParamSpec {
+                name: "split_chance",
+                display_name: "Split Chance",
+                tooltip: "Past Min Depth, the chance a panel splits again.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.6,
+                },
+            },
+            ParamSpec {
+                name: "long_axis_bias",
+                display_name: "Long Axis Bias",
+                tooltip: "How often a split cuts across a panel's longer side rather than its \
+                          shorter one.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.8,
+                },
+            },
+            ParamSpec {
+                name: "gap",
+                display_name: "Gap",
+                tooltip: "Seam width between panels, tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.05,
+                    default: 0.006,
+                },
+            },
+            ParamSpec {
+                name: "corner_radius",
+                display_name: "Corner Radius",
+                tooltip: "Rounds each panel's own corners.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.05,
+                    default: 0.004,
+                },
+            },
+            ParamSpec {
+                name: "fastener_margin",
+                display_name: "Fastener Margin",
+                tooltip: "How far the Path output insets from each panel's own edge \u{2014} \
+                          feeds Fasteners or any Path node.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.05,
+                    default: 0.014,
+                },
+            },
+            ParamSpec {
+                name: "offset",
+                display_name: "Offset",
+                tooltip: "A random global offset so seams cross the tile edge, instead of the \
+                          grid always starting at a corner.",
+                kind: ParamSpecKind::Bool { default: true },
+            },
+        ],
+    },
+    NodeDef {
         kind: "type_text",
         display_name: "Type",
         category: "Generators/Patterns",
