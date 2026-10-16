@@ -575,13 +575,11 @@ mod tests {
                 &params,
             );
 
-            // value, phasor, intensity: genuinely 0..1, compare via the
-            // same 8-bit readback the app itself displays/exports through.
-            for (channel, max_tol, mean_tol) in [
-                ("value", 2.0, 0.5),
-                ("phasor", 2.0, 0.5),
-                ("intensity", 2.0, 0.5),
-            ] {
+            // value, intensity: genuinely 0..1, compare via the same 8-bit
+            // readback the app itself displays/exports through. `phasor` is
+            // deliberately *not* in this strict loop — see its own block
+            // below for why.
+            for (channel, max_tol, mean_tol) in [("value", 2.0, 0.5), ("intensity", 2.0, 0.5)] {
                 let key = format!("{case}_{channel}");
                 let texture = pool.texture(&key).expect("output texture");
                 let actual_u8 = gpu.read_rgba8(texture, resolution);
@@ -611,6 +609,52 @@ mod tests {
                     mean_err <= mean_tol / 255.0 + 1e-6,
                     "{case} {channel}: mean abs error {mean_err} exceeds {}/255",
                     mean_tol
+                );
+            }
+
+            // phasor: `0.5 + 0.5 sin(2 pi (phase - 0.5))`, a pointwise
+            // function of `phase` alone (see `gabor_phasor.wgsl`) — it
+            // inherits *the exact same* ill-conditioned-near-G-zero outlier
+            // pixels `phase` has (see that block's own doc comment just
+            // below), just reshaped through sine instead of left as a raw
+            // angle. Confirmed as a real cross-GPU CI failure, not a local
+            // issue (passed here, failed on GitHub Actions' `macos-latest`
+            // runner at max abs error 0.5000076 for gabor_impulses_1, the
+            // sparsest config — exactly the case `phase`'s own comment
+            // already measured 0.07% outliers for). Needs the same
+            // outlier-count allowance `phase` has; doesn't need its
+            // wrap-aware distance (phasor is a plain bounded value, not an
+            // angle that wraps at 0/1).
+            {
+                let key = format!("{case}_phasor");
+                let texture = pool.texture(&key).expect("phasor texture");
+                let actual_u8 = gpu.read_rgba8(texture, resolution);
+                let (golden, golden_res) =
+                    read_png16_as_unit_floats(&golden_path(&format!("{case}_phasor.png")));
+                assert_eq!(golden_res, resolution, "{case} phasor: resolution mismatch");
+
+                let mut sum_err = 0.0f64;
+                let mut outliers = 0usize;
+                let count = (resolution * resolution) as usize;
+                for i in 0..count {
+                    let actual = f32::from(actual_u8[i * 4]) / 255.0;
+                    let err = (actual - golden[i]).abs();
+                    if err > 2.0 / 255.0 + 1e-6 {
+                        outliers += 1;
+                    }
+                    sum_err += f64::from(err);
+                }
+                let mean_err = sum_err / count as f64;
+                let outlier_fraction = outliers as f64 / count as f64;
+                assert!(
+                    outlier_fraction <= 0.001,
+                    "{case} phasor: {outliers}/{count} pixels ({:.4}%) exceed 2/255, more than \
+                     the 0.1% near-zero-magnitude allowance",
+                    outlier_fraction * 100.0
+                );
+                assert!(
+                    mean_err <= 0.5 / 255.0 + 1e-6,
+                    "{case} phasor: mean abs error {mean_err} exceeds 0.5/255"
                 );
             }
 
