@@ -52,6 +52,7 @@ pub mod panel_layout;
 pub mod path;
 pub mod path_simplify;
 pub mod path_to_mask;
+pub mod path_to_sdf;
 pub mod perlin;
 pub mod redistance;
 pub mod registry;

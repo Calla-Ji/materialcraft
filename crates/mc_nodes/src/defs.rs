@@ -1913,6 +1913,47 @@ static NODE_DEFS: &[NodeDef] = &[
         ],
     },
     NodeDef {
+        kind: "path_to_sdf",
+        display_name: "Path to SDF",
+        category: "Generators/Path",
+        tooltip: "Turns a Path into a real Sdf \u{2014} Fill (closed subpaths, even-odd rule) or \
+                  Stroke (a tube of the set Width along any subpath). Engraved lines, cutouts, \
+                  and custom panel shapes for the Hard-Surface nodes.",
+        inputs: &[PortSpec {
+            name: "input",
+            display_name: "Path",
+            port_type: PortType::Path,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Sdf",
+            port_type: PortType::Sdf,
+        }],
+        params: &[
+            ParamSpec {
+                name: "mode",
+                display_name: "Mode",
+                tooltip: "Fill: closed subpaths become solids (even-odd rule); open subpaths \
+                          are ignored for the fill itself. Stroke: a tube of Width along any \
+                          subpath, open or closed.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::path_to_sdf::PathSdfMode::NAMES,
+                    default: "Fill",
+                },
+            },
+            ParamSpec {
+                name: "width",
+                display_name: "Width",
+                tooltip: "Stroke mode only \u{2014} tube width in tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0005,
+                    max: 0.2,
+                    default: 0.012,
+                },
+            },
+        ],
+    },
+    NodeDef {
         kind: "knit",
         display_name: "Knit",
         category: "Generators/Patterns",

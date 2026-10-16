@@ -15,9 +15,10 @@ use crate::{
     fabric_generator, fractal_sum, french_knot, gabor_noise, gradient_linear, gradient_map,
     gradient_radial, grayscale_conversion, height_to_ao, height_to_normal, histogram_scan,
     hsl_adjust, image_import, image_trace, invert, knit, levels, ordered_dither, palette_dither,
-    panel_layout, path, path_simplify, path_to_mask, perlin, redistance, scanline_jitter,
-    scattered_streaks, shape, shape_boolean, simplex_noise, slope_blur, stitch, thread_shape,
-    threshold, tile_generator, transform2d, type_text, uniform_color, voronoi, warp, white_noise,
+    panel_layout, path, path_simplify, path_to_mask, path_to_sdf, perlin, redistance,
+    scanline_jitter, scattered_streaks, shape, shape_boolean, simplex_noise, slope_blur, stitch,
+    thread_shape, threshold, tile_generator, transform2d, type_text, uniform_color, voronoi, warp,
+    white_noise,
 };
 
 /// The default output port name every single-output `NodeDef` uses.
@@ -773,6 +774,19 @@ pub fn evaluate(
                         .unwrap_or_default();
                     let params = path_to_mask::MaskParams::from_graph(&node.params);
                     path_to_mask::dispatch(gpu, pool, &key, resolution, &input_path, &params);
+                }
+                "path_to_sdf" => {
+                    // Same "read the Path input directly, bypassing the
+                    // texture pool" pattern as `path_to_mask` above.
+                    let input_path = graph
+                        .upstream_from(id, "input")
+                        .and_then(|(upstream_id, _)| graph.node(upstream_id))
+                        .and_then(|n| n.params.get("path"))
+                        .and_then(mc_core::ParamValue::as_path)
+                        .cloned()
+                        .unwrap_or_default();
+                    let params = path_to_sdf::PathToSdfParams::from_graph(&node.params);
+                    path_to_sdf::dispatch(gpu, pool, &key, resolution, &input_path, &params);
                 }
                 other => return Err(EvalError::UnknownKind(id, other.to_string())),
             }
