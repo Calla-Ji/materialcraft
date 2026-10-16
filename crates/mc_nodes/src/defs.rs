@@ -4362,7 +4362,8 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "custom_y0",
                 display_name: "Custom Y 0.0",
-                tooltip: "Custom preset only \u{2014} the curve's value at the edge (u = 0).",
+                tooltip: "Only used when Preset is set to Custom above \u{2014} the curve's \
+                          value at the edge (u = 0).",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
@@ -4372,7 +4373,8 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "custom_y1",
                 display_name: "Custom Y 0.2",
-                tooltip: "Custom preset only \u{2014} the curve's value at u = 0.2.",
+                tooltip: "Only used when Preset is set to Custom above \u{2014} the curve's \
+                          value at u = 0.2.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
@@ -4382,7 +4384,8 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "custom_y2",
                 display_name: "Custom Y 0.6",
-                tooltip: "Custom preset only \u{2014} the curve's value at u = 0.6.",
+                tooltip: "Only used when Preset is set to Custom above \u{2014} the curve's \
+                          value at u = 0.6.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
@@ -4392,7 +4395,8 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "custom_y3",
                 display_name: "Custom Y 1.0",
-                tooltip: "Custom preset only \u{2014} the curve's value at the flat top (u = 1).",
+                tooltip: "Only used when Preset is set to Custom above \u{2014} the curve's \
+                          value at the flat top (u = 1).",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
