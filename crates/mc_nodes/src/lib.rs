@@ -8,6 +8,7 @@
 
 pub mod anisotropic_noise;
 pub mod bevel;
+pub mod bevel_profile;
 pub mod blend;
 pub mod block_shift;
 pub mod blur;

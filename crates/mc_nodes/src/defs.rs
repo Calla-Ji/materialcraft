@@ -4032,6 +4032,140 @@ static NODE_DEFS: &[NodeDef] = &[
         }],
     },
     NodeDef {
+        kind: "bevel_profile",
+        display_name: "Bevel Profile",
+        category: "Converters",
+        tooltip: "Turns an Sdf into a real height map through a chosen edge profile \u{2014} the \
+                  true distance to an edge, not a blurred approximation of one.",
+        inputs: &[PortSpec {
+            name: "sdf",
+            display_name: "Sdf",
+            port_type: PortType::Sdf,
+        }],
+        outputs: &[
+            PortSpec {
+                name: "height",
+                display_name: "Height",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "edge",
+                display_name: "Edge",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "top",
+                display_name: "Top",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "u",
+                display_name: "U",
+                port_type: PortType::Gray,
+            },
+        ],
+        params: &[
+            ParamSpec {
+                name: "preset",
+                display_name: "Preset",
+                tooltip: "The edge profile's shape, from a sharp Chamfer to a raised Lip. Custom \
+                          lets you set 4 control points by hand.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::bevel_profile::BevelPreset::NAMES,
+                    default: "Round",
+                },
+            },
+            ParamSpec {
+                name: "width",
+                display_name: "Width",
+                tooltip: "How far the bevel reaches from the edge, tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.001,
+                    max: 0.3,
+                    default: 0.05,
+                },
+            },
+            ParamSpec {
+                name: "wall",
+                display_name: "Wall",
+                tooltip: "A vertical drop before the bevel starts, for a crisp stepped edge.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "depth",
+                display_name: "Depth",
+                tooltip: "Overall height scale. Negative recesses the bevel instead of raising \
+                          it.",
+                kind: ParamSpecKind::Float {
+                    min: -1.0,
+                    max: 2.0,
+                    default: 1.0,
+                },
+            },
+            ParamSpec {
+                name: "base",
+                display_name: "Base",
+                tooltip: "Height everywhere outside the shape.",
+                kind: ParamSpecKind::Float {
+                    min: -1.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "inward",
+                display_name: "Inward",
+                tooltip: "On bevels into the shape (the normal case). Off bevels outward \u{2014} \
+                          a moat or raised surround instead.",
+                kind: ParamSpecKind::Bool { default: true },
+            },
+            ParamSpec {
+                name: "custom_y0",
+                display_name: "Custom Y 0.0",
+                tooltip: "Custom preset only \u{2014} the curve's value at the edge (u = 0).",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "custom_y1",
+                display_name: "Custom Y 0.2",
+                tooltip: "Custom preset only \u{2014} the curve's value at u = 0.2.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.6,
+                },
+            },
+            ParamSpec {
+                name: "custom_y2",
+                display_name: "Custom Y 0.6",
+                tooltip: "Custom preset only \u{2014} the curve's value at u = 0.6.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.7,
+                },
+            },
+            ParamSpec {
+                name: "custom_y3",
+                display_name: "Custom Y 1.0",
+                tooltip: "Custom preset only \u{2014} the curve's value at the flat top (u = 1).",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 1.0,
+                },
+            },
+        ],
+    },
+    NodeDef {
         kind: "channel_pack",
         display_name: "Channel Packer",
         category: "Converters",

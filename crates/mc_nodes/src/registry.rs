@@ -9,15 +9,15 @@
 use std::collections::HashSet;
 
 use crate::{
-    anisotropic_noise, bevel, blend, block_shift, blur, channel_pack, channel_split, checker,
-    circular_pattern, clamp, clouds, curvature_from_normal, curve, data_corrupt, directional_blur,
-    directional_warp, distance_field, dither_pattern, edge_detect, fabric_generator, fractal_sum,
-    french_knot, gabor_noise, gradient_linear, gradient_map, gradient_radial, grayscale_conversion,
-    height_to_ao, height_to_normal, histogram_scan, hsl_adjust, image_import, image_trace, invert,
-    knit, levels, ordered_dither, palette_dither, path, path_simplify, path_to_mask, perlin,
-    redistance, scanline_jitter, scattered_streaks, shape, shape_boolean, simplex_noise,
-    slope_blur, stitch, thread_shape, threshold, tile_generator, transform2d, type_text,
-    uniform_color, voronoi, warp, white_noise,
+    anisotropic_noise, bevel, bevel_profile, blend, block_shift, blur, channel_pack, channel_split,
+    checker, circular_pattern, clamp, clouds, curvature_from_normal, curve, data_corrupt,
+    directional_blur, directional_warp, distance_field, dither_pattern, edge_detect,
+    fabric_generator, fractal_sum, french_knot, gabor_noise, gradient_linear, gradient_map,
+    gradient_radial, grayscale_conversion, height_to_ao, height_to_normal, histogram_scan,
+    hsl_adjust, image_import, image_trace, invert, knit, levels, ordered_dither, palette_dither,
+    path, path_simplify, path_to_mask, perlin, redistance, scanline_jitter, scattered_streaks,
+    shape, shape_boolean, simplex_noise, slope_blur, stitch, thread_shape, threshold,
+    tile_generator, transform2d, type_text, uniform_color, voronoi, warp, white_noise,
 };
 
 /// The default output port name every single-output `NodeDef` uses.
@@ -674,6 +674,27 @@ pub fn evaluate(
                     let sdf_key = resolve_input("sdf")?;
                     let params = redistance::RedistanceParams::from_graph(&node.params);
                     redistance::dispatch(gpu, pool, &sdf_key, &key, resolution, &params);
+                }
+                "bevel_profile" => {
+                    let sdf_key = resolve_input("sdf")?;
+                    let height_key = texture_key(id, "height");
+                    let edge_key = texture_key(id, "edge");
+                    let top_key = texture_key(id, "top");
+                    let u_key = texture_key(id, "u");
+                    let params = bevel_profile::BevelProfileParams::from_graph(&node.params);
+                    bevel_profile::dispatch(
+                        gpu,
+                        pool,
+                        &sdf_key,
+                        bevel_profile::BevelProfileOutputKeys {
+                            height: &height_key,
+                            edge: &edge_key,
+                            top: &top_key,
+                            u: &u_key,
+                        },
+                        resolution,
+                        &params,
+                    );
                 }
                 "image_trace" => {
                     let input_key = resolve_input("image")?;
