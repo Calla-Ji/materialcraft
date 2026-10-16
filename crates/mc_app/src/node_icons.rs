@@ -190,6 +190,8 @@ pub fn icon_for_kind(kind: &str) -> char {
         "thread_shape" => '\u{e91a}',      // line_weight
         "image_import" => '\u{e43e}',      // add_photo_alternate
         "shape" => '\u{e574}',             // category
+        "circular_pattern" => '\u{e918}',  // donut_small
+        "type_text" => '\u{e264}',         // title
         "gradient_linear" => '\u{e3e9}',   // gradient
         "gradient_radial" => '\u{e3a2}',   // blur_circular
         "uniform_color" => '\u{e23a}',     // format_color_fill

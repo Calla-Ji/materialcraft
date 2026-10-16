@@ -8,6 +8,20 @@
 /// frame (CLAUDE.md §9).
 pub type DragState = Option<(mc_core::NodeId, String, mc_core::ParamValue)>;
 
+/// Image Import's own "Load Image…" button's in-flight native dialog —
+/// see `async_dialog.rs`'s own doc comment for why this goes through
+/// `rfd::AsyncFileDialog` instead of the simpler-looking synchronous
+/// `rfd::FileDialog` API. Captures everything `commit_once` needs at the
+/// moment the dialog was launched (not read back out of "whatever's
+/// selected" once it resolves, which may no longer even be this node by
+/// then).
+pub struct PendingImageImport {
+    node_id: mc_core::NodeId,
+    param_name: &'static str,
+    embed: bool,
+    dialog: crate::async_dialog::PendingDialog<Option<rfd::FileHandle>>,
+}
+
 /// One SplitMix64 step: advances `state` and returns a well-distributed
 /// 64-bit output. Shared by [`random_seed`] (one output) and
 /// [`randomize_all_params`] (a whole stream of them, one call per param) —
@@ -19,6 +33,16 @@ fn splitmix64_next(state: &mut u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
+}
+
+/// Every font family actually installed on this machine, queried once and
+/// cached for the rest of the process — real OS font discovery
+/// (`mc_nodes::type_text::list_font_families`) is too slow to re-run every
+/// single frame the Type node's params panel happens to be open, and the
+/// installed-font set can't change while this app is running anyway.
+fn installed_font_families() -> &'static [String] {
+    static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    FAMILIES.get_or_init(mc_nodes::type_text::list_font_families)
 }
 
 /// A new seed for the dice button — previously just `value.wrapping_add(1)`,
@@ -105,7 +129,8 @@ fn randomize_all_params(
             }
             mc_nodes::defs::ParamSpecKind::Gradient { .. }
             | mc_nodes::defs::ParamSpecKind::ImagePath
-            | mc_nodes::defs::ParamSpecKind::Path => continue,
+            | mc_nodes::defs::ParamSpecKind::Path
+            | mc_nodes::defs::ParamSpecKind::FontFamily => continue,
         };
         out.push((param.name, value));
     }
@@ -660,6 +685,7 @@ fn seed_randomizer_section(
     true
 }
 
+#[expect(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
     graph: &mut mc_core::Graph,
@@ -668,7 +694,36 @@ pub fn show(
     dragging: &mut DragState,
     path_editor: &mut crate::path_editor::PathEditorState,
     pending_svg_export: &mut Option<mc_core::NodeId>,
+    pending_image_import: &mut Option<PendingImageImport>,
 ) {
+    if let Some(pending) = pending_image_import {
+        if let Some(result) = pending.dialog.poll(ui.ctx()) {
+            if let Some(handle) = result {
+                let path = handle.path();
+                let path_string = path.display().to_string();
+                let embedded_base64 = pending
+                    .embed
+                    .then(|| std::fs::read(path).ok())
+                    .flatten()
+                    .map(|bytes| {
+                        use base64::Engine;
+                        base64::engine::general_purpose::STANDARD.encode(bytes)
+                    });
+                commit_once(
+                    graph,
+                    history,
+                    pending.node_id,
+                    pending.param_name,
+                    mc_core::ParamValue::Image(mc_core::ImageRef {
+                        path: Some(path_string),
+                        embedded_base64,
+                    }),
+                );
+            }
+            *pending_image_import = None;
+        }
+    }
+
     egui::Frame::new()
         .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
@@ -689,11 +744,13 @@ pub fn show(
                         dragging,
                         path_editor,
                         pending_svg_export,
+                        pending_image_import,
                     );
                 });
         });
 }
 
+#[expect(clippy::too_many_arguments)]
 fn show_inner(
     ui: &mut egui::Ui,
     graph: &mut mc_core::Graph,
@@ -702,6 +759,7 @@ fn show_inner(
     dragging: &mut DragState,
     path_editor: &mut crate::path_editor::PathEditorState,
     pending_svg_export: &mut Option<mc_core::NodeId>,
+    pending_image_import: &mut Option<PendingImageImport>,
 ) {
     let Some(id) = selected else {
         ui.weak("(select a node to edit its parameters)");
@@ -1044,6 +1102,70 @@ fn show_inner(
                     }
                 }
             }
+            mc_nodes::defs::ParamSpecKind::FontFamily => {
+                let value = current
+                    .and_then(|v| v.as_text().map(str::to_string))
+                    .unwrap_or_default();
+                let families = installed_font_families();
+                // Installed-font lists routinely run into the hundreds —
+                // a plain scrolling list made finding one slow, so this
+                // keeps a small free-typed filter alongside it. The filter
+                // text itself lives in egui's own per-widget memory (keyed
+                // by this exact param) rather than a field threaded through
+                // every caller, since it's pure transient UI state no other
+                // code needs to see.
+                let search_id = ui.id().with((id, param.name, "font_search"));
+                let mut chosen = None;
+                egui::ComboBox::from_label(param.display_name)
+                    .selected_text(if value.is_empty() {
+                        "(System Default)"
+                    } else {
+                        value.as_str()
+                    })
+                    .show_ui(ui, |ui| {
+                        let mut search = ui
+                            .memory_mut(|mem| mem.data.get_temp::<String>(search_id))
+                            .unwrap_or_default();
+                        ui.add(
+                            egui::TextEdit::singleline(&mut search)
+                                .hint_text("Search fonts…")
+                                .desired_width(f32::INFINITY),
+                        )
+                        .request_focus();
+                        ui.memory_mut(|mem| mem.data.insert_temp(search_id, search.clone()));
+                        ui.separator();
+                        let query = search.to_lowercase();
+                        egui::ScrollArea::vertical()
+                            .max_height(240.0)
+                            .show(ui, |ui| {
+                                if query.is_empty()
+                                    && ui
+                                        .selectable_label(value.is_empty(), "(System Default)")
+                                        .clicked()
+                                {
+                                    chosen = Some(String::new());
+                                }
+                                for family in families.iter().filter(|f| {
+                                    query.is_empty() || f.to_lowercase().contains(&query)
+                                }) {
+                                    if ui.selectable_label(*family == value, family).clicked() {
+                                        chosen = Some(family.clone());
+                                    }
+                                }
+                            });
+                    })
+                    .response
+                    .on_hover_text(param.tooltip);
+                if let Some(new_value) = chosen {
+                    commit_once(
+                        graph,
+                        history,
+                        id,
+                        param.name,
+                        mc_core::ParamValue::Text(new_value),
+                    );
+                }
+            }
             mc_nodes::defs::ParamSpecKind::Vec2 { min, max, default } => {
                 let mut value = current.and_then(|v| v.as_vec2()).unwrap_or(*default);
                 ui.horizontal(|ui| {
@@ -1148,32 +1270,19 @@ fn show_inner(
                 ui.horizontal(|ui| {
                     ui.label(param.display_name);
                     if ui.button("Load Image\u{2026}").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter(
-                                "Image",
-                                &["png", "jpg", "jpeg", "bmp", "tga", "gif", "webp"],
-                            )
-                            .pick_file()
-                        {
-                            let path_string = path.display().to_string();
-                            let embedded_base64 = embed_next_load
-                                .then(|| std::fs::read(&path).ok())
-                                .flatten()
-                                .map(|bytes| {
-                                    use base64::Engine;
-                                    base64::engine::general_purpose::STANDARD.encode(bytes)
-                                });
-                            commit_once(
-                                graph,
-                                history,
-                                id,
-                                param.name,
-                                mc_core::ParamValue::Image(mc_core::ImageRef {
-                                    path: Some(path_string),
-                                    embedded_base64,
-                                }),
-                            );
-                        }
+                        *pending_image_import = Some(PendingImageImport {
+                            node_id: id,
+                            param_name: param.name,
+                            embed: embed_next_load,
+                            dialog: crate::async_dialog::PendingDialog::new(
+                                rfd::AsyncFileDialog::new()
+                                    .add_filter(
+                                        "Image",
+                                        &["png", "jpg", "jpeg", "bmp", "tga", "gif", "webp"],
+                                    )
+                                    .pick_file(),
+                            ),
+                        });
                     }
                 });
                 let status = match (&image_ref.path, image_ref.embedded_base64.is_some()) {

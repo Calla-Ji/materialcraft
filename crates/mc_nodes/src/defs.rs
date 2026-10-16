@@ -84,6 +84,17 @@ pub enum ParamSpecKind {
     /// for what a Path node holds — the editor's own Wrap checkbox reads
     /// and writes that same field.
     Path,
+    /// A font family, picked from whatever's actually installed on this
+    /// machine (`mc_nodes::type_text::list_font_families`) — unlike
+    /// [`ParamSpecKind::Enum`], the option list isn't known at compile
+    /// time, so there's no static `default` here either: an empty string
+    /// means "no specific family requested," which `type_text::dispatch`
+    /// resolves to a generic sans-serif fallback rather than failing.
+    /// Stored as a plain [`crate::ParamValue::Text`], same as
+    /// [`ParamSpecKind::Text`] — this only differs in which widget
+    /// `params_panel.rs` draws for it (a dropdown of installed fonts
+    /// instead of a free-typed box).
+    FontFamily,
 }
 
 impl ParamSpec {
@@ -100,6 +111,7 @@ impl ParamSpec {
             ParamSpecKind::ImagePath => ParamValue::Image(mc_core::ImageRef::default()),
             ParamSpecKind::Text { default } => ParamValue::Text(default.to_string()),
             ParamSpecKind::Path => ParamValue::Path(mc_core::Path::default()),
+            ParamSpecKind::FontFamily => ParamValue::Text(String::new()),
         }
     }
 }
@@ -2236,6 +2248,186 @@ static NODE_DEFS: &[NodeDef] = &[
                     min: 0.15,
                     max: 0.85,
                     default: 0.5,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "circular_pattern",
+        display_name: "Circular Pattern",
+        category: "Generators/Patterns",
+        tooltip: "Distributes a Stamp input evenly around a circle \u{2014} a polar array, with \
+                  optional position/rotation/scale jitter.",
+        inputs: &[PortSpec {
+            name: "stamp",
+            display_name: "Stamp",
+            port_type: PortType::Gray,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "count",
+                display_name: "Count",
+                tooltip: "How many copies to place around the circle.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 8,
+                },
+            },
+            ParamSpec {
+                name: "radius",
+                display_name: "Radius",
+                tooltip: "Distance from the tile center to each copy, in tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.5,
+                    default: 0.35,
+                },
+            },
+            ParamSpec {
+                name: "stamp_size",
+                display_name: "Stamp Size",
+                tooltip: "How large each copy is, in tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.005,
+                    max: 0.5,
+                    default: 0.08,
+                },
+            },
+            ParamSpec {
+                name: "start_angle",
+                display_name: "Start Angle",
+                tooltip: "Where the first copy sits, in degrees \u{2014} the rest follow evenly \
+                          spaced from there.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 360.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "align_to_tangent",
+                display_name: "Align to Tangent",
+                tooltip: "On: each copy rotates to face outward from the center. Off: every \
+                          copy keeps the same upright orientation.",
+                kind: ParamSpecKind::Bool { default: true },
+            },
+            ParamSpec {
+                name: "rotation_jitter",
+                display_name: "Rotation Jitter",
+                tooltip: "Random extra rotation per copy, up to this many degrees either way.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 180.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "scale_jitter",
+                display_name: "Scale Jitter",
+                tooltip: "Random size variation per copy, as a fraction of Stamp Size either \
+                          way (0.3 means each copy is somewhere between 70% and 130% size).",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "position_jitter_radial",
+                display_name: "Position Jitter (Radial)",
+                tooltip: "Random distance each copy may move toward or away from the center, \
+                          in tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.2,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "position_jitter_tangential",
+                display_name: "Position Jitter (Tangential)",
+                tooltip: "Random distance each copy may slide sideways around the circle, in \
+                          tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.2,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes every jitter pattern at once, without changing Count or \
+                          Radius.",
+                kind: ParamSpecKind::Seed { default: 0 },
+            },
+            ParamSpec {
+                name: "wrap",
+                display_name: "Wrap",
+                tooltip: "Copies near the tile edge also draw their wrapped-around neighbors, \
+                          so the pattern tiles seamlessly.",
+                kind: ParamSpecKind::Bool { default: true },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "type_text",
+        display_name: "Type",
+        category: "Generators/Patterns",
+        tooltip: "Renders text, in any font installed on this machine, as a Gray mask.",
+        inputs: &[],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Output",
+            port_type: PortType::Gray,
+        }],
+        params: &[
+            ParamSpec {
+                name: "text",
+                display_name: "Text",
+                tooltip: "The text to render.",
+                kind: ParamSpecKind::Text { default: "Type" },
+            },
+            ParamSpec {
+                name: "font_family",
+                display_name: "Font",
+                tooltip: "Which installed font to use. System Default picks a generic \
+                          sans-serif.",
+                kind: ParamSpecKind::FontFamily,
+            },
+            ParamSpec {
+                name: "size",
+                display_name: "Size",
+                tooltip: "Text height, in tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.02,
+                    max: 0.9,
+                    default: 0.2,
+                },
+            },
+            ParamSpec {
+                name: "tracking",
+                display_name: "Tracking",
+                tooltip: "Extra spacing added between every letter, in tile units.",
+                kind: ParamSpecKind::Float {
+                    min: -0.05,
+                    max: 0.2,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "align",
+                display_name: "Align",
+                tooltip: "Horizontal alignment of the text within the tile.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::type_text::HorizontalAlign::NAMES,
+                    default: "Center",
                 },
             },
         ],

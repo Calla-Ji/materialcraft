@@ -13,6 +13,8 @@ use std::collections::HashMap;
 
 use glam::{Mat4, Vec3};
 
+use crate::{tess_gpu, tess_mesh};
+
 const VERTEX_ATTRS: [wgpu::VertexAttribute; 4] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x3];
 
@@ -58,6 +60,42 @@ impl MeshKind {
     }
 }
 
+/// Which of the two render paths the current mesh needs: a plain indexed
+/// draw from a CPU-built vertex/index buffer (every mesh kind, and Cube/
+/// Rounded Cube with no Height node connected), or the GPU vertex-pulling
+/// tessellation path (Cube/Rounded Cube with Height connected — see
+/// `viewport3d.wgsl`'s `vs_main_tess` module doc comment). Built by
+/// `build_and_upload_mesh`.
+enum CurrentMesh {
+    Uniform {
+        vertex_buffer: wgpu::Buffer,
+        index_buffer: wgpu::Buffer,
+        index_count: u32,
+    },
+    Tessellated {
+        // Kept alive for as long as `bind_group` references them — never
+        // read from again directly once the bind group exists.
+        _vertex_storage: wgpu::Buffer,
+        _tri_storage: wgpu::Buffer,
+        _inst_tri_storage: wgpu::Buffer,
+        bind_group: wgpu::BindGroup,
+        /// `3 * n_global^2` — the non-indexed per-instance vertex count
+        /// `draw()` needs.
+        vertices_per_instance: u32,
+        /// One instance per base triangle (uniform tessellation: every
+        /// instance subdivides to the same `n_global`, so there's no
+        /// per-level draw splitting to do — see `tess_gpu::identity_inst_tri`).
+        instance_count: u32,
+        /// `tessellation`, after `tess_gpu::budget_n` reduces it to stay
+        /// within `MAX_TESS_TRIANGLES` — written into the uniform buffer
+        /// every frame (`vs_main_tess` needs it, and it can differ from the
+        /// artist's own typed-in Tessellation value).
+        n_global: u32,
+        tex_size: u32,
+        mip_count: u32,
+    },
+}
+
 /// The 7 PBR maps the shader reads, each falling back to a flat default
 /// texture when the graph has no node for that Output kind.
 struct FallbackTextures {
@@ -73,18 +111,30 @@ struct FallbackTextures {
 pub struct Viewport3d {
     pipeline: wgpu::RenderPipeline,
     pipeline_transparent: wgpu::RenderPipeline,
+    // The GPU vertex-pulling tessellation variants — same fragment shader
+    // and pixel-level behavior as `pipeline`/`pipeline_transparent`, just a
+    // different vertex stage (`vs_main_tess`, no vertex buffer) and an
+    // extra bind group (`tess_bind_group_layout`) — see `viewport3d.wgsl`'s
+    // own module doc comment on `vs_main_tess`.
+    pipeline_tess: wgpu::RenderPipeline,
+    pipeline_tess_transparent: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
+    tess_bind_group_layout: wgpu::BindGroupLayout,
     sampler_smooth: wgpu::Sampler,
     sampler_pixel: wgpu::Sampler,
     // Built lazily and rebuilt whenever `(mesh_kind, tessellation)` changes,
     // rather than every `MeshKind` pre-built once at a fixed quality — see
-    // `tessellated_mesh`. The tessellation value is rounded to a whole
-    // percent for the comparison key so tiny float jitter doesn't trigger a
-    // rebuild on every frame.
-    current_mesh: (wgpu::Buffer, wgpu::Buffer, u32),
-    current_mesh_key: (MeshKind, u32),
+    // `tessellated_mesh`.
+    current_mesh: CurrentMesh,
+    /// `(mesh_kind, tessellation, height_evaluation_hash)` — the third
+    /// field is what makes a Cube/Rounded Cube's tessellated mesh (see
+    /// `build_and_upload_mesh`) rebuild when the Height content
+    /// itself changes, not just when `mesh_kind`/`tessellation` do; `None`
+    /// when the graph has no Output: Height node at all (the plain
+    /// uniform-grid path, same as every other mesh kind).
+    current_mesh_key: (MeshKind, u32, Option<u64>),
     fallback: FallbackTextures,
     environment_view: wgpu::TextureView,
     environment_ambient_color: Vec3,
@@ -104,7 +154,14 @@ pub struct Viewport3d {
 
     pub mesh_kind: MeshKind,
     pub height_scale: f32,
-    pub tessellation: f32,
+    /// At least `TESSELLATION_MIN` — the exact subdivision count along a
+    /// Cube/Rounded Cube edge (other mesh kinds scale proportionally, see
+    /// `tessellated_mesh`), or the requested per-base-triangle lattice
+    /// density `N` for the GPU vertex-pulling tessellation path when a
+    /// Height node is connected (see `build_and_upload_mesh`/
+    /// `tess_gpu::budget_n` — the actual `N` used can be lower, reduced to
+    /// stay within `MAX_TESS_TRIANGLES`).
+    pub tessellation: u32,
     pub shading_mode: ShadingMode,
     pub exposure: f32,
     /// Scales just the environment's contribution (sky reflection + ambient
@@ -194,7 +251,11 @@ impl Viewport3d {
                     texture_entry(2, wgpu::ShaderStages::FRAGMENT),
                     texture_entry(3, wgpu::ShaderStages::FRAGMENT),
                     texture_entry(4, wgpu::ShaderStages::FRAGMENT),
-                    texture_entry(5, wgpu::ShaderStages::VERTEX),
+                    // height_tex and tex_sampler need VERTEX visibility too
+                    // — `vs_main` samples height there for real vertex
+                    // displacement (see `viewport3d.wgsl`'s module doc
+                    // comment).
+                    texture_entry(5, wgpu::ShaderStages::VERTEX_FRAGMENT),
                     wgpu::BindGroupLayoutEntry {
                         binding: 6,
                         visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -206,6 +267,15 @@ impl Viewport3d {
                 ],
             });
 
+        // Vertex-pulling tessellation's own storage buffers (see
+        // `viewport3d.wgsl`'s `vs_main_tess` module doc comment) — VERTEX
+        // visibility only, nothing in the fragment stage reads these.
+        let tess_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("viewport3d tess layout"),
+                entries: &[storage_entry(0), storage_entry(1), storage_entry(2)],
+            });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("viewport3d pipeline layout"),
             bind_group_layouts: &[
@@ -214,24 +284,35 @@ impl Viewport3d {
             ],
             immediate_size: 0,
         });
+        let pipeline_layout_tess = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("viewport3d tess pipeline layout"),
+            bind_group_layouts: &[
+                Some(&uniform_bind_group_layout),
+                Some(&texture_bind_group_layout),
+                Some(&tess_bind_group_layout),
+            ],
+            immediate_size: 0,
+        });
 
-        // Two pipeline variants, identical except for depth write — see
+        // Four pipeline variants: {plain vertex-buffer, GPU vertex-pulling
+        // tessellation} x {opaque, transparent} — the latter pair differing
+        // only in depth write, same reasoning as the former (see
         // `render()`'s doc comment on why a graph with an Alpha node needs
-        // the other one. Built from a closure rather than two near-copies
-        // of the same ~30-line descriptor.
-        let build_pipeline = |label: &'static str, depth_write_enabled: bool| {
+        // it off). Built from a closure rather than four near-copies of the
+        // same ~30-line descriptor.
+        let build_pipeline = |label: &'static str,
+                              layout: &wgpu::PipelineLayout,
+                              entry_point: &'static str,
+                              buffers: &[Option<wgpu::VertexBufferLayout>],
+                              depth_write_enabled: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&pipeline_layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: Some("vs_main"),
+                    entry_point: Some(entry_point),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<Vertex>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &VERTEX_ATTRS,
-                    })],
+                    buffers,
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
@@ -276,7 +357,18 @@ impl Viewport3d {
                 cache: None,
             })
         };
-        let pipeline = build_pipeline("viewport3d pipeline (opaque)", true);
+        let vertex_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &VERTEX_ATTRS,
+        })];
+        let pipeline = build_pipeline(
+            "viewport3d pipeline (opaque)",
+            &pipeline_layout,
+            "vs_main",
+            &vertex_buffers,
+            true,
+        );
         // With `cull_mode: None`, several faces of a closed mesh (e.g. a
         // cube's far side) can land on the same screen pixel — depth write
         // is what makes that resolve correctly for fully-opaque geometry.
@@ -293,7 +385,27 @@ impl Viewport3d {
         // transparent layers of the same mesh against each other, only
         // against the opaque background — an acceptable simplification for
         // a material preview, not a compositor.
-        let pipeline_transparent = build_pipeline("viewport3d pipeline (transparent)", false);
+        let pipeline_transparent = build_pipeline(
+            "viewport3d pipeline (transparent)",
+            &pipeline_layout,
+            "vs_main",
+            &vertex_buffers,
+            false,
+        );
+        let pipeline_tess = build_pipeline(
+            "viewport3d tess pipeline (opaque)",
+            &pipeline_layout_tess,
+            "vs_main_tess",
+            &[],
+            true,
+        );
+        let pipeline_tess_transparent = build_pipeline(
+            "viewport3d tess pipeline (transparent)",
+            &pipeline_layout_tess,
+            "vs_main_tess",
+            &[],
+            false,
+        );
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport3d uniforms"),
@@ -340,15 +452,12 @@ impl Viewport3d {
             ..Default::default()
         });
 
-        let initial_tessellation = 0.5;
-        let current_mesh = upload_mesh(
+        let initial_tessellation = 64;
+        let current_mesh = upload_uniform_mesh(
             device,
             tessellated_mesh(MeshKind::RoundedCube, initial_tessellation),
         );
-        let current_mesh_key = (
-            MeshKind::RoundedCube,
-            tessellation_bucket(initial_tessellation),
-        );
+        let current_mesh_key = (MeshKind::RoundedCube, initial_tessellation, None);
 
         let fallback = FallbackTextures {
             base_color: solid_view(
@@ -384,9 +493,12 @@ impl Viewport3d {
         Self {
             pipeline,
             pipeline_transparent,
+            pipeline_tess,
+            pipeline_tess_transparent,
             uniform_buffer,
             uniform_bind_group,
             texture_bind_group_layout,
+            tess_bind_group_layout,
             sampler_smooth,
             sampler_pixel,
             current_mesh,
@@ -635,6 +747,165 @@ impl Viewport3d {
         })
     }
 
+    /// Builds whatever mesh `mesh_kind` needs at the given `tessellation`,
+    /// using the GPU vertex-pulling tessellation path (see
+    /// `viewport3d.wgsl`'s `vs_main_tess` module doc comment) for Cube/
+    /// Rounded Cube when the graph actually has an Output: Height node —
+    /// real vertex displacement needs real geometry to displace, and a
+    /// uniform grid's own fixed vertex budget can't resolve a hard height
+    /// edge (text, a crisp cutout) as finely as this can, without the
+    /// CPU-built-mesh problems `mc_app::adaptive_mesh` (since removed)
+    /// eventually hit: a hard wgpu per-buffer size ceiling, and a
+    /// multi-second UI freeze rebuilding/re-uploading the mesh on every
+    /// Tessellation/Resolution change. Every other mesh kind, and Cube/
+    /// Rounded Cube with no Height connected at all, keep using the plain
+    /// uniform grid — not worth a base-mesh rebuild for a flat fallback
+    /// texture that was never going to show any detail anyway.
+    fn build_and_upload_mesh(
+        &self,
+        mesh_kind: MeshKind,
+        tessellation: u32,
+        gpu: &mut mc_gpu::Context,
+        pool: &mc_gpu::TexturePool,
+        graph: &mc_core::Graph,
+    ) -> CurrentMesh {
+        use wgpu::util::DeviceExt;
+
+        let radius = match mesh_kind {
+            MeshKind::Cube => 0.0,
+            MeshKind::RoundedCube => 0.25,
+            _ => {
+                return upload_uniform_mesh(&gpu.device, tessellated_mesh(mesh_kind, tessellation))
+            }
+        };
+        let Some(height_key) = resolve_channel_key(graph, "output_height") else {
+            return upload_uniform_mesh(&gpu.device, tessellated_mesh(mesh_kind, tessellation));
+        };
+        if pool.texture(&height_key).is_none() {
+            return upload_uniform_mesh(&gpu.device, tessellated_mesh(mesh_kind, tessellation));
+        }
+
+        // Reuses the same real, box-filtered GPU mip chain every channel the
+        // viewport reads already gets (`mipgen.rs`) — matching exactly what
+        // this technique's own lam/lod math assumes (see
+        // `tess_mesh::build_mips`'s doc comment) — so no separate CPU
+        // readback or texture is needed just for tessellation.
+        crate::mipgen::generate_mip_chain(gpu, pool, &height_key, false);
+        let texture = pool
+            .texture(&height_key)
+            .expect("just confirmed present above");
+        let tex_size = texture.width();
+        let mip_count = texture.mip_level_count();
+
+        let base = tess_mesh::make_rounded_cube(BASE_FILLET_SEGMENTS, radius, 2.0);
+        let base_tri_count = base.tri.len() as u32;
+        let mesh = tess_mesh::prepare(base, tex_size);
+        // Reduces a large typed-in Tessellation value (up to the graph's own
+        // output Resolution, e.g. 4096) so the resulting instanced draw
+        // stays within a real GPU time-per-frame budget — see
+        // `tess_gpu::budget_n`'s own doc comment on why there's no longer a
+        // hard memory wall to avoid instead.
+        let n_global = tess_gpu::budget_n(tessellation, base_tri_count, MAX_TESS_TRIANGLES);
+        let nt = vec![n_global; base_tri_count as usize];
+        let edge_n = vec![[n_global; 3]; base_tri_count as usize];
+
+        let device = &gpu.device;
+        let vertex_storage = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("viewport3d tess vertices"),
+            contents: &tess_gpu::pack_vertex_buffer(&mesh),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let tri_storage = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("viewport3d tess triangles"),
+            contents: &tess_gpu::pack_tri_buffer(&mesh, &nt, &edge_n),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let inst_tri_bytes: Vec<u8> = tess_gpu::identity_inst_tri(base_tri_count)
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let inst_tri_storage = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("viewport3d tess inst_tri"),
+            contents: &inst_tri_bytes,
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("viewport3d tess bind group"),
+            layout: &self.tess_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: vertex_storage.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: tri_storage.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: inst_tri_storage.as_entire_binding(),
+                },
+            ],
+        });
+
+        CurrentMesh::Tessellated {
+            _vertex_storage: vertex_storage,
+            _tri_storage: tri_storage,
+            _inst_tri_storage: inst_tri_storage,
+            bind_group,
+            vertices_per_instance: 3 * n_global * n_global,
+            instance_count: base_tri_count,
+            n_global,
+            tex_size,
+            mip_count,
+        }
+    }
+
+    /// Records the current mesh's draw call — picks the plain-vertex-buffer
+    /// or vertex-pulling-tessellation pipeline/bind-group-2 based on which
+    /// variant `self.current_mesh` currently is (see [`CurrentMesh`]).
+    /// Shared between `render()` and the test module's own
+    /// `render_offscreen`, which do identical GPU work otherwise.
+    fn record_draw(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        texture_bind_group: &wgpu::BindGroup,
+        transparent: bool,
+    ) {
+        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(1, texture_bind_group, &[]);
+        match &self.current_mesh {
+            CurrentMesh::Uniform {
+                vertex_buffer,
+                index_buffer,
+                index_count,
+            } => {
+                pass.set_pipeline(if transparent {
+                    &self.pipeline_transparent
+                } else {
+                    &self.pipeline
+                });
+                pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..*index_count, 0, 0..1);
+            }
+            CurrentMesh::Tessellated {
+                bind_group,
+                vertices_per_instance,
+                instance_count,
+                ..
+            } => {
+                pass.set_pipeline(if transparent {
+                    &self.pipeline_tess_transparent
+                } else {
+                    &self.pipeline_tess
+                });
+                pass.set_bind_group(2, bind_group, &[]);
+                pass.draw(0..*vertices_per_instance, 0..*instance_count);
+            }
+        }
+    }
+
     /// Renders the current mesh lit by the current graph's outputs into an
     /// offscreen target sized `width x height`, and returns the egui texture
     /// id it's registered under (stable across frames and resizes, so the UI
@@ -679,6 +950,28 @@ impl Viewport3d {
             self.environment_thumbnail_dirty = false;
         }
 
+        let texture_bind_group = self.build_texture_bind_group(gpu, pool, graph);
+
+        let desired_key = (
+            self.mesh_kind,
+            self.tessellation,
+            height_evaluation_hash(graph),
+        );
+        if desired_key != self.current_mesh_key {
+            self.current_mesh =
+                self.build_and_upload_mesh(self.mesh_kind, self.tessellation, gpu, pool, graph);
+            self.current_mesh_key = desired_key;
+        }
+        let tess = match &self.current_mesh {
+            CurrentMesh::Uniform { .. } => (0.0, 0.0, 0.0),
+            CurrentMesh::Tessellated {
+                n_global,
+                tex_size,
+                mip_count,
+                ..
+            } => (*n_global as f32, *tex_size as f32, *mip_count as f32),
+        };
+
         let aspect = width as f32 / height as f32;
         let eye = self.eye_position();
         let view = glam::camera::rh::view::look_at_mat4(eye, self.target, Vec3::Y);
@@ -697,21 +990,10 @@ impl Viewport3d {
                 exposure: self.exposure,
                 environment_intensity: self.environment_intensity,
                 environment_blur: self.environment_blur,
+                tess,
             },
         );
         gpu.queue.write_buffer(&self.uniform_buffer, 0, &bytes);
-
-        let texture_bind_group = self.build_texture_bind_group(gpu, pool, graph);
-
-        let desired_key = (self.mesh_kind, tessellation_bucket(self.tessellation));
-        if desired_key != self.current_mesh_key {
-            self.current_mesh = upload_mesh(
-                &gpu.device,
-                tessellated_mesh(self.mesh_kind, self.tessellation),
-            );
-            self.current_mesh_key = desired_key;
-        }
-        let (vertex_buffer, index_buffer, index_count) = &self.current_mesh;
 
         let mut encoder = gpu
             .device
@@ -748,17 +1030,8 @@ impl Viewport3d {
             // driving transparency, or partially-transparent faces fight
             // the depth buffer in a way that depends on draw order rather
             // than the alpha value itself.
-            let pipeline = if resolve_channel_key(graph, "output_alpha").is_some() {
-                &self.pipeline_transparent
-            } else {
-                &self.pipeline
-            };
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_bind_group(1, &texture_bind_group, &[]);
-            pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..*index_count, 0, 0..1);
+            let transparent = resolve_channel_key(graph, "output_alpha").is_some();
+            self.record_draw(&mut pass, &texture_bind_group, transparent);
         }
         gpu.queue.submit(Some(encoder.finish()));
 
@@ -802,6 +1075,22 @@ fn texture_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGrou
     }
 }
 
+/// A read-only storage buffer entry, VERTEX-only — the tess bind group's
+/// own 3 bindings (`tess_verts`/`tess_tris`/`tess_inst_tri` in
+/// `viewport3d.wgsl`) are all this same shape.
+fn storage_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
 /// The graph's texture pool key for one Output kind (e.g.
 /// `"output_base_color"`), if the graph has that Output node and it
 /// resolves to something. Mirrors `mc_nodes::export::read_output`'s lookup,
@@ -813,6 +1102,56 @@ fn resolve_channel_key(graph: &mc_core::Graph, kind: &str) -> Option<String> {
         .map(|(id, _)| id)?;
     mc_nodes::registry::resolve_texture_key(graph, id)
 }
+
+/// A hash that changes exactly when the graph's Height output would
+/// render differently — `None` if the graph has no Output: Height node at
+/// all. Hashing the Output node itself (rather than, say, its upstream
+/// source) is enough: `Graph::evaluation_hash` already recurses into
+/// whatever's connected to it, so any upstream param edit changes this
+/// too. Used to decide when a Cube/Rounded Cube's adaptive mesh (see
+/// `generate_rounded_cube_adaptive`) actually needs rebuilding — a real
+/// GPU readback plus quadtree build, too expensive to redo every frame
+/// just because the camera moved.
+fn height_evaluation_hash(graph: &mc_core::Graph) -> Option<u64> {
+    let id = graph
+        .nodes()
+        .find(|(_, n)| n.kind == "output_height")
+        .map(|(id, _)| id)?;
+    graph.evaluation_hash(id)
+}
+
+/// The base mesh's own per-face fillet resolution for Cube/Rounded Cube's
+/// tessellated path (`Viewport3d::build_and_upload_mesh`) — fixed,
+/// independent of the user's own Tessellation slider. Unlike a flat cube
+/// face, the rounded fillet's curve has to already be resolved at the base-
+/// mesh level: vertex-pulling tessellation only adds *height-detail*
+/// density within an existing base triangle via barycentric interpolation,
+/// which stays exactly planar (3 corners' affine combinations never leave
+/// their own plane) — it can't add curvature a low-poly base mesh doesn't
+/// already have. 12 segments/face (1,728 base triangles for the 6-face
+/// cube) is comfortably smooth for this fillet's radius at preview scale,
+/// while leaving most of `MAX_TESS_TRIANGLES`'s budget for the user's own
+/// Tessellation value to spend on actual height detail.
+const BASE_FILLET_SEGMENTS: u32 = 12;
+
+/// Upper bound on `base_triangles * n_global^2` for the tessellated path —
+/// see `tess_gpu::budget_n`. Not a hardware/memory limit (the whole point
+/// of this technique is that nothing scales a CPU-built buffer anymore);
+/// this is purely a real-time-rendering-budget guess. With
+/// `BASE_FILLET_SEGMENTS` at 1,728 base triangles, this caps `n_global`
+/// around 190 (effective resolution ~2,300 across a face) — real,
+/// measured-responsive on real hardware at the time this was tuned, but
+/// adjust by feel: lower it if a high Tessellation value stutters, raise it
+/// if the ceiling itself is visibly limiting on faster hardware. Uniform
+/// tessellation (every part of the surface gets the same density) has a
+/// fundamentally lower practical ceiling than the content-adaptive CPU mesh
+/// this replaced (which only spent vertices where Height actually had
+/// detail) — per-pixel normal mapping is what carries most of the
+/// perceived fine detail regardless (see `viewport3d.wgsl`'s own module
+/// doc comment on `vs_main_tess`), so this matters most for how crisp a
+/// hard silhouette edge (text, a crisp cutout) looks, not overall surface
+/// detail.
+const MAX_TESS_TRIANGLES: u32 = 64_000_000;
 
 fn solid_view(
     device: &wgpu::Device,
@@ -856,10 +1195,10 @@ fn solid_view(
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-fn upload_mesh(
+fn upload_uniform_mesh(
     device: &wgpu::Device,
     (vertices, indices): (Vec<Vertex>, Vec<u32>),
-) -> (wgpu::Buffer, wgpu::Buffer, u32) {
+) -> CurrentMesh {
     let mut vertex_bytes = Vec::with_capacity(vertices.len() * std::mem::size_of::<Vertex>());
     for v in &vertices {
         for c in v.position {
@@ -905,16 +1244,22 @@ fn upload_mesh(
         .copy_from_slice(&index_bytes);
     index_buffer.unmap();
 
-    (vertex_buffer, index_buffer, indices.len() as u32)
+    CurrentMesh::Uniform {
+        vertex_buffer,
+        index_buffer,
+        index_count: indices.len() as u32,
+    }
 }
 
 /// `view_proj`(mat4) + `camera_pos`(vec4) + `light_dir`(vec4) +
-/// `ambient_color`(vec4) + 5 scalars + 3 padding floats = 144 bytes, matching
-/// `Uniforms` in viewport3d.wgsl.
+/// `ambient_color`(vec4) + 5 scalars + 3 tess-only scalars = 144 bytes,
+/// matching `Uniforms` in viewport3d.wgsl. The last 3 (`tess_n_global`/
+/// `tess_tex_size`/`tess_mip_count`) are read only by `vs_main_tess` —
+/// harmless zeros whenever `self.current_mesh` is `CurrentMesh::Uniform`.
 const UNIFORM_SIZE: usize = 144;
 
 /// The render-settings scalars that make up `uniform_bytes`' tail — grouped
-/// into one struct rather than 5 more positional args, which pushed that
+/// into one struct rather than more positional args, which pushed that
 /// function over clippy's `too_many_arguments` threshold.
 struct RenderSettings {
     height_scale: f32,
@@ -922,6 +1267,10 @@ struct RenderSettings {
     exposure: f32,
     environment_intensity: f32,
     environment_blur: f32,
+    /// `(n_global, tex_size, mip_count)` from the current
+    /// `CurrentMesh::Tessellated`, or `(0.0, 0.0, 0.0)` when the mesh is a
+    /// plain `CurrentMesh::Uniform` (unread by `vs_main` either way).
+    tess: (f32, f32, f32),
 }
 
 fn uniform_bytes(
@@ -958,60 +1307,90 @@ fn uniform_bytes(
     put(settings.exposure, &mut bytes, &mut offset);
     put(settings.environment_intensity, &mut bytes, &mut offset);
     put(settings.environment_blur, &mut bytes, &mut offset);
-    put(0.0, &mut bytes, &mut offset);
-    put(0.0, &mut bytes, &mut offset);
-    put(0.0, &mut bytes, &mut offset);
+    put(settings.tess.0, &mut bytes, &mut offset);
+    put(settings.tess.1, &mut bytes, &mut offset);
+    put(settings.tess.2, &mut bytes, &mut offset);
     bytes
 }
 
-/// Rounds `tessellation` (0.0..1.0) to a whole percent, so the "has anything
-/// actually changed" check in `render` compares integers instead of floats.
-fn tessellation_bucket(tessellation: f32) -> u32 {
-    (tessellation.clamp(0.0, 1.0) * 100.0).round() as u32
+/// The Tessellation slider's own floor — matching artists coming from
+/// Substance Designer picking an explicit subdivision count (16, 32...)
+/// rather than tuning a vague 0..1 "density" value, but as a free
+/// drag-or-type number (`egui::Slider`'s own `DragValue` already supports
+/// typing an exact value, no separate widget needed) rather than a fixed
+/// list.
+pub const TESSELLATION_MIN: u32 = 4;
+
+/// The Tessellation slider's own ceiling — deliberately *not* tied to the
+/// graph's output Resolution anymore (an earlier version used
+/// `graph.settings.resolution` directly, on the reasoning that tessellating
+/// finer than the Height texture's own resolution can't reveal more real
+/// *data*; still true, but it meant a 1024-res graph silently capped the
+/// slider at 1024 even though a crisp height edge's own *silhouette* can
+/// still visibly facet well past that, which is the whole reason this
+/// slider exists). Safe to request regardless of Resolution: the
+/// tessellated path (`build_and_upload_mesh`) reduces whatever's actually
+/// achievable via `tess_gpu::budget_n`/`MAX_TESS_TRIANGLES`, a real-time-
+/// rendering-time budget independent of this number, and the plain
+/// uniform-grid path (every other mesh kind, and Cube/Rounded Cube with no
+/// Height connected) separately clamps to `UNIFORM_MESH_SEGMENTS_MAX`
+/// regardless of what this slider allows. 4096 is the highest value
+/// actually measured (crash-free, ~35-120ms worst-case mesh rebuild, no
+/// per-frame lag) against a real logo graph — raise it further only after
+/// the same kind of hands-on check.
+pub const TESSELLATION_MAX: u32 = 4096;
+
+/// `tessellation` scaled by `ratio`, for mesh kinds whose own segment
+/// counts were historically set relative to Cube/Rounded Cube's own
+/// (rather than equal to it) — see `tessellated_mesh`'s own per-arm
+/// comments for where each ratio comes from.
+fn scaled(tessellation: u32, ratio: f32) -> u32 {
+    ((tessellation as f32 * ratio).round() as u32).max(1)
 }
 
-fn lerp_segments(low: u32, high: u32, t: f32) -> u32 {
-    (low as f32 + (high as f32 - low as f32) * t.clamp(0.0, 1.0)).round() as u32
-}
+/// Builds the given mesh kind's plain *uniform* grid at `tessellation`
+/// segments (Cube/Rounded Cube) or a proportional multiple of it (every
+/// other kind — see each match arm) — used for every mesh kind except
+/// Cube/Rounded Cube with a Height node actually connected, which instead
+/// gets the GPU vertex-pulling tessellation path from
+/// `Viewport3d::build_and_upload_mesh` (see that method's own doc comment
+/// for why). This segment count
+/// bounds how finely a hard height edge can bend without faceting
+/// wherever this uniform path is still used (every other mesh kind, and
+/// Cube/Rounded Cube with no Height connected at all, where there's
+/// nothing to displace anyway).
+/// Safety ceiling for every *uniform*-grid mesh kind (every kind except
+/// Cube/Rounded Cube with a Height node connected, which instead takes the
+/// budget-protected GPU tessellation path — see `build_and_upload_mesh`).
+/// This path builds an actual CPU vertex/index buffer sized directly by
+/// `tessellation` with no other protection, so letting the Tessellation
+/// slider's own range grow (it now goes well past this, independent of the
+/// graph's output Resolution — see `main.rs`'s own slider) must not also
+/// let this path ask for an unbounded buffer. 256 comfortably covers this
+/// path's own historical range (segment counts here historically topped
+/// out around 128-256 even before Tessellation became a free-typed value)
+/// — there's no real visual reason to go higher on a *uniform* grid with
+/// no Height to resolve finely in the first place.
+const UNIFORM_MESH_SEGMENTS_MAX: u32 = 256;
 
-/// Builds the given mesh kind at a quality level driven by `tessellation`
-/// (0.0 = coarsest, 1.0 = finest), scaling each mesh's segment counts between
-/// a usable minimum and a smooth maximum. Every mesh gets *some* subdivision
-/// now, even flat-faced ones (`Cube`, and the straight side wall of
-/// `RoundedCylinder`) — height displacement can only bend a face as a ruled
-/// surface between however many vertices it has, so an undivided flat quad
-/// showed none of a height map's actual detail, just the illusion of it from
-/// normal mapping's shading.
-fn tessellated_mesh(kind: MeshKind, tessellation: f32) -> (Vec<Vertex>, Vec<u32>) {
+fn tessellated_mesh(kind: MeshKind, tessellation: u32) -> (Vec<Vertex>, Vec<u32>) {
+    let tessellation = tessellation.min(UNIFORM_MESH_SEGMENTS_MAX);
     match kind {
-        // Rings (pole-to-pole) raised from 96 to 128 to match the same
-        // floor the Cube/Rounded Cube audit settled on, after the owner
-        // asked whether the other meshes had enough resolution too —
-        // segments (192, around the equator) was already comfortably above
-        // it.
-        MeshKind::Sphere => generate_sphere(
-            lerp_segments(8, 128, tessellation),
-            lerp_segments(16, 192, tessellation),
-        ),
-        // 64 segments/face wasn't enough resolution to follow a sharp height
-        // edge without visible faceting even at maximum tessellation,
-        // confirmed live by the owner with a clean hard-edged cutout shape
-        // (not fine texture detail the mesh "should" struggle with) — raised
-        // to 128, doubling the vertex density along each axis (4x the quads
-        // per face). Still not a complete fix for an arbitrarily sharp edge
-        // (no fixed mesh resolution ever fully is), but a meaningfully
-        // smaller artifact; see PROGRESS.md.
-        MeshKind::Cube => generate_rounded_cube(lerp_segments(4, 128, tessellation), 0.0),
-        MeshKind::Plane => generate_plane(lerp_segments(8, 256, tessellation)),
-        MeshKind::RoundedCube => generate_rounded_cube(lerp_segments(4, 128, tessellation), 0.25),
-        // Fillet/wall segments (the vertical axis) doubled from 24/48 to
-        // 48/96 for the same reason as Sphere above — their sum (~72) was
-        // noticeably below the new floor. radial_segments (192, around the
-        // circumference) was already well above it.
+        // Historically ranged 8..128 (rings) / 16..192 (equator segments)
+        // against Cube/Rounded Cube's own 4..128 — ratios 1x and 1.5x.
+        MeshKind::Sphere => generate_sphere(tessellation, scaled(tessellation, 1.5)),
+        MeshKind::Cube => generate_rounded_cube(tessellation, 0.0),
+        // Historically ranged 8..256 against Cube/Rounded Cube's 4..128 —
+        // ratio 2x.
+        MeshKind::Plane => generate_plane(scaled(tessellation, 2.0)),
+        MeshKind::RoundedCube => generate_rounded_cube(tessellation, 0.25),
+        // Historically ranged 16..192 (radial) / 2..48 (fillet) / 2..96
+        // (wall) against Cube/Rounded Cube's 4..128 — ratios 1.5x, 0.375x,
+        // 0.75x.
         MeshKind::RoundedCylinder => generate_rounded_cylinder(
-            lerp_segments(16, 192, tessellation),
-            lerp_segments(2, 48, tessellation),
-            lerp_segments(2, 96, tessellation),
+            scaled(tessellation, 1.5),
+            scaled(tessellation, 0.375),
+            scaled(tessellation, 0.75),
             0.3,
         ),
     }
@@ -1073,8 +1452,12 @@ fn generate_sphere(rings: u32, segments: u32) -> (Vec<Vertex>, Vec<u32>) {
 /// `radius: 0.0` degenerates cleanly to a plain sharp-edged cube (`clamped`
 /// never actually clamps anything, so every vertex just stays where the grid
 /// put it) — `MeshKind::Cube` uses exactly that rather than a separate
-/// unsubdivided cube generator, since a flat-faced-but-undivided mesh has no
-/// geometry for height displacement to bend.
+/// unsubdivided cube generator, reusing this one generator for both. Each
+/// face's own shared-edge vertices get welded to their neighbor's
+/// afterward (see [`weld_seam_vertices`]) — needed because height moves
+/// vertices: without it, two faces' independently-generated copies of a
+/// shared edge point (same position, different UVs) displace to different
+/// final positions and tear the mesh open there.
 fn generate_rounded_cube(segments: u32, radius: f32) -> (Vec<Vertex>, Vec<u32>) {
     let radius = radius.clamp(0.0, 1.0);
     let inner = 1.0 - radius;
@@ -1134,24 +1517,18 @@ fn generate_rounded_cube(segments: u32, radius: f32) -> (Vec<Vertex>, Vec<u32>) 
 /// Welds vertices that land at the same physical position but came from
 /// different faces — every edge of this per-face-UV-mapped cube has
 /// exactly that (two faces' independently generated vertex grids meeting
-/// at the same edge, but on opposite sides of a UV seam). Without this,
-/// height displacement — which reads each vertex's own UV to sample the
-/// Height texture (`vs_main` in `viewport3d.wgsl`) — pulls each face's
-/// copy of a shared edge point by a *different* amount, whatever that
-/// face's own, unrelated UV happens to sample there, tearing the mesh
-/// open into a visible crack along every cube edge with any height
-/// contrast nearby — worse with more height detail, and *not* fixed by
-/// raising tessellation, since the crack isn't a resolution problem: it's
-/// two genuinely different target positions for what should be one
-/// shared point. Welding makes every triangle on both sides of a seam
-/// reference the exact same vertex, so there is no way for them to end up
-/// in different places — at the cost of a thin, one-row sliver where the
+/// at the same edge, but on opposite sides of a UV seam). Needed because
+/// height actually displaces vertices (`viewport3d.wgsl`'s `vs_main`):
+/// two different UVs sampling two different heights would otherwise pull
+/// a shared edge point to two different final positions, tearing the mesh
+/// open there. Welding forces both sides to share one vertex — one UV,
+/// one height sample, one final position — so there's no seam left for
+/// that to happen across, at the cost of a thin, one-row sliver where the
 /// *losing* face's own edge row shows the winning face's color instead of
-/// its own, the standard, much less visible trade-off box-mapped meshes
-/// accept instead of an open seam. Call after `compute_tangents`, not
-/// before — each vertex's tangent should come from its own face's UV
-/// gradient, not get confused by a weld that's about to make two
-/// differently-UV'd vertices share an index.
+/// its own. Call after `compute_tangents`, not before — each vertex's
+/// tangent should come from its own face's UV gradient, not get confused
+/// by a weld that's about to make two differently-UV'd vertices share an
+/// index.
 fn weld_seam_vertices(vertices: &[Vertex], indices: &mut [u32]) {
     // Quantized to 1e-6 — far finer than any real edge length this mesh
     // ever produces (even at the maximum 128 segments, the shortest edge
@@ -1274,9 +1651,9 @@ fn generate_rounded_cylinder(
     // The straight side wall, same radius/normal throughout — subdivided
     // along its height so vertex displacement has enough geometry to
     // actually trace the height map's detail. A single edge from top to
-    // bottom (as this used to be) can only bend the whole wall as one flat
-    // ruled strip between two displaced rings, which isn't fine enough to
-    // show anything but the broadest height variation.
+    // bottom can only bend the whole wall as one flat ruled strip between
+    // two displaced rings, which isn't fine enough to show anything but
+    // the broadest height variation.
     for i in 1..wall_segments {
         let t = i as f32 / wall_segments as f32;
         profile.push(ProfilePoint {
@@ -1409,51 +1786,163 @@ fn compute_tangents(vertices: &mut [Vertex], indices: &[u32]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_rounded_cube, Viewport3d};
+    use super::{
+        height_evaluation_hash, tessellated_mesh, uniform_bytes, CurrentMesh, MeshKind,
+        RenderSettings, ShadingMode, Viewport3d, TESSELLATION_MAX, UNIFORM_MESH_SEGMENTS_MAX,
+    };
 
-    /// Regression test for a reported bug: raising Height Scale on a Cube
-    /// or Rounded Cube tore the mesh open at its edges (a visible crack
-    /// showing the background through it), and raising Tessellation never
-    /// fixed it — because it wasn't a resolution problem. Each of the 6
-    /// faces generates its own independent UV-mapped vertex grid; two
-    /// faces' vertices at a shared edge sit at the exact same position but
-    /// carry different UVs, so height displacement (which reads each
-    /// vertex's own UV) pulled them to different final positions. This
-    /// asserts the actual fix's own invariant: among every vertex index
-    /// the mesh's triangles reference, no two *different* indices ever
-    /// point at the same physical position — so there's no shared edge
-    /// point left for displacement to disagree about.
+    /// `TESSELLATION_MAX` (4096) is deliberately independent of the graph's
+    /// output Resolution now, but every *uniform*-grid mesh kind (no Height
+    /// connected, or any mesh kind other than Cube/Rounded Cube) has no
+    /// other protection against building an enormous CPU vertex/index
+    /// buffer directly from that number — confirms `tessellated_mesh`
+    /// actually clamps to `UNIFORM_MESH_SEGMENTS_MAX` regardless, for every
+    /// mesh kind, rather than silently trusting the slider's own range.
     #[test]
-    fn rounded_cube_has_no_duplicate_indices_at_shared_edge_positions() {
-        for radius in [0.0, 0.25] {
-            let (vertices, indices) = generate_rounded_cube(4, radius);
-            let key = |p: [f32; 3]| -> (i64, i64, i64) {
-                const SCALE: f32 = 1_000_000.0;
-                (
-                    (p[0] * SCALE).round() as i64,
-                    (p[1] * SCALE).round() as i64,
-                    (p[2] * SCALE).round() as i64,
-                )
-            };
-            let mut index_by_position: std::collections::HashMap<(i64, i64, i64), u32> =
-                std::collections::HashMap::new();
-            for &idx in &indices {
-                let pos = vertices[idx as usize].position;
-                let k = key(pos);
-                match index_by_position.get(&k) {
-                    Some(&existing) => assert_eq!(
-                        existing, idx,
-                        "radius {radius}: two different vertex indices ({existing} and {idx}) \
-                         reference the same position {pos:?} — a shared cube edge wasn't \
-                         welded, which is exactly what tears the mesh open under height \
-                         displacement"
-                    ),
-                    None => {
-                        index_by_position.insert(k, idx);
-                    }
-                }
-            }
+    fn uniform_mesh_clamps_segment_count_even_at_the_sliders_own_max() {
+        for kind in MeshKind::ALL {
+            let (vertices, _) = tessellated_mesh(kind, TESSELLATION_MAX);
+            let max_plausible_vertices = 6 * (UNIFORM_MESH_SEGMENTS_MAX as usize + 1).pow(2) * 4;
+            assert!(
+                vertices.len() <= max_plausible_vertices,
+                "{kind:?}: {} vertices at Tessellation={TESSELLATION_MAX} — UNIFORM_MESH_SEGMENTS_MAX \
+                 doesn't seem to be clamping this mesh kind",
+                vertices.len()
+            );
         }
+    }
+
+    /// Renders one frame of `viewport` (whatever `mesh_kind`/`height_scale`/
+    /// camera it's already configured with) to an offscreen `width`×`height`
+    /// `Rgba8Unorm` target and reads it back — the same GPU work
+    /// `Viewport3d::render` does, minus the `egui_wgpu::RenderState`
+    /// bits (registering the result as a displayable egui texture), which
+    /// only matter for showing it in a window, not for verifying the
+    /// shader's own math. Lets a regression test actually look at rendered
+    /// pixels instead of guessing from a screenshot.
+    fn render_offscreen(
+        viewport: &mut Viewport3d,
+        gpu: &mut mc_gpu::Context,
+        pool: &mc_gpu::TexturePool,
+        graph: &mc_core::Graph,
+        resolution: u32,
+    ) -> Vec<u8> {
+        let color_texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("test color target"),
+            size: wgpu::Extent3d {
+                width: resolution,
+                height: resolution,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("test depth target"),
+            size: wgpu::Extent3d {
+                width: resolution,
+                height: resolution,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let texture_bind_group = viewport.build_texture_bind_group(gpu, pool, graph);
+
+        let desired_key = (
+            viewport.mesh_kind,
+            viewport.tessellation,
+            height_evaluation_hash(graph),
+        );
+        if desired_key != viewport.current_mesh_key {
+            viewport.current_mesh = viewport.build_and_upload_mesh(
+                viewport.mesh_kind,
+                viewport.tessellation,
+                gpu,
+                pool,
+                graph,
+            );
+            viewport.current_mesh_key = desired_key;
+        }
+        let tess = match &viewport.current_mesh {
+            CurrentMesh::Uniform { .. } => (0.0, 0.0, 0.0),
+            CurrentMesh::Tessellated {
+                n_global,
+                tex_size,
+                mip_count,
+                ..
+            } => (*n_global as f32, *tex_size as f32, *mip_count as f32),
+        };
+
+        let aspect = 1.0;
+        let eye = viewport.eye_position();
+        let view = glam::camera::rh::view::look_at_mat4(eye, viewport.target, glam::Vec3::Y);
+        let proj =
+            glam::camera::rh::proj::directx::perspective(60f32.to_radians(), aspect, 0.1, 100.0);
+        let light_dir = glam::Vec3::new(-0.4, -1.0, -0.3).normalize();
+        let bytes = uniform_bytes(
+            proj * view,
+            eye,
+            light_dir,
+            viewport.environment_ambient_color,
+            RenderSettings {
+                height_scale: viewport.height_scale,
+                shading_mode: ShadingMode::Lit,
+                exposure: viewport.exposure,
+                environment_intensity: viewport.environment_intensity,
+                environment_blur: viewport.environment_blur,
+                tess,
+            },
+        );
+        gpu.queue.write_buffer(&viewport.uniform_buffer, 0, &bytes);
+
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("test encoder"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("test pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            viewport.record_draw(&mut pass, &texture_bind_group, false);
+        }
+        gpu.queue.submit(Some(encoder.finish()));
+
+        gpu.read_rgba8(&color_texture, resolution)
     }
 
     /// Regression test for a crash found by manual testing: wiring Gabor
@@ -1484,5 +1973,187 @@ mod tests {
         let viewport = Viewport3d::new(&gpu);
         // Would panic inside wgpu validation before the fix.
         let _bind_group = viewport.build_texture_bind_group(&mut gpu, &pool, &graph);
+    }
+
+    /// Confirms Height actually displaces real geometry again (reverted
+    /// from a per-pixel parallax shift — see `viewport3d.wgsl`'s module
+    /// doc comment for why: parallax never moves the mesh's own
+    /// silhouette, only which texel is shown where, which read as the
+    /// texture visibly swimming/crawling as the camera orbited — a real
+    /// per-vertex offset doesn't have that problem, because it's actual
+    /// geometry). A Plane with Height = 1.0 across its far half (raised
+    /// toward the camera, which sits above it) should cover visibly more
+    /// of the frame at a large Height Scale than at zero — a change in
+    /// silhouette area is only possible with real displacement; a pure
+    /// shading effect like parallax can never change it at all.
+    #[test]
+    fn height_scale_visibly_changes_the_meshs_own_silhouette() {
+        let mut graph = mc_core::Graph::new();
+        let base_color_source = graph.add_node(mc_core::Node::new("uniform_color"));
+        let base_color_output = graph.add_node(mc_core::Node::new("output_base_color"));
+        graph
+            .connect(base_color_source, "output", base_color_output, "input")
+            .unwrap();
+        let height_source = graph.add_node(mc_core::Node::new("uniform_color"));
+        let height_output = graph.add_node(mc_core::Node::new("output_height"));
+        graph
+            .connect(height_source, "output", height_output, "input")
+            .unwrap();
+        let resolution = 128;
+        graph.settings.resolution = resolution;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        mc_nodes::registry::evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        // A bright, solid Base Color against the viewport's own dark clear
+        // color, and a Height field that's fully raised (1.0) across the
+        // texture's far (v < 0.5) half — `generate_plane`'s own UV
+        // convention maps that to the edge of the plane farthest from the
+        // default camera, which sits above and in front of it, so raising
+        // that edge moves it up and toward the camera.
+        let base_color_key =
+            mc_nodes::registry::resolve_texture_key(&graph, base_color_output).unwrap();
+        let bright = vec![[1.0f32, 1.0, 1.0, 1.0]; (resolution * resolution) as usize];
+        gpu.write_rgba16f(&mut pool, &base_color_key, resolution, &bright);
+
+        let height_key = mc_nodes::registry::resolve_texture_key(&graph, height_output).unwrap();
+        let half_raised: Vec<[f32; 4]> = (0..resolution * resolution)
+            .map(|i| {
+                let y = i / resolution;
+                if y < resolution / 2 {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    [0.0, 0.0, 0.0, 1.0]
+                }
+            })
+            .collect();
+        gpu.write_rgba16f(&mut pool, &height_key, resolution, &half_raised);
+
+        let mut viewport = Viewport3d::new(&gpu);
+        viewport.mesh_kind = super::MeshKind::Plane;
+        viewport.shading_mode = ShadingMode::UnlitBaseColor;
+
+        let count_mesh_pixels = |pixels: &[u8]| -> usize {
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| p[0] > 128)
+                .count()
+        };
+
+        viewport.height_scale = 0.0;
+        let flat = render_offscreen(&mut viewport, &mut gpu, &pool, &graph, resolution);
+        let flat_count = count_mesh_pixels(&flat);
+
+        viewport.height_scale = 0.8;
+        let raised = render_offscreen(&mut viewport, &mut gpu, &pool, &graph, resolution);
+        let raised_count = count_mesh_pixels(&raised);
+
+        assert!(
+            flat_count > 0,
+            "the flat plane should cover a visible part of the frame at all"
+        );
+        assert_ne!(
+            flat_count, raised_count,
+            "raising half the plane by a large Height Scale should visibly change how much of \
+             the frame its silhouette covers — if it doesn't, Height isn't actually displacing \
+             geometry"
+        );
+    }
+
+    /// End-to-end exercise of the GPU vertex-pulling tessellation path
+    /// (`build_and_upload_mesh`'s `CurrentMesh::Tessellated` branch,
+    /// `vs_main_tess`) through the real `Viewport3d` API — not just
+    /// `tess_gpu`'s own lower-level harness — for Rounded Cube with a real
+    /// Height node connected. Confirms it renders without error at a
+    /// Tessellation value well past `BASE_FILLET_SEGMENTS`'s own base
+    /// triangle count (so this is genuinely exercising per-base-triangle
+    /// subdivision, not accidentally staying at N=1), covers a real part
+    /// of the frame, and that Height Scale visibly changes the mesh's own
+    /// silhouette here too (the same displacement proof
+    /// `height_scale_visibly_changes_the_meshs_own_silhouette` already
+    /// established for the plain-vertex-buffer Plane path).
+    #[test]
+    fn tessellated_rounded_cube_renders_and_displaces() {
+        let mut graph = mc_core::Graph::new();
+        let base_color_source = graph.add_node(mc_core::Node::new("uniform_color"));
+        let base_color_output = graph.add_node(mc_core::Node::new("output_base_color"));
+        graph
+            .connect(base_color_source, "output", base_color_output, "input")
+            .unwrap();
+        let height_source = graph.add_node(mc_core::Node::new("uniform_color"));
+        let height_output = graph.add_node(mc_core::Node::new("output_height"));
+        graph
+            .connect(height_source, "output", height_output, "input")
+            .unwrap();
+        let resolution = 64;
+        graph.settings.resolution = resolution;
+
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        mc_nodes::registry::evaluate(&mut gpu, &mut pool, &mut graph).expect("graph evaluates");
+
+        let base_color_key =
+            mc_nodes::registry::resolve_texture_key(&graph, base_color_output).unwrap();
+        let bright = vec![[1.0f32, 1.0, 1.0, 1.0]; (resolution * resolution) as usize];
+        gpu.write_rgba16f(&mut pool, &base_color_key, resolution, &bright);
+
+        // A checkerboard, not a flat value — flat Height produces zero
+        // contrast (the earlier `adaptive_mesh` bug class relied on real
+        // contrast to show up at all) and this exercises many base
+        // triangles sampling genuinely different heights, not just one.
+        let height_key = mc_nodes::registry::resolve_texture_key(&graph, height_output).unwrap();
+        let checker: Vec<[f32; 4]> = (0..resolution * resolution)
+            .map(|i| {
+                let (x, y) = (i % resolution, i / resolution);
+                if (x / 8 + y / 8) % 2 == 0 {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    [0.0, 0.0, 0.0, 1.0]
+                }
+            })
+            .collect();
+        gpu.write_rgba16f(&mut pool, &height_key, resolution, &checker);
+
+        let mut viewport = Viewport3d::new(&gpu);
+        viewport.mesh_kind = super::MeshKind::RoundedCube;
+        viewport.shading_mode = ShadingMode::UnlitBaseColor;
+        // Comfortably past `BASE_FILLET_SEGMENTS` (12) and within
+        // `MAX_TESS_TRIANGLES`'s budget for a 1,728-base-triangle mesh.
+        viewport.tessellation = 32;
+
+        let count_mesh_pixels = |pixels: &[u8]| -> usize {
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| p[0] > 128)
+                .count()
+        };
+
+        viewport.height_scale = 0.0;
+        let flat = render_offscreen(&mut viewport, &mut gpu, &pool, &graph, resolution);
+        let flat_count = count_mesh_pixels(&flat);
+        assert!(
+            flat_count > 0,
+            "the rounded cube should cover a visible part of the frame at all"
+        );
+        assert!(
+            matches!(viewport.current_mesh, CurrentMesh::Tessellated { .. }),
+            "Rounded Cube with a Height node connected should take the tessellated path, not the \
+             plain uniform-grid one"
+        );
+
+        viewport.height_scale = 0.3;
+        let raised = render_offscreen(&mut viewport, &mut gpu, &pool, &graph, resolution);
+        let raised_count = count_mesh_pixels(&raised);
+        assert_ne!(
+            flat_count, raised_count,
+            "raising Height Scale on a checkerboard height map should visibly change the \
+             tessellated mesh's own silhouette — if it doesn't, vs_main_tess isn't actually \
+             displacing geometry"
+        );
     }
 }

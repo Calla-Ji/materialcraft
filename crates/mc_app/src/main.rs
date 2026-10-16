@@ -10,6 +10,7 @@
 //! undo/redo.
 
 mod add_node_menu;
+mod async_dialog;
 mod autosave;
 mod canvas;
 mod dialog_chrome;
@@ -24,6 +25,8 @@ mod path_editor;
 mod preset_graph;
 mod splash;
 mod svg_import_dialog;
+mod tess_gpu;
+mod tess_mesh;
 mod theme;
 mod toast;
 mod twod_toolbar;
@@ -31,8 +34,14 @@ mod viewport3d;
 mod viewport3d_panels;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use canvas::CanvasState;
+
+/// Same list `export_dialog.rs` and `splash.rs` each already have their own
+/// copy of — kept a third, separate copy here rather than sharing one,
+/// matching how those two already don't share it with each other.
+const RESOLUTIONS: [u32; 5] = [256, 512, 1024, 2048, 4096];
 
 /// 2D View's own pan/zoom/tiling-preview state — view-only, not part of the
 /// graph or any node's params.
@@ -113,6 +122,24 @@ struct MaterialCreatorApp {
     /// same reason `export_dialog`'s own real export runs from there
     /// rather than from `params_panel.rs` itself.
     pending_svg_export: Option<mc_core::NodeId>,
+    /// `do_open`/`do_save_as`/the HDRI loader's own in-flight native
+    /// dialog — see `async_dialog.rs`'s own doc comment for why these go
+    /// through `rfd::AsyncFileDialog` instead of the simpler-looking
+    /// synchronous `rfd::FileDialog` API every one of these used to call
+    /// directly: a real crash report showed the synchronous version
+    /// aborting the whole process when a gesture event arrived while the
+    /// native panel was open.
+    pending_open: Option<async_dialog::PendingDialog<Option<rfd::FileHandle>>>,
+    pending_save_as: Option<async_dialog::PendingDialog<Option<rfd::FileHandle>>>,
+    pending_hdri_load: Option<async_dialog::PendingDialog<Option<rfd::FileHandle>>>,
+    /// Same idea, for the Image Trace "Export SVG…" flow above — also
+    /// carries the already-computed SVG text across the async gap, since
+    /// it has to wait for the save panel's own result before it knows
+    /// where to write it.
+    pending_svg_export_save: Option<(String, async_dialog::PendingDialog<Option<rfd::FileHandle>>)>,
+    /// Image Import's own in-flight dialog — see
+    /// `params_panel::PendingImageImport`'s own doc comment.
+    pending_image_import: Option<params_panel::PendingImageImport>,
     viewport3d: viewport3d::Viewport3d,
     viewport_panels: viewport3d_panels::ViewportPanels,
     dock: dock::DockLayout,
@@ -131,6 +158,27 @@ struct MaterialCreatorApp {
     /// a persistent error would spam a fresh toast on every single frame
     /// instead of once when it first appears.
     last_eval_error: Option<String>,
+    /// `true` for exactly one frame before a heavy recompute (a Resolution
+    /// change or a freshly loaded/new graph, both of which mark everything
+    /// dirty at once) actually runs — see this field's own use in `ui()`
+    /// for why: it lets a "Recalculating…" pill actually get painted and
+    /// presented *before* `registry::evaluate`'s own call blocks the UI
+    /// thread, rather than the screen just freezing on whatever was on
+    /// screen before the edit with no feedback at all (confirmed by
+    /// hands-on testing to look exactly like a crash). Set only from the
+    /// two specific, deliberate triggers above — *not* inferred from "how
+    /// many nodes are currently dirty," which an earlier version of this
+    /// tried and got wrong: adding even one new node to a small graph can
+    /// make a majority of it "dirty" by that measure, which flickered the
+    /// pill/dim-veil on completely routine node-graph editing (reported
+    /// directly as "the screen started flimmering" while adding nodes).
+    recompute_in_progress: bool,
+    /// The Resolution this app last actually evaluated at — compared
+    /// against `self.graph.settings.resolution` each frame purely to
+    /// detect a *change*, which is what sets `recompute_in_progress`
+    /// (every node's evaluation hash depends on it, so changing it marks
+    /// the entire graph dirty at once — see `Graph::evaluation_hash`).
+    last_known_resolution: u32,
 
     autosave: autosave::Autosave,
     /// Set at startup if a recovery file from a previous, uncleanly-ended
@@ -171,6 +219,33 @@ impl eframe::App for MaterialCreatorApp {
                     if ui.button("Export…").clicked() {
                         self.export_dialog.open = true;
                     }
+                    ui.add_space(4.0);
+                    ui.separator();
+                    // Live working resolution — changing it needs no special
+                    // handling beyond the plain assignment below: every
+                    // node's own evaluation hash already includes
+                    // `settings.resolution` (`Graph::evaluation_hash`), so
+                    // the whole graph re-evaluates at the new size on the
+                    // very next frame; `TexturePool::get_or_create` already
+                    // recreates a texture when the requested size changed;
+                    // and both the 2D View's own preview texture and the 3D
+                    // viewport's texture bind group are rebuilt fresh every
+                    // frame (never cached across frames), so neither one can
+                    // end up holding a stale, wrong-sized texture. Not
+                    // undo-tracked — same precedent as `set_node_position`
+                    // and the splash screen's own initial resolution choice,
+                    // neither of which go through the Command system either.
+                    egui::ComboBox::from_label("Resolution")
+                        .selected_text(format!("{0}x{0}", self.graph.settings.resolution))
+                        .show_ui(ui, |ui| {
+                            for &resolution in &RESOLUTIONS {
+                                ui.selectable_value(
+                                    &mut self.graph.settings.resolution,
+                                    resolution,
+                                    format!("{resolution}x{resolution}"),
+                                );
+                            }
+                        });
                     ui.add_space(4.0);
                     ui.separator();
                     if ui
@@ -265,26 +340,103 @@ impl eframe::App for MaterialCreatorApp {
 
         // Re-evaluate whatever the previous frame's edits (including
         // anything undo/redo just changed) left dirty, before any panel
-        // reads from `self.pool`.
-        match mc_nodes::registry::evaluate(&mut self.gpu, &mut self.pool, &mut self.graph) {
-            Ok(()) => self.last_eval_error = None,
-            // A required input not being connected yet is completely normal
-            // mid-edit state (e.g. a node just dragged in, not wired up
-            // yet) — `registry::evaluate`'s own doc comment calls this out
-            // explicitly. It isn't worth alarming the artist over; the
-            // node's pin/wire coloring already shows what's unconnected.
-            Err(mc_nodes::registry::EvalError::MissingInput(..)) => {
-                self.last_eval_error = None;
+        // reads from `self.pool` — runs every single frame, same as always,
+        // *except* the one frame right after a heavy-recompute trigger
+        // fires (a Resolution change, or `replace_graph` for New/Open),
+        // which instead skips straight to painting the "Recalculating…"
+        // pill below so it has a chance to actually reach the screen before
+        // the deferred `evaluate` call (next frame) blocks the UI thread.
+        //
+        // An earlier version of this gated `evaluate` itself behind
+        // `recompute_in_progress` — i.e. only ever called it on the one
+        // deferred frame — which silently stopped *all* routine graph
+        // editing (adding a node, connecting a wire, a param tweak) from
+        // ever evaluating again, since none of those set that flag. Caught
+        // via a direct report: "it seems to apply to all nodes... No node
+        // is showing a previsualization right now."
+        if self.recompute_in_progress {
+            // The deferred frame: do the (possibly heavy) work now.
+            self.run_graph_evaluation();
+            self.recompute_in_progress = false;
+        } else {
+            let resolution_changed = self.graph.settings.resolution != self.last_known_resolution;
+            self.last_known_resolution = self.graph.settings.resolution;
+            if resolution_changed {
+                self.recompute_in_progress = true;
+                // eframe only repaints on input/animation by default — this
+                // forces the next frame (the one that actually calls
+                // `evaluate`) to run immediately instead of waiting idle
+                // for a mouse move that may not come.
+                ui.ctx().request_repaint();
+            } else {
+                // The ordinary case, every other frame: evaluate immediately,
+                // same as this app has always done.
+                self.run_graph_evaluation();
             }
-            Err(err) => {
-                log::warn!("graph evaluation error: {err}");
-                let message = err.to_string();
-                if self.last_eval_error.as_deref() != Some(message.as_str()) {
-                    self.toasts
-                        .error(format!("Graph evaluation failed: {message}"));
-                }
-                self.last_eval_error = Some(message);
-            }
+        }
+
+        if self.recompute_in_progress {
+            // Same dim veil `splash.rs`'s own first-launch prompt uses
+            // (`Order::Middle`, non-interactable — purely visual, a click
+            // still reaches whatever's underneath, which doesn't matter
+            // anyway since input is about to go unresponsive once
+            // `evaluate` actually blocks) — makes the pill read as a real,
+            // distinct state rather than just another floating label
+            // competing with the panels behind it.
+            egui::Area::new(egui::Id::new("materialcreator_recompute_veil"))
+                .order(egui::Order::Middle)
+                .fixed_pos(egui::Pos2::ZERO)
+                .interactable(false)
+                .fade_in(false)
+                .show(ui.ctx(), |ui| {
+                    ui.painter().rect_filled(
+                        ui.ctx().content_rect(),
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(0x13, 0x17, 0x18, 140),
+                    );
+                });
+
+            egui::Area::new(egui::Id::new("materialcreator_recompute_pill"))
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .order(egui::Order::Foreground)
+                // `Area` fades in new content over its first few frames by
+                // default — this pill often only lives for exactly one
+                // frame before the heavy recompute it's warning about
+                // blocks the UI thread, so with the default fade it never
+                // got past "barely visible" before the freeze hit (reported
+                // directly: "I couldn't see any pill"). It needs to be at
+                // full opacity on its very first frame, since that's the
+                // frame that stays frozen on screen for the whole stall.
+                .fade_in(false)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style())
+                        .fill(crate::theme::NEUTRON_STAR)
+                        .inner_margin(egui::Margin::symmetric(32, 24))
+                        .corner_radius(12.0)
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 16.0;
+                                    ui.add(
+                                        egui::Spinner::new()
+                                            .color(crate::theme::SUPERNOVA_LIGHT)
+                                            .size(28.0),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new("Recalculating…")
+                                            .color(crate::theme::SUPERNOVA_LIGHT)
+                                            .size(22.0),
+                                    );
+                                });
+                                ui.add_space(6.0);
+                                ui.label(
+                                    egui::RichText::new("This might take up to 1 minute.")
+                                        .color(crate::theme::SUPERNOVA_LIGHT.gamma_multiply(0.6))
+                                        .size(14.0),
+                                );
+                            });
+                        });
+                });
         }
 
         // 2D View, 3D View, Node Graph, and Parameters are dock cells (see
@@ -323,11 +475,12 @@ impl eframe::App for MaterialCreatorApp {
             gpu,
             pool,
             render_state,
-            toasts,
             two_d_view,
             path_editor,
             svg_import_dialog,
             pending_svg_export,
+            pending_hdri_load,
+            pending_image_import,
             ..
         } = self;
 
@@ -351,6 +504,7 @@ impl eframe::App for MaterialCreatorApp {
                         param_drag,
                         path_editor,
                         pending_svg_export,
+                        pending_image_import,
                     );
                 }
                 dock::CrateId::TwoDView => {
@@ -648,12 +802,21 @@ impl eframe::App for MaterialCreatorApp {
                                             )
                                             .text("Height Scale"),
                                         );
+                                        // Ceiling is fixed, independent of the graph's own
+                                        // output Resolution — see `TESSELLATION_MAX`'s own doc
+                                        // comment for why a lower-resolution graph shouldn't
+                                        // also silently cap this.
                                         ui.add(
                                             egui::Slider::new(
                                                 &mut viewport3d.tessellation,
-                                                0.0..=1.0,
+                                                viewport3d::TESSELLATION_MIN
+                                                    ..=viewport3d::TESSELLATION_MAX,
                                             )
-                                            .text("Tessellation Density"),
+                                            .text("Tessellation")
+                                            .logarithmic(true),
+                                        )
+                                        .on_hover_text(
+                                            "Drag, or click the number to type an exact value.",
                                         );
                                         ui.separator();
                                         let mut unlit = viewport3d.shading_mode
@@ -738,23 +901,12 @@ impl eframe::App for MaterialCreatorApp {
                                             ui.add_space(4.0);
                                         }
                                         if ui.button("Load custom HDRI\u{2026}").clicked() {
-                                            if let Some(path) = rfd::FileDialog::new()
-                                                .add_filter("HDRI", &["hdr", "exr"])
-                                                .pick_file()
-                                            {
-                                                if let Err(err) =
-                                                    viewport3d.set_environment_custom(gpu, &path)
-                                                {
-                                                    log::warn!(
-                                                        "failed to load HDRI {}: {err}",
-                                                        path.display()
-                                                    );
-                                                    toasts.error(format!(
-                                                        "Couldn't load {}: {err}",
-                                                        path.display()
-                                                    ));
-                                                }
-                                            }
+                                            *pending_hdri_load =
+                                                Some(async_dialog::PendingDialog::new(
+                                                    rfd::AsyncFileDialog::new()
+                                                        .add_filter("HDRI", &["hdr", "exr"])
+                                                        .pick_file(),
+                                                ));
                                         }
                                         ui.separator();
                                         ui.spacing_mut().slider_width = 80.0;
@@ -956,17 +1108,61 @@ impl eframe::App for MaterialCreatorApp {
 
             match svg {
                 Some(svg) => {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("SVG", &["svg"])
-                        .set_file_name("trace.svg")
-                        .save_file()
-                    {
-                        if let Err(err) = std::fs::write(&path, svg) {
-                            log::warn!("failed to write {}: {err}", path.display());
-                        }
-                    }
+                    self.pending_svg_export_save = Some((
+                        svg,
+                        async_dialog::PendingDialog::new(
+                            rfd::AsyncFileDialog::new()
+                                .add_filter("SVG", &["svg"])
+                                .set_file_name("trace.svg")
+                                .save_file(),
+                        ),
+                    ));
                 }
                 None => log::warn!("image_trace export: nothing to export for node {id:?}"),
+            }
+        }
+
+        if let Some((svg, pending)) = &mut self.pending_svg_export_save {
+            if let Some(result) = pending.poll(ui.ctx()) {
+                if let Some(handle) = result {
+                    let path = handle.path().to_path_buf();
+                    if let Err(err) = std::fs::write(&path, &*svg) {
+                        log::warn!("failed to write {}: {err}", path.display());
+                    }
+                }
+                self.pending_svg_export_save = None;
+            }
+        }
+
+        if let Some(pending) = &mut self.pending_open {
+            if let Some(result) = pending.poll(ui.ctx()) {
+                self.pending_open = None;
+                if let Some(handle) = result {
+                    self.open_path(handle.path().to_path_buf());
+                }
+            }
+        }
+
+        if let Some(pending) = &mut self.pending_save_as {
+            if let Some(result) = pending.poll(ui.ctx()) {
+                self.pending_save_as = None;
+                if let Some(handle) = result {
+                    self.save_to(handle.path().to_path_buf());
+                }
+            }
+        }
+
+        if let Some(pending) = &mut self.pending_hdri_load {
+            if let Some(result) = pending.poll(ui.ctx()) {
+                self.pending_hdri_load = None;
+                if let Some(handle) = result {
+                    let path = handle.path();
+                    if let Err(err) = self.viewport3d.set_environment_custom(&self.gpu, path) {
+                        log::warn!("failed to load HDRI {}: {err}", path.display());
+                        self.toasts
+                            .error(format!("Couldn't load {}: {err}", path.display()));
+                    }
+                }
             }
         }
 
@@ -1001,6 +1197,34 @@ impl MaterialCreatorApp {
     /// not just the graph field itself, so nothing stale lingers (a node ID
     /// from the old graph reused by the new one would otherwise find an
     /// orphaned texture already sitting in the pool under that key).
+    /// Evaluates whatever's currently dirty and reports the result exactly
+    /// like every frame always has — factored out so both call sites in
+    /// `ui()` (the ordinary every-frame case, and the one deferred frame
+    /// right after a heavy-recompute trigger) share the same error
+    /// handling instead of risking it drifting apart between two copies.
+    fn run_graph_evaluation(&mut self) {
+        match mc_nodes::registry::evaluate(&mut self.gpu, &mut self.pool, &mut self.graph) {
+            Ok(()) => self.last_eval_error = None,
+            // A required input not being connected yet is completely normal
+            // mid-edit state (e.g. a node just dragged in, not wired up
+            // yet) — `registry::evaluate`'s own doc comment calls this out
+            // explicitly. It isn't worth alarming the artist over; the
+            // node's pin/wire coloring already shows what's unconnected.
+            Err(mc_nodes::registry::EvalError::MissingInput(..)) => {
+                self.last_eval_error = None;
+            }
+            Err(err) => {
+                log::warn!("graph evaluation error: {err}");
+                let message = err.to_string();
+                if self.last_eval_error.as_deref() != Some(message.as_str()) {
+                    self.toasts
+                        .error(format!("Graph evaluation failed: {message}"));
+                }
+                self.last_eval_error = Some(message);
+            }
+        }
+    }
+
     fn replace_graph(&mut self, graph: mc_core::Graph, path: Option<std::path::PathBuf>) {
         self.graph = graph;
         self.current_path = path;
@@ -1017,6 +1241,12 @@ impl MaterialCreatorApp {
         // yet, so any leftover crash-recovery snapshot from a previous
         // session is now stale.
         autosave::Autosave::clear();
+        // A just-loaded graph's very first evaluation is everything, at
+        // whatever resolution it was saved at — worth the same
+        // "Recalculating…" warning as a Resolution change (see
+        // `recompute_in_progress`'s own doc comment).
+        self.recompute_in_progress = true;
+        self.last_known_resolution = self.graph.settings.resolution;
     }
 
     fn do_new(&mut self) {
@@ -1027,20 +1257,11 @@ impl MaterialCreatorApp {
     }
 
     fn do_open(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("MaterialCreator Graph", &["mcgraph"])
-            .pick_file()
-        else {
-            return;
-        };
-        match mc_core::Graph::load_from_file(&path) {
-            Ok(graph) => self.replace_graph(graph, Some(path)),
-            Err(err) => {
-                log::warn!("failed to open {}: {err}", path.display());
-                self.toasts
-                    .error(format!("Couldn't open {}: {err}", path.display()));
-            }
-        }
+        self.pending_open = Some(async_dialog::PendingDialog::new(
+            rfd::AsyncFileDialog::new()
+                .add_filter("MaterialCreator Graph", &["mcgraph"])
+                .pick_file(),
+        ));
     }
 
     fn do_save(&mut self) {
@@ -1051,14 +1272,27 @@ impl MaterialCreatorApp {
     }
 
     fn do_save_as(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("MaterialCreator Graph", &["mcgraph"])
-            .set_file_name("untitled.mcgraph")
-            .save_file()
-        else {
-            return;
-        };
-        self.save_to(path);
+        self.pending_save_as = Some(async_dialog::PendingDialog::new(
+            rfd::AsyncFileDialog::new()
+                .add_filter("MaterialCreator Graph", &["mcgraph"])
+                .set_file_name("untitled.mcgraph")
+                .save_file(),
+        ));
+    }
+
+    /// Opens `path` as the current graph — the part of `do_open` that
+    /// still has to happen once its own async dialog (see `pending_open`)
+    /// resolves, factored out so it isn't duplicated between there and
+    /// any other future "load this specific path" caller.
+    fn open_path(&mut self, path: std::path::PathBuf) {
+        match mc_core::Graph::load_from_file(&path) {
+            Ok(graph) => self.replace_graph(graph, Some(path)),
+            Err(err) => {
+                log::warn!("failed to open {}: {err}", path.display());
+                self.toasts
+                    .error(format!("Couldn't open {}: {err}", path.display()));
+            }
+        }
     }
 
     fn save_to(&mut self, path: std::path::PathBuf) {
@@ -1344,6 +1578,39 @@ fn main() -> eframe::Result<()> {
             // actual screen on first paint, not a small default window
             // size the splash would otherwise look lost inside of.
             .with_maximized(true),
+        wgpu_options: egui_wgpu::WgpuConfiguration {
+            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
+                // eframe's own default asks for `wgpu::Limits::default()`,
+                // which caps every GPU buffer at 256 MiB regardless of what
+                // the actual hardware supports — a real wall an earlier,
+                // since-replaced CPU-built mesh for the 3D viewport's
+                // Tessellation slider actually hit. The current GPU vertex-
+                // pulling tessellation path (`viewport3d.wgsl`'s
+                // `vs_main_tess`) doesn't upload anything that scales with
+                // Tessellation, so this is now a safety margin rather than a
+                // known-reachable limit — still worth asking for the
+                // adapter's own real limits instead of the conservative
+                // default. On the GL backend (no real adapter-reported
+                // limits to trust) keep the conservative WebGL2 defaults.
+                device_descriptor: Arc::new(|adapter| {
+                    let base_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
+                        wgpu::Limits::downlevel_webgl2_defaults()
+                    } else {
+                        adapter.limits()
+                    };
+                    wgpu::DeviceDescriptor {
+                        label: Some("mc_app wgpu device"),
+                        required_limits: wgpu::Limits {
+                            max_texture_dimension_2d: 8192,
+                            ..base_limits
+                        },
+                        ..Default::default()
+                    }
+                }),
+                ..egui_wgpu::WgpuSetupCreateNew::without_display_handle()
+            }),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -1378,6 +1645,11 @@ fn main() -> eframe::Result<()> {
                 export_dialog: export_dialog::ExportDialogState::default(),
                 svg_import_dialog: svg_import_dialog::SvgImportDialogState::default(),
                 pending_svg_export: None,
+                pending_open: None,
+                pending_save_as: None,
+                pending_hdri_load: None,
+                pending_svg_export_save: None,
+                pending_image_import: None,
                 viewport3d,
                 viewport_panels: viewport3d_panels::ViewportPanels::default(),
                 dock: dock::DockLayout::default(),
@@ -1387,6 +1659,12 @@ fn main() -> eframe::Result<()> {
                 current_path: None,
                 toasts: toast::Toasts::default(),
                 last_eval_error: None,
+                recompute_in_progress: false,
+                // Matches `mc_core::Graph::new()`'s own default resolution
+                // (the empty placeholder graph above, before the splash
+                // screen's own choice calls `replace_graph`) — so the very
+                // first frame doesn't spuriously see a "change".
+                last_known_resolution: 1024,
                 autosave: autosave::Autosave::default(),
                 pending_recovery: autosave::recovery_path().exists(),
                 splash: splash::SplashState::default(),

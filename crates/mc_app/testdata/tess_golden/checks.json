@@ -1,0 +1,125 @@
+{
+ "adapter": "llvmpipe (LLVM 21.1.8, 256 bits)",
+ "cases": {
+  "plane_N5": {
+   "case": "plane_N5",
+   "base_tris": 32,
+   "sub_tris": 800,
+   "N_global": 5,
+   "max_pos_err": 7.152557379708213e-08,
+   "max_h_err": 2.9001006568440957e-07,
+   "gpu_cracked_edges": 0,
+   "gpu_max_gap": 0.0,
+   "N_hist": {
+    "5": 32
+   }
+  },
+  "plane_N1": {
+   "case": "plane_N1",
+   "base_tris": 32,
+   "sub_tris": 32,
+   "N_global": 1,
+   "max_pos_err": 4.142353238201224e-09,
+   "max_h_err": 4.142353238201224e-08,
+   "gpu_cracked_edges": 0,
+   "gpu_max_gap": 0.0,
+   "N_hist": {
+    "1": 32
+   }
+  },
+  "sphere_N5": {
+   "case": "sphere_N5",
+   "base_tris": 120,
+   "sub_tris": 3000,
+   "N_global": 5,
+   "max_pos_err": 1.363750748994974e-07,
+   "max_h_err": 1.3458871401805794e-06,
+   "gpu_cracked_edges": 0,
+   "gpu_max_gap": 0.0,
+   "N_hist": {
+    "5": 120
+   }
+  },
+  "sphere_N6_naive": {
+   "case": "sphere_N6_naive",
+   "base_tris": 120,
+   "sub_tris": 4320,
+   "N_global": 6,
+   "max_pos_err": 1.801940389123402e-07,
+   "max_h_err": 2.327686677766616e-06,
+   "gpu_cracked_edges": 24,
+   "gpu_max_gap": 0.02853018045425415,
+   "N_hist": {
+    "6": 120
+   }
+  },
+  "cube_N5": {
+   "case": "cube_N5",
+   "base_tris": 48,
+   "sub_tris": 1200,
+   "N_global": 5,
+   "max_pos_err": 6.490946891091198e-08,
+   "max_h_err": 8.43044217768707e-08,
+   "gpu_cracked_edges": 0,
+   "gpu_max_gap": 0.0,
+   "N_hist": {
+    "5": 48
+   }
+  },
+  "cube_N6_naive": {
+   "case": "cube_N6_naive",
+   "base_tris": 48,
+   "sub_tris": 1728,
+   "N_global": 6,
+   "max_pos_err": 7.297069826162073e-08,
+   "max_h_err": 1.1205301586603156e-07,
+   "gpu_cracked_edges": 12,
+   "gpu_max_gap": 0.003681004047393799,
+   "N_hist": {
+    "6": 48
+   }
+  },
+  "plane_adaptive_N8": {
+   "case": "plane_adaptive_N8",
+   "base_tris": 32,
+   "sub_tris": 1040,
+   "N_global": 8,
+   "max_pos_err": 7.741709851308287e-09,
+   "max_h_err": 7.741709850961342e-08,
+   "gpu_cracked_edges": 0,
+   "gpu_max_gap": 0.0,
+   "N_hist": {
+    "1": 16,
+    "8": 16
+   }
+  },
+  "sphere_adaptive_N8": {
+   "case": "sphere_adaptive_N8",
+   "base_tris": 120,
+   "sub_tris": 3900,
+   "N_global": 8,
+   "max_pos_err": 1.1914895081677201e-07,
+   "max_h_err": 9.983483553188677e-07,
+   "gpu_cracked_edges": 0,
+   "gpu_max_gap": 0.0,
+   "N_hist": {
+    "1": 60,
+    "8": 60
+   }
+  },
+  "plane_budget": {
+   "case": "plane_budget",
+   "base_tris": 32,
+   "sub_tris": 20000,
+   "N_global": 25,
+   "max_pos_err": 4.69072163188089e-07,
+   "max_h_err": 4.708766937255859e-06,
+   "gpu_cracked_edges": 0,
+   "gpu_max_gap": 0.0,
+   "N_hist": {
+    "25": 32
+   }
+  }
+ },
+ "normal_max_err": 6.3315683349607355e-06
+}

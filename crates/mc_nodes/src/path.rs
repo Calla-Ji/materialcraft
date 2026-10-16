@@ -604,14 +604,18 @@ pub fn resolve_effective_path(graph: &mc_core::Graph, node_id: mc_core::NodeId) 
 // long curve at high resolution will be slow (see `MAX_INSTANCES`).
 // ---------------------------------------------------------------------
 
-/// One placed copy of the Stamp input: where, and rotated by how much
-/// (radians, already including both the curve's own tangent angle *and*
-/// the Stamp Rotation param — the shader itself doesn't know about
-/// "align to curve" at all, it just rotates by whatever angle it's given).
+/// One placed copy of the Stamp input: where, rotated by how much (radians,
+/// already including both the curve's own tangent angle *and* the Stamp
+/// Rotation param — the shader itself doesn't know about "align to curve"
+/// at all, it just rotates by whatever angle it's given), and scaled by how
+/// much relative to the node's own overall Stamp Size (1.0 = no change —
+/// Path's own `stamp_instances` always produces 1.0 here; only Circular
+/// Pattern's own per-instance Scale Jitter varies it).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StampInstance {
     pub pos: [f32; 2],
     pub angle: f32,
+    pub scale: f32,
 }
 
 /// A spacing/path combination that would place more than this many
@@ -650,6 +654,7 @@ pub fn stamp_instances(
             out.push(StampInstance {
                 pos: [p[0] as f32, p[1] as f32],
                 angle,
+                scale: 1.0,
             });
             if out.len() >= MAX_STAMP_INSTANCES {
                 break 'sections;
@@ -720,7 +725,7 @@ fn pack_stamp_instances(instances: &[StampInstance]) -> Vec<u8> {
         bytes.extend_from_slice(&inst.pos[0].to_le_bytes());
         bytes.extend_from_slice(&inst.pos[1].to_le_bytes());
         bytes.extend_from_slice(&inst.angle.to_le_bytes());
-        bytes.extend_from_slice(&0f32.to_le_bytes()); // pad to 16 bytes/instance
+        bytes.extend_from_slice(&inst.scale.to_le_bytes());
     }
     bytes
 }

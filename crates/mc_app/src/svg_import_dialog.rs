@@ -43,6 +43,16 @@ pub struct SvgImportDialogState {
     wrap: bool,
     append: bool,
     last_result: Option<mc_nodes::svg_import::ImportResult>,
+    /// "Import SVG…"'s own in-flight native dialog — see
+    /// `async_dialog.rs`'s own doc comment for why this goes through
+    /// `rfd::AsyncFileDialog` instead of the simpler-looking synchronous
+    /// `rfd::FileDialog` API. Carries the target node id across the async
+    /// gap, since `target_node` itself isn't set until the dialog
+    /// actually resolves with a real file.
+    pending_file_pick: Option<(
+        mc_core::NodeId,
+        crate::async_dialog::PendingDialog<Option<rfd::FileHandle>>,
+    )>,
 }
 
 impl Default for SvgImportDialogState {
@@ -57,39 +67,26 @@ impl Default for SvgImportDialogState {
             wrap: true,
             append: false,
             last_result: None,
+            pending_file_pick: None,
         }
     }
 }
 
 impl SvgImportDialogState {
-    /// "Import SVG…": opens the file picker right away (same pattern as
+    /// "Import SVG…": starts the file picker right away (same pattern as
     /// `main.rs`'s own Open/Save As) — cancelling it is a no-op, the
-    /// dialog itself never opens empty.
+    /// dialog itself never opens empty. The picker itself resolves
+    /// asynchronously; see `show`'s own handling of `pending_file_pick`
+    /// for what happens once it does.
     pub fn open_for_file_pick(&mut self, node_id: mc_core::NodeId) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("SVG", &["svg"])
-            .pick_file()
-        else {
-            return;
-        };
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(err) => {
-                log::warn!("failed to read {}: {err}", path.display());
-                return;
-            }
-        };
-        *self = Self {
-            open: true,
-            target_node: Some(node_id),
-            file_name: Some(
-                path.file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.display().to_string()),
+        self.pending_file_pick = Some((
+            node_id,
+            crate::async_dialog::PendingDialog::new(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("SVG", &["svg"])
+                    .pick_file(),
             ),
-            source_text: text,
-            ..Self::default()
-        };
+        ));
     }
 
     /// "Paste": opens directly with an empty box to paste into.
@@ -126,6 +123,37 @@ pub fn show(
     graph: &mut mc_core::Graph,
     history: &mut mc_core::History,
 ) {
+    // Polled unconditionally, even while `state.open` is still false — the
+    // whole point is this resolves *before* the dialog opens at all (a
+    // cancelled pick is a no-op, same as the old synchronous behavior).
+    if let Some((node_id, pending)) = &mut state.pending_file_pick {
+        let node_id = *node_id;
+        if let Some(result) = pending.poll(ctx) {
+            state.pending_file_pick = None;
+            if let Some(handle) = result {
+                let path = handle.path();
+                match std::fs::read_to_string(path) {
+                    Ok(text) => {
+                        *state = SvgImportDialogState {
+                            open: true,
+                            target_node: Some(node_id),
+                            file_name: Some(
+                                path.file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| path.display().to_string()),
+                            ),
+                            source_text: text,
+                            ..SvgImportDialogState::default()
+                        };
+                    }
+                    Err(err) => {
+                        log::warn!("failed to read {}: {err}", path.display());
+                    }
+                }
+            }
+        }
+    }
+
     if !state.open {
         return;
     }

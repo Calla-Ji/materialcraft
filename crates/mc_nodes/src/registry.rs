@@ -10,13 +10,13 @@ use std::collections::HashSet;
 
 use crate::{
     anisotropic_noise, bevel, blend, block_shift, blur, channel_pack, channel_split, checker,
-    clamp, clouds, curvature_from_normal, curve, data_corrupt, directional_blur, directional_warp,
-    dither_pattern, edge_detect, fabric_generator, fractal_sum, french_knot, gabor_noise,
-    gradient_linear, gradient_map, gradient_radial, grayscale_conversion, height_to_ao,
-    height_to_normal, histogram_scan, hsl_adjust, image_import, image_trace, invert, knit, levels,
-    ordered_dither, palette_dither, path, path_simplify, path_to_mask, perlin, scanline_jitter,
-    scattered_streaks, shape, simplex_noise, slope_blur, stitch, thread_shape, threshold,
-    tile_generator, transform2d, uniform_color, voronoi, warp, white_noise,
+    circular_pattern, clamp, clouds, curvature_from_normal, curve, data_corrupt, directional_blur,
+    directional_warp, dither_pattern, edge_detect, fabric_generator, fractal_sum, french_knot,
+    gabor_noise, gradient_linear, gradient_map, gradient_radial, grayscale_conversion,
+    height_to_ao, height_to_normal, histogram_scan, hsl_adjust, image_import, image_trace, invert,
+    knit, levels, ordered_dither, palette_dither, path, path_simplify, path_to_mask, perlin,
+    scanline_jitter, scattered_streaks, shape, simplex_noise, slope_blur, stitch, thread_shape,
+    threshold, tile_generator, transform2d, type_text, uniform_color, voronoi, warp, white_noise,
 };
 
 /// The default output port name every single-output `NodeDef` uses.
@@ -348,6 +348,25 @@ pub fn evaluate(
                 "shape" => {
                     let params = shape::ShapeParams::from_graph(&node.params);
                     shape::dispatch(gpu, pool, &key, resolution, &params);
+                }
+                "circular_pattern" => {
+                    let params = circular_pattern::CircularPatternParams::from_graph(&node.params);
+                    match resolve_optional_input("stamp") {
+                        Some(stamp_key) => {
+                            circular_pattern::dispatch(
+                                gpu, pool, &stamp_key, &key, resolution, &params,
+                            );
+                        }
+                        // No real fallback, unlike Path's own un-stamped
+                        // Preview Mask (which at least still shows the
+                        // curve outline) — there's nothing of this node's
+                        // own to show without a Stamp input, so just blank.
+                        None => gpu.fill_rgba8(pool, &key, resolution, [0, 0, 0, 255]),
+                    }
+                }
+                "type_text" => {
+                    let params = type_text::TypeTextParams::from_graph(&node.params);
+                    type_text::dispatch(gpu, pool, &key, resolution, &params);
                 }
                 "stitch" => {
                     // French Knot has its own `KnotParams`/`crate::french_knot`

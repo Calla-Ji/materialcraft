@@ -48,9 +48,19 @@ impl Context {
             })
             .await
             .context("no suitable GPU adapter found")?;
+        // Ask for the adapter's own real limits rather than
+        // `wgpu::Limits::default()`'s conservative 256 MiB buffer cap — see
+        // `mc_app::main`'s matching override for why (the content-adaptive
+        // mesh can need a bigger single vertex buffer at high Tessellation).
+        let base_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
+            wgpu::Limits::downlevel_webgl2_defaults()
+        } else {
+            adapter.limits()
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("mc_gpu headless device"),
+                required_limits: base_limits,
                 ..Default::default()
             })
             .await

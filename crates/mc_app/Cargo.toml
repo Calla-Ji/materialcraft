@@ -21,3 +21,6 @@ mc_gpu = { version = "0.1.0", path = "../mc_gpu" }
 mc_nodes = { version = "0.1.0", path = "../mc_nodes" }
 rfd = "0.17.2"
 wgpu = "30.0.1"
+
+[dev-dependencies]
+serde_json = "1.0"

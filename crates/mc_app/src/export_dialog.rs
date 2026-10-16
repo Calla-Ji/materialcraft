@@ -21,6 +21,11 @@ pub struct ExportDialogState {
     /// window is up — set by a first Export click that found existing
     /// files, cleared by either button in that window.
     pending_overwrite: Option<Vec<std::path::PathBuf>>,
+    /// The folder-picker's own in-flight native dialog — see
+    /// `async_dialog.rs`'s own doc comment for why this goes through
+    /// `rfd::AsyncFileDialog` instead of the simpler-looking synchronous
+    /// `rfd::FileDialog` API.
+    pending_out_dir: Option<crate::async_dialog::PendingDialog<Option<rfd::FileHandle>>>,
 }
 
 impl Default for ExportDialogState {
@@ -34,6 +39,7 @@ impl Default for ExportDialogState {
             status: None,
             options: mc_nodes::export::ExportOptions::default(),
             pending_overwrite: None,
+            pending_out_dir: None,
         }
     }
 }
@@ -72,6 +78,16 @@ pub fn show(
 ) {
     if !state.open {
         return;
+    }
+
+    if let Some(pending) = &mut state.pending_out_dir {
+        if let Some(result) = pending.poll(ctx) {
+            state.pending_out_dir = None;
+            if let Some(handle) = result {
+                state.out_dir = Some(handle.path().to_path_buf());
+                state.status = None;
+            }
+        }
     }
 
     let mut open = state.open;
@@ -188,10 +204,9 @@ pub fn show(
                     .unwrap_or_else(|| "(none selected)".to_string());
                 ui.weak(label);
                 if ui.button("Choose…").clicked() {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        state.out_dir = Some(dir);
-                        state.status = None;
-                    }
+                    state.pending_out_dir = Some(crate::async_dialog::PendingDialog::new(
+                        rfd::AsyncFileDialog::new().pick_folder(),
+                    ));
                 }
             });
 
