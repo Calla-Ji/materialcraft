@@ -63,6 +63,7 @@ pub fn encode_for_display(
     pool: &mut mc_gpu::TexturePool,
     source_key: &str,
     channel: ChannelView,
+    is_sdf: bool,
 ) -> Option<wgpu::TextureView> {
     let resolution = pool.texture(source_key)?.width();
     let source_view = pool.view(source_key)?.clone();
@@ -73,6 +74,7 @@ pub fn encode_for_display(
     let mut param_bytes = [0u8; 16];
     param_bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     param_bytes[4..8].copy_from_slice(&channel.as_u32().to_le_bytes());
+    param_bytes[8..12].copy_from_slice(&(is_sdf as u32).to_le_bytes());
     let param_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("display_encode_params"),
         size: param_bytes.len() as u64,
@@ -87,10 +89,16 @@ pub fn encode_for_display(
     // whichever call ran last silently overwrite the other's result. Only
     // non-RGB modes get their own distinct key, so the common RGB case
     // (thumbnails, and the 2D View itself when no channel is isolated)
-    // keeps using exactly the key it always has.
-    let dest_key = match channel {
-        ChannelView::Rgb => format!("{source_key}__display_srgb"),
-        _ => format!("{source_key}__display_srgb_{}", channel.label()),
+    // keeps using exactly the key it always has. `is_sdf` also has to be
+    // part of the key, not just the dispatch: a texture's effective port
+    // type can change frame to frame (following upstream rewiring), so an
+    // Sdf iso-band encode and a normal sRGB encode of the same source must
+    // never collide under one cached key.
+    let dest_key = match (channel, is_sdf) {
+        (ChannelView::Rgb, false) => format!("{source_key}__display_srgb"),
+        (ChannelView::Rgb, true) => format!("{source_key}__display_sdf"),
+        (_, false) => format!("{source_key}__display_srgb_{}", channel.label()),
+        (_, true) => format!("{source_key}__display_sdf_{}", channel.label()),
     };
     let dest_view = pool.get_or_create(
         &gpu.device,
@@ -182,8 +190,9 @@ mod tests {
             },
         );
 
-        let display_view = encode_for_display(&mut gpu, &mut pool, "image", ChannelView::Rgb)
-            .expect("image texture exists");
+        let display_view =
+            encode_for_display(&mut gpu, &mut pool, "image", ChannelView::Rgb, false)
+                .expect("image texture exists");
         let display_texture = pool
             .texture("image__display_srgb")
             .expect("display copy exists");
@@ -235,7 +244,7 @@ mod tests {
             (ChannelView::G, 0.5_f32),
             (ChannelView::B, 0.9_f32),
         ] {
-            let _ = encode_for_display(&mut gpu, &mut pool, "image", channel)
+            let _ = encode_for_display(&mut gpu, &mut pool, "image", channel, false)
                 .expect("image texture exists");
             let dest_key = format!("image__display_srgb_{}", channel.label());
             let texture = pool.texture(&dest_key).expect("display copy exists");
@@ -281,7 +290,7 @@ mod tests {
             },
         );
 
-        let _ = encode_for_display(&mut gpu, &mut pool, "image", ChannelView::A)
+        let _ = encode_for_display(&mut gpu, &mut pool, "image", ChannelView::A, false)
             .expect("image texture exists");
         let texture = pool
             .texture("image__display_srgb_A")
@@ -293,5 +302,53 @@ mod tests {
             assert!(px[0].abs_diff(102) <= 2, "got {}", px[0]);
             assert_eq!(px[3], 255, "isolated channel view should always be opaque");
         }
+    }
+
+    /// HARDSURFACE_NODES.md §2: `is_sdf` should render iso-bands
+    /// (`frac(sdf * 200)`) plus a highlighted zero contour, not a normal
+    /// sRGB encode of the raw R value.
+    #[test]
+    fn sdf_mode_renders_iso_bands_with_a_highlighted_zero_contour() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+
+        // 0.5 and 0.5025 are both far from the sdf=0 contour band (whose
+        // half-width is 1.5/RESOLUTION, well under 0.1 tile units here), and
+        // a whole number of band periods apart (one period = 1/200 = 0.005):
+        // 0.5 / 0.005 = 100 exactly, 0.5025 lands half a period further.
+        let sample_sdf = [0.0_f32, 0.5, 0.5025];
+        let pixels: Vec<[f32; 4]> = (0..RESOLUTION * RESOLUTION)
+            .map(|i| [sample_sdf[(i as usize) % sample_sdf.len()], 0.0, 0.0, 1.0])
+            .collect();
+        gpu.write_rgba16f(&mut pool, "sdf", RESOLUTION, &pixels);
+
+        let _ = encode_for_display(&mut gpu, &mut pool, "sdf", ChannelView::Rgb, true)
+            .expect("sdf texture exists");
+        let texture = pool
+            .texture("sdf__display_sdf")
+            .expect("sdf display copy exists");
+        let out = gpu.read_rgba8(texture, RESOLUTION);
+        let px = |i: usize| -> [u8; 4] {
+            let o = i * 4;
+            [out[o], out[o + 1], out[o + 2], out[o + 3]]
+        };
+
+        let on_edge = px(0);
+        assert!(
+            on_edge[2] > on_edge[0] && on_edge[2] > on_edge[1],
+            "expected blue-dominant at sdf=0, got {on_edge:?}"
+        );
+
+        let one_period_out = px(1);
+        assert!(
+            one_period_out[0] < 25 && one_period_out[2] < 25,
+            "expected a near-black band far from the contour, got {one_period_out:?}"
+        );
+
+        let half_period_further = px(2);
+        assert!(
+            (half_period_further[0] as i32 - 128).abs() < 25,
+            "expected a mid-grey band, got {half_period_further:?}"
+        );
     }
 }

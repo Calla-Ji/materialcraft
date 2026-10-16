@@ -1324,28 +1324,43 @@ impl MaterialCreatorApp {
     /// texture under the same key format would be a confusing bug to hit).
     fn preview_texture(&mut self) -> Option<egui::TextureId> {
         let id = self.preview_node?;
-        let key = match &self.preview_port {
-            Some((port_node, port_name)) if *port_node == id => {
-                let kind = &self.graph.node(id)?.kind;
-                let is_valid = mc_nodes::defs::node_def(kind)
-                    .is_some_and(|def| def.outputs.iter().any(|p| p.name == port_name));
-                if is_valid {
-                    mc_nodes::registry::texture_key(id, port_name)
-                } else {
-                    mc_nodes::registry::resolve_texture_key(&self.graph, id)?
-                }
-            }
-            _ => mc_nodes::registry::resolve_texture_key(&self.graph, id)?,
+        let kind = self.graph.node(id)?.kind.clone();
+        // Resolves to the explicitly-previewed output *port* (not just a
+        // texture key) when `preview_port` names one of `id`'s own current
+        // outputs, so its real `PortType` can be checked too — reusing this
+        // same resolution for both the key and the type keeps them from
+        // ever disagreeing about which port is actually on screen.
+        let explicit_port = match &self.preview_port {
+            Some((port_node, port_name)) if *port_node == id => mc_nodes::defs::node_def(&kind)
+                .and_then(|def| def.outputs.iter().find(|p| p.name == port_name)),
+            _ => None,
+        };
+        let (key, is_sdf) = if let Some(port) = explicit_port {
+            let port_type =
+                mc_nodes::defs::effective_output_type(&self.graph, id, &kind, port.port_type);
+            (
+                mc_nodes::registry::texture_key(id, port.name),
+                port_type == mc_core::PortType::Sdf,
+            )
+        } else {
+            let key = mc_nodes::registry::resolve_texture_key(&self.graph, id)?;
+            let is_sdf = mc_nodes::registry::resolve_output_port_type(&self.graph, id)
+                == Some(mc_core::PortType::Sdf);
+            (key, is_sdf)
         };
         // Node textures are linear; egui never decodes what it's given, so
         // this view has to already be sRGB-encoded or the preview reads too
         // dark/off relative to the 3D viewport and an exported PNG — see
-        // `display_encode.rs`.
+        // `display_encode.rs`. `is_sdf` renders iso-bands instead, in which
+        // case the Channel View selector below has no effect (an Sdf port
+        // is always single-channel) — not hiding that selector's UI yet,
+        // this step is plumbing only (HARDSURFACE_NODES.md step 1).
         let view = crate::display_encode::encode_for_display(
             &mut self.gpu,
             &mut self.pool,
             &key,
             self.two_d_view.channel_view,
+            is_sdf,
         )?;
 
         // Repeat (not egui's default ClampToEdge) addressing: identical to

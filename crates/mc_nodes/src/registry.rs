@@ -11,12 +11,13 @@ use std::collections::HashSet;
 use crate::{
     anisotropic_noise, bevel, blend, block_shift, blur, channel_pack, channel_split, checker,
     circular_pattern, clamp, clouds, curvature_from_normal, curve, data_corrupt, directional_blur,
-    directional_warp, dither_pattern, edge_detect, fabric_generator, fractal_sum, french_knot,
-    gabor_noise, gradient_linear, gradient_map, gradient_radial, grayscale_conversion,
+    directional_warp, distance_field, dither_pattern, edge_detect, fabric_generator, fractal_sum,
+    french_knot, gabor_noise, gradient_linear, gradient_map, gradient_radial, grayscale_conversion,
     height_to_ao, height_to_normal, histogram_scan, hsl_adjust, image_import, image_trace, invert,
     knit, levels, ordered_dither, palette_dither, path, path_simplify, path_to_mask, perlin,
-    scanline_jitter, scattered_streaks, shape, simplex_noise, slope_blur, stitch, thread_shape,
-    threshold, tile_generator, transform2d, type_text, uniform_color, voronoi, warp, white_noise,
+    redistance, scanline_jitter, scattered_streaks, shape, shape_boolean, simplex_noise,
+    slope_blur, stitch, thread_shape, threshold, tile_generator, transform2d, type_text,
+    uniform_color, voronoi, warp, white_noise,
 };
 
 /// The default output port name every single-output `NodeDef` uses.
@@ -639,6 +640,41 @@ pub fn evaluate(
                         gpu, pool, &input_key, &key, resolution, &params,
                     );
                 }
+                "distance_field" => {
+                    let mask_key = resolve_input("mask")?;
+                    let params = distance_field::DistanceFieldParams::from_graph(&node.params);
+                    distance_field::dispatch(gpu, pool, &mask_key, &key, resolution, &params);
+                }
+                "shape_boolean" => {
+                    let a_key = resolve_input("a")?;
+                    let b_key = resolve_input("b")?;
+                    let sdf_key = texture_key(id, "sdf");
+                    let a_only_key = texture_key(id, "a_only");
+                    let b_only_key = texture_key(id, "b_only");
+                    let overlap_key = texture_key(id, "overlap");
+                    let blend_key = texture_key(id, "blend");
+                    let params = shape_boolean::ShapeBooleanParams::from_graph(&node.params);
+                    shape_boolean::dispatch(
+                        gpu,
+                        pool,
+                        &a_key,
+                        &b_key,
+                        shape_boolean::ShapeBooleanOutputKeys {
+                            sdf: &sdf_key,
+                            a_only: &a_only_key,
+                            b_only: &b_only_key,
+                            overlap: &overlap_key,
+                            blend: &blend_key,
+                        },
+                        resolution,
+                        &params,
+                    );
+                }
+                "redistance" => {
+                    let sdf_key = resolve_input("sdf")?;
+                    let params = redistance::RedistanceParams::from_graph(&node.params);
+                    redistance::dispatch(gpu, pool, &sdf_key, &key, resolution, &params);
+                }
                 "image_trace" => {
                     let input_key = resolve_input("image")?;
                     let preview_mask_key = texture_key(id, "preview_mask");
@@ -758,6 +794,49 @@ pub fn resolve_texture_key(graph: &mc_core::Graph, node: mc_core::NodeId) -> Opt
             .map(|p| p.name)
             .unwrap_or(DEFAULT_OUTPUT_PORT);
         Some(texture_key(node, port))
+    }
+}
+
+/// `node`'s own effectively-previewed output port type — mirrors
+/// `resolve_texture_key`'s exact traversal above (including the
+/// Output-node upstream redirect: an Output node's own declared port type
+/// is irrelevant, what matters is whichever upstream port actually feeds
+/// it) but returns the resolved port's `defs::effective_output_type`
+/// instead of a texture key. Kept as a separate function rather than
+/// changing `resolve_texture_key`'s own return type, since that function
+/// already has many call sites that only want the key. Used only to decide
+/// whether a preview should render Sdf iso-bands instead of a normal sRGB
+/// encode (`mc_app`'s `display_encode`).
+pub fn resolve_output_port_type(
+    graph: &mc_core::Graph,
+    node: mc_core::NodeId,
+) -> Option<mc_core::PortType> {
+    let kind = &graph.node(node)?.kind;
+    if kind.starts_with("output_") {
+        let (upstream, upstream_port) = graph.upstream_from(node, "input")?;
+        let upstream_kind = &graph.node(upstream)?.kind;
+        if upstream_kind.starts_with("output_") {
+            resolve_output_port_type(graph, upstream)
+        } else {
+            let declared = crate::defs::node_def(upstream_kind)
+                .and_then(|def| def.output(&upstream_port))
+                .map(|p| p.port_type)?;
+            Some(crate::defs::effective_output_type(
+                graph,
+                upstream,
+                upstream_kind,
+                declared,
+            ))
+        }
+    } else {
+        let def = crate::defs::node_def(kind)?;
+        let port = def.outputs.first()?;
+        Some(crate::defs::effective_output_type(
+            graph,
+            node,
+            kind,
+            port.port_type,
+        ))
     }
 }
 

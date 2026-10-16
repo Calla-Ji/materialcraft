@@ -20,4 +20,16 @@ pub enum PortType {
     /// `path` input). Only ever compatible with another `Path` port — no
     /// broadcast to/from Gray or Color, unlike Gray->Color.
     Path,
+    /// Signed distance field, tile units (1.0 = tile width), negative
+    /// inside / positive outside / 0 on the edge
+    /// (`docs/hardsurface_nodes/HARDSURFACE_NODES.md` §2) — stored as an
+    /// ordinary single-channel texture (R of Rgba16Float), same GPU
+    /// footprint as `Gray`, but never silently interchangeable with it:
+    /// only ever compatible with another `Sdf` port, no broadcast to/from
+    /// Gray or Color — same strict rule `Path` uses above, for the same
+    /// reason (this carries geometric distance, not plain brightness).
+    /// `Sdf -> Greyscale` only through a future Bevel Profile node (or an
+    /// explicit "SDF to Mask"); `Greyscale -> Sdf` only through a future
+    /// Distance Field node — never an implicit conversion.
+    Sdf,
 }

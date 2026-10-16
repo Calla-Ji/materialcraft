@@ -10,3 +10,9 @@
 /CLAUDE.md
 /PROGRESS.md
 /INDEPENDENCE.md
+
+# Hard-Surface Nodes hand-off package — local reference material (spec,
+# Python ground truth, golden fixtures for all 9 build steps). Only the
+# small subset of goldens actually needed by a shipped step's tests lives
+# in tests/golden/hardsurface/, which is tracked.
+/docs/hardsurface_nodes/

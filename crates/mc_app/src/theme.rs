@@ -34,6 +34,16 @@ pub const PINK_DWARF: Color32 = Color32::from_rgb(0xFF, 0x99, 0xD8);
 /// (same "easy to swap for a real one later" status as `category_color`'s
 /// own unassigned-category fallback below).
 pub const PATH_CYAN: Color32 = Color32::from_rgb(0x6E, 0xE7, 0xE0);
+/// Sdf-type port pins and wires (`docs/hardsurface_nodes/
+/// HARDSURFACE_NODES.md` §2: "draw it in its own colour, for example
+/// teal"). Not sourced from the owner's brand guide, which has no entry for
+/// this — a clearly-distinct placeholder, same "easy to swap for a real one
+/// later" status as `PATH_CYAN` above. Deliberately a different, more
+/// saturated blue-teal than `PATH_CYAN`'s pale cyan: Sdf and Path are the
+/// app's only two non-broadcasting "own thing entirely" socket types and
+/// will often sit in the same graph, so they need to read apart at a
+/// glance, not just technically differ.
+pub const SDF_TEAL: Color32 = Color32::from_rgb(0x1E, 0x9E, 0xB0);
 
 /// One accent color per node category (`mc_nodes::defs`'s 10 category
 /// strings), for the Node Library panel's grouping and each node card's

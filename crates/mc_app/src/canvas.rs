@@ -191,6 +191,7 @@ fn port_color(port_type: PortType) -> Color32 {
         PortType::Gray => Color32::from_gray(200),
         PortType::Color => crate::theme::PINK_DWARF,
         PortType::Path => crate::theme::PATH_CYAN,
+        PortType::Sdf => crate::theme::SDF_TEAL,
     }
 }
 
@@ -1190,15 +1191,19 @@ pub fn show(
             }
             _ => def.outputs.first().map(|p| p.name.to_string()),
         };
+        let mut previewed_output_type = PortType::Gray;
         for (i, port) in def.outputs.iter().enumerate() {
             let p = pin_pos(rect, true, i, zoom);
             let port_type =
                 mc_nodes::defs::effective_output_type(graph, id, &node_kind, port.port_type);
+            let is_this_port_previewed = effective_preview_port.as_deref() == Some(port.name);
+            if is_this_port_previewed {
+                previewed_output_type = port_type;
+            }
             // Only worth highlighting which output is active when there's
             // more than one to choose from — a single-output node's pin
             // changing color for no reason would just be visual noise.
-            let is_previewed =
-                def.outputs.len() > 1 && effective_preview_port.as_deref() == Some(port.name);
+            let is_previewed = def.outputs.len() > 1 && is_this_port_previewed;
             draw_pin(
                 ui,
                 &painter,
@@ -1268,6 +1273,7 @@ pub fn show(
                 pool,
                 &key,
                 crate::display_encode::ChannelView::Rgb,
+                previewed_output_type == PortType::Sdf,
             ) {
                 let texture_id = match thumbnail_ids.get(&id).copied() {
                     Some(tex_id) => {

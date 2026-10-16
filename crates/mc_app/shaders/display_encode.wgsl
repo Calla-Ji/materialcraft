@@ -20,11 +20,21 @@
 // Alpha is broadcast raw (no sRGB) when isolated, same as every other
 // place in this codebase that treats alpha as linear coverage, not a
 // gamma-encoded color channel (`mc_export::apply_color_space` skips it too).
+//
+// `is_sdf` renders an Sdf-typed source's iso-band preview instead
+// (docs/hardsurface_nodes/HARDSURFACE_NODES.md §2) — a raw float distance
+// value must never be shown as plain grey (it would look identical to a
+// completely different distance a short way off), so this shows repeating
+// bands every 1/200 tile unit plus a highlighted zero contour, ignoring
+// `channel` (an Sdf port is always single-channel; there's nothing to
+// isolate). Not gamma-encoded — like the raw Alpha branch above, this is
+// a synthetic visualization already in display space, not a decoded/
+// re-encoded physical color.
 
 struct DisplayEncodeParams {
     resolution: u32,
     channel: u32, // 0 = RGB, 1 = R, 2 = G, 3 = B, 4 = A
-    _pad0: u32,
+    is_sdf: u32, // 1 = render the Sdf iso-band preview instead
     _pad1: u32,
 }
 
@@ -39,6 +49,23 @@ fn linear_to_srgb(c: f32) -> f32 {
     return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
 }
 
+const SDF_BAND_SCALE: f32 = 200.0; // spec: frac(sdf * 200)
+// A clearly-distinct accent for the zero contour, never produced by the
+// plain grey band ramp itself, so it reads as "this is the edge" at a
+// glance instead of blending into a coincidentally-similar band shade.
+const SDF_ZERO_CONTOUR: vec3<f32> = vec3<f32>(0.25, 0.55, 1.0);
+
+fn encode_sdf_preview(sdf: f32, resolution: u32) -> vec3<f32> {
+    let banded_grey = vec3<f32>(fract(sdf * SDF_BAND_SCALE));
+    // ~1.5-pixel-wide anti-aliased contour around sdf == 0, expressed in
+    // tile units (the same resolution-independence convention `coverage()`'s
+    // own 1-pixel AA ramp uses) so it reads as ~1-2 screen pixels wide at
+    // any graph resolution, not a fixed fraction of the tile.
+    let half_width = 1.5 / f32(resolution);
+    let contour = 1.0 - smoothstep(0.0, half_width, abs(sdf));
+    return mix(banded_grey, SDF_ZERO_CONTOUR, contour);
+}
+
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= params.resolution || id.y >= params.resolution) {
@@ -46,6 +73,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coords = vec2<i32>(id.xy);
     let src = textureLoad(source_tex, coords, 0);
+
+    if params.is_sdf == 1u {
+        let preview = encode_sdf_preview(src.r, params.resolution);
+        textureStore(output, coords, vec4<f32>(preview, 1.0));
+        return;
+    }
 
     if params.channel == 4u {
         // Alpha, raw — no sRGB, and always fully opaque so the isolated

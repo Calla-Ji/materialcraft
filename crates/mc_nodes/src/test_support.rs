@@ -136,3 +136,28 @@ pub fn read_png16_as_unit_floats(path: &std::path::Path) -> (Vec<f32>, u32) {
         .collect();
     (values, resolution)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{golden_path, read_npy_f32_2d};
+
+    /// Sanity check for the Hard-Surface Nodes package's own `.npy`
+    /// goldens (`docs/hardsurface_nodes/golden/`, copied one file at a time
+    /// into `tests/golden/hardsurface/` as each build step needs it — see
+    /// `docs/hardsurface_nodes/HARDSURFACE_NODES.md` §5). `read_npy_f32_2d`
+    /// already exists for the Gabor/Streaks package; this just confirms it
+    /// reads this *other* package's `.npy` files correctly too (same
+    /// `<f4` little-endian format, confirmed by direct header inspection),
+    /// before any node actually depends on it. Min/max are the real values
+    /// read straight from this exact file with numpy.
+    #[test]
+    fn reads_the_hardsurface_df_circle_sdf_golden() {
+        let path = golden_path("hardsurface", "df_circle_sdf.npy");
+        let values = read_npy_f32_2d(&path);
+        assert_eq!(values.len(), 512 * 512, "expected a flat 512x512 array");
+        let min = values.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!((min - (-0.298_622_25)).abs() < 1e-5, "min={min}");
+        assert!((max - 0.405_725_72).abs() < 1e-5, "max={max}");
+    }
+}

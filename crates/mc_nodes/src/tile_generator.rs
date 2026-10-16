@@ -76,7 +76,12 @@ impl Default for TileGeneratorParams {
     // deliberately kept independent now: changing a *new* node's default
     // shouldn't silently change how an existing saved example (e.g.
     // `examples/graphs/fabric.mcgraph`, which predates size_jitter/
-    // luminance_jitter/shape_size) already renders.
+    // luminance_jitter/shape_size) already renders. `shape_size` only ever
+    // matters once a Shape is connected, which `fabric.mcgraph`'s own
+    // tile_generator node never does — so its fallback value here was
+    // safe to correct alongside `shape_size`'s own semantic fix (tile-
+    // absolute, not cell-relative; see `defs.rs`'s own doc comment) rather
+    // than frozen at the old (now-wrong-units) value like the others above.
     fn default() -> Self {
         Self {
             rows: 6,
@@ -89,7 +94,7 @@ impl Default for TileGeneratorParams {
             rotation_jitter: 0.0,
             luminance_jitter: 0.15,
             distribution: PatternDistribution::default(),
-            shape_size: 1.0,
+            shape_size: 0.1,
         }
     }
 }
@@ -388,37 +393,82 @@ mod tests {
         (x0..x1).all(|x| (0..resolution).all(|y| pixels[((y * resolution + x) * 4) as usize] == 0))
     }
 
+    /// "Horizontal Only" means "turn this into vertical stripes": the row
+    /// axis doesn't exist at all, every pixel shows the connected Shape's
+    /// own full, uncropped canvas height — not squeezed into a small
+    /// centered band (the earlier, now-reverted behavior reported as "a
+    /// deliberately tall Shape still renders as small centered rectangles,
+    /// not full-height bands"). `render_distribution`'s disc uses the Shape
+    /// node's own default `Size` (0.6, see `shape::ShapeParams::default`)
+    /// — half-extent 0.3 around its own center, so it spans ~0.2..0.8 of
+    /// its canvas. Shown at full (1:1) scale, that's the window this test
+    /// checks against, with a little margin for anti-aliasing softness.
     #[test]
-    fn horizontal_only_leaves_the_top_and_bottom_rows_blank() {
+    fn horizontal_only_shows_content_across_the_full_height() {
         let pixels = render_distribution(PatternDistribution::HorizontalOnly);
+        let white_rows: Vec<u32> = (0..RESOLUTION)
+            .filter(|&y| (0..RESOLUTION).any(|x| pixels[((y * RESOLUTION + x) * 4) as usize] > 10))
+            .collect();
+        let first = *white_rows.first().expect("some row should show content");
+        let last = *white_rows.last().unwrap();
         assert!(
-            row_band_is_blank(&pixels, RESOLUTION, 4, 0),
-            "top grid row should be empty with Horizontal Only"
+            first < RESOLUTION * 3 / 10,
+            "content should reach ~0.2 up the canvas (the disc's own extent), \
+             first visible row was {first}"
         );
         assert!(
-            row_band_is_blank(&pixels, RESOLUTION, 4, 3),
-            "bottom grid row should be empty with Horizontal Only"
-        );
-        assert!(
-            !row_band_is_blank(&pixels, RESOLUTION, 4, 2),
-            "the centered grid row should still show the shape with Horizontal Only"
+            last > RESOLUTION - RESOLUTION * 3 / 10,
+            "content should reach ~0.8 down the canvas (the disc's own extent), \
+             last visible row was {last}"
         );
     }
 
+    /// The mirror of the test above, for the repeating (column) axis:
+    /// Horizontal Only still repeats across columns, so there should be
+    /// real gaps (blank columns) between the stripes, not one solid band.
     #[test]
-    fn vertical_only_leaves_the_left_and_right_columns_blank() {
+    fn horizontal_only_still_repeats_with_gaps_across_columns() {
+        let pixels = render_distribution(PatternDistribution::HorizontalOnly);
+        let any_column_blank = (0..RESOLUTION)
+            .any(|x| (0..RESOLUTION).all(|y| pixels[((y * RESOLUTION + x) * 4) as usize] == 0));
+        assert!(
+            any_column_blank,
+            "expected at least one fully blank column between repeated stripes"
+        );
+    }
+
+    /// Mirror of the Horizontal Only test above, same reasoning (the
+    /// disc's own ~0.2..0.8 extent, shown at full 1:1 scale).
+    #[test]
+    fn vertical_only_shows_content_across_the_full_width() {
         let pixels = render_distribution(PatternDistribution::VerticalOnly);
+        let white_cols: Vec<u32> = (0..RESOLUTION)
+            .filter(|&x| (0..RESOLUTION).any(|y| pixels[((y * RESOLUTION + x) * 4) as usize] > 10))
+            .collect();
+        let first = *white_cols.first().expect("some column should show content");
+        let last = *white_cols.last().unwrap();
         assert!(
-            column_band_is_blank(&pixels, RESOLUTION, 4, 0),
-            "left grid column should be empty with Vertical Only"
+            first < RESOLUTION * 3 / 10,
+            "content should reach ~0.2 across the canvas (the disc's own extent), \
+             first visible column was {first}"
         );
         assert!(
-            column_band_is_blank(&pixels, RESOLUTION, 4, 3),
-            "right grid column should be empty with Vertical Only"
+            last > RESOLUTION - RESOLUTION * 3 / 10,
+            "content should reach ~0.8 across the canvas (the disc's own extent), \
+             last visible column was {last}"
         );
+    }
+
+    /// The mirror of the horizontal repeats-with-gaps test above, for
+    /// Vertical Only's repeating (row) axis.
+    #[test]
+    fn vertical_only_still_repeats_with_gaps_across_rows() {
+        let pixels = render_distribution(PatternDistribution::VerticalOnly);
+        let any_row_blank = (0..RESOLUTION)
+            .any(|y| (0..RESOLUTION).all(|x| pixels[((y * RESOLUTION + x) * 4) as usize] == 0));
         assert!(
-            !column_band_is_blank(&pixels, RESOLUTION, 4, 2),
-            "the centered grid column should still show the shape with Vertical Only"
+            any_row_blank,
+            "expected at least one fully blank row between repeated stripes"
         );
     }
 
@@ -580,6 +630,61 @@ mod tests {
         );
     }
 
+    /// Regression test for a real bug: Horizontal/Vertical Only's visible
+    /// strip thickness used to be computed from the per-axis cell count
+    /// (`rows`/`columns`, linked to the same "Tile Count" slider a
+    /// connected Shape's sampling itself already compensates for) — so the
+    /// strip kept physically shrinking as Tile Count grew even though
+    /// Shape Size never changed, reported as "the shape gets smaller and
+    /// smaller with more Tile Count, even though I'm touching no scale
+    /// parameter." The strip's own thickness must now track `shape_size`
+    /// (the same absolute, Tile-Count-independent units the sampling
+    /// already uses), not the grid density.
+    #[test]
+    fn horizontal_only_strip_thickness_is_independent_of_tile_count() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        crate::shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "disc",
+            512,
+            &crate::shape::ShapeParams::default(),
+        );
+
+        let mut strip_height_px = |tile_count: u32| -> usize {
+            dispatch(
+                &mut gpu,
+                &mut pool,
+                Some("disc"),
+                "test",
+                512,
+                &TileGeneratorParams {
+                    rows: tile_count,
+                    columns: tile_count,
+                    offset: 0.0,
+                    shape_size: 0.2,
+                    distribution: PatternDistribution::HorizontalOnly,
+                    ..TileGeneratorParams::default()
+                },
+            );
+            let pixels = gpu.read_rgba8(pool.texture("test").unwrap(), 512);
+            let white_rows: Vec<usize> = (0..512)
+                .filter(|&y| (0..512).any(|x| pixels[(y * 512 + x) * 4] > 10))
+                .collect();
+            white_rows.last().unwrap() - white_rows.first().unwrap()
+        };
+
+        let height_at_4 = strip_height_px(4);
+        let height_at_16 = strip_height_px(16);
+        let diff = height_at_4.abs_diff(height_at_16);
+        assert!(
+            diff <= 4,
+            "strip height should stay ~constant across Tile Count at a fixed Shape Size: \
+             at 4 tiles = {height_at_4}px, at 16 tiles = {height_at_16}px (diff {diff}px)"
+        );
+    }
+
     /// A connected Shape input should actually change the output (stamped
     /// in instead of the built-in rounded rect), not just be plumbing
     /// that's never read.
@@ -634,7 +739,7 @@ mod tests {
             "small",
             RESOLUTION,
             &TileGeneratorParams {
-                shape_size: 0.3,
+                shape_size: 0.03,
                 ..TileGeneratorParams::default()
             },
         );
@@ -645,7 +750,7 @@ mod tests {
             "large",
             RESOLUTION,
             &TileGeneratorParams {
-                shape_size: 2.0,
+                shape_size: 0.3,
                 ..TileGeneratorParams::default()
             },
         );

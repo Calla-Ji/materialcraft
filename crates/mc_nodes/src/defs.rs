@@ -189,13 +189,17 @@ pub fn node_def(kind: &str) -> Option<&'static NodeDef> {
 /// `to`-typed input (CLAUDE.md §5): Gray broadcasts implicitly into Color,
 /// but Color needs an explicit Grayscale Conversion node to become Gray —
 /// which doesn't exist yet, so that direction is simply blocked for now.
-/// `Path` is its own thing entirely (vector data, not a texture — see
-/// `mc_core::PortType::Path`'s own doc comment): only Path-to-Path is
-/// ever valid, no broadcast either direction the way Gray/Color have.
+/// `Path` and `Sdf` are each their own thing entirely (vector data, and
+/// geometric distance, neither a plain-brightness texture — see
+/// `mc_core::PortType::Path`/`Sdf`'s own doc comments): only Path-to-Path
+/// or Sdf-to-Sdf is ever valid, no broadcast either direction the way
+/// Gray/Color have.
 pub fn ports_compatible(from: PortType, to: PortType) -> bool {
     match (from, to) {
         (PortType::Path, PortType::Path) => true,
         (PortType::Path, _) | (_, PortType::Path) => false,
+        (PortType::Sdf, PortType::Sdf) => true,
+        (PortType::Sdf, _) | (_, PortType::Sdf) => false,
         (PortType::Color, PortType::Gray) => false,
         _ => true,
     }
@@ -1068,12 +1072,14 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "shape_size",
                 display_name: "Shape Size",
-                tooltip: "How much of each cell a connected Shape fills \u{2014} 1 is its own \
-                          native size, less shrinks it with empty padding around it, more \
-                          enlarges it. Only shown once something's wired into Shape below.",
+                tooltip: "How large each stamped Shape is, as a fraction of the whole tile \u{2014} \
+                          stays the same absolute size as Tile Count changes, unlike a plain \
+                          per-cell zoom. 1.0 is roughly the width of the whole tile; typical \
+                          values are much smaller (0.05\u{2013}0.3) once Tile Count is more than a \
+                          few cells across. Only shown once something's wired into Shape below.",
                 kind: ParamSpecKind::Float {
-                    min: 0.1,
-                    max: 3.0,
+                    min: 0.01,
+                    max: 2.0,
                     default: 0.1,
                 },
             },
@@ -2156,10 +2162,11 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "size",
                 display_name: "Size",
-                tooltip: "How large the shape is.",
+                tooltip: "How large the shape is. Past 1.0 the shape grows larger than the \
+                          tile itself, cropped by its edge.",
                 kind: ParamSpecKind::Float {
                     min: 0.1,
-                    max: 1.0,
+                    max: 3.0,
                     default: 0.6,
                 },
             },
@@ -2171,7 +2178,7 @@ static NODE_DEFS: &[NodeDef] = &[
                           rectangle; higher makes it wide. Applied before Rotation, so a \
                           stretched shape tilts as a whole when rotated.",
                 kind: ParamSpecKind::Float {
-                    min: 0.1,
+                    min: 0.01,
                     max: 4.0,
                     default: 1.0,
                 },
@@ -2182,7 +2189,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 tooltip: "Independent vertical stretch on top of Size — same as Scale X, for \
                           the other axis.",
                 kind: ParamSpecKind::Float {
-                    min: 0.1,
+                    min: 0.01,
                     max: 4.0,
                     default: 1.0,
                 },
@@ -3845,6 +3852,186 @@ static NODE_DEFS: &[NodeDef] = &[
         ],
     },
     NodeDef {
+        kind: "distance_field",
+        display_name: "Distance Field",
+        // `docs/hardsurface_nodes/HARDSURFACE_NODES.md` §3.1, the first of
+        // seven planned hard-surface nodes built on a new `Sdf` port type
+        // (negative inside / positive outside / 0 on the edge, tile units).
+        // Grouped with Height to Normal/AO and Curvature from Normal for
+        // now — all four turn one representation into another — rather
+        // than a new category for just this one node; later hard-surface
+        // nodes may warrant their own category once there are enough to
+        // group meaningfully.
+        category: "Converters",
+        tooltip: "Turns a greyscale mask into an exact signed distance field of its 0.5 edge.",
+        inputs: &[PortSpec {
+            name: "mask",
+            display_name: "Mask",
+            port_type: PortType::Gray,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Sdf",
+            port_type: PortType::Sdf,
+        }],
+        params: &[
+            ParamSpec {
+                name: "wrap",
+                display_name: "Wrap",
+                tooltip: "Distances stay correct up to 0.5 tile across the seam. Off treats the \
+                          mask as a single, non-repeating island.",
+                kind: ParamSpecKind::Bool { default: true },
+            },
+            ParamSpec {
+                name: "threshold",
+                display_name: "Threshold",
+                tooltip: "Which mask value counts as the edge.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "max_distance",
+                display_name: "Max Distance",
+                tooltip: "Clamp the field to +-this many tile units. 0 disables the clamp.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.5,
+                    default: 0.0,
+                },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "shape_boolean",
+        display_name: "Shape Boolean",
+        // HARDSURFACE_NODES.md §3.3, grouped with Distance Field for the
+        // same "no dedicated category for just a few nodes yet" reasoning.
+        category: "Converters",
+        tooltip: "Combines two SDFs with a real boolean \u{2014} union, subtract, or intersect \
+                  \u{2014} in a hard, smooth, round, chamfer, or groove blend.",
+        inputs: &[
+            PortSpec {
+                name: "a",
+                display_name: "A",
+                port_type: PortType::Sdf,
+            },
+            PortSpec {
+                name: "b",
+                display_name: "B",
+                port_type: PortType::Sdf,
+            },
+        ],
+        outputs: &[
+            PortSpec {
+                name: "sdf",
+                display_name: "Sdf",
+                port_type: PortType::Sdf,
+            },
+            PortSpec {
+                name: "a_only",
+                display_name: "A Only",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "b_only",
+                display_name: "B Only",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "overlap",
+                display_name: "Overlap",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "blend",
+                display_name: "Blend",
+                port_type: PortType::Gray,
+            },
+        ],
+        params: &[
+            ParamSpec {
+                name: "op",
+                display_name: "Operation",
+                tooltip: "Union, Subtract (A minus B), or Intersect. Ignored entirely in Groove \
+                          mode \u{2014} there's only one sensible direction for a groove.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::shape_boolean::BoolOp::NAMES,
+                    default: "Union",
+                },
+            },
+            ParamSpec {
+                name: "mode",
+                display_name: "Mode",
+                tooltip: "Hard is a plain min/max boolean. Smooth, Round, and Chamfer blend the \
+                          seam by Radius. Groove cuts a groove of width Radius along B's \
+                          outline into A, Groove Depth deep.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::shape_boolean::BoolMode::NAMES,
+                    default: "Hard",
+                },
+            },
+            ParamSpec {
+                name: "radius",
+                display_name: "Radius",
+                tooltip: "Blend size (Smooth/Round/Chamfer) or groove width (Groove), tile \
+                          units. No effect in Hard mode.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.2,
+                    default: 0.02,
+                },
+            },
+            ParamSpec {
+                name: "groove_depth",
+                display_name: "Groove Depth",
+                tooltip: "Groove mode only: how far the groove cuts into A.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.2,
+                    default: 0.02,
+                },
+            },
+            ParamSpec {
+                name: "exact",
+                display_name: "Exact",
+                tooltip: "Rebuilds an exact field from the result's own zero contour. A boolean \
+                          built from min/max keeps the inputs' hidden interior edges, which a \
+                          later Bevel would otherwise show as a false groove where two shapes \
+                          meet. Only affects the Sdf output \u{2014} the four masks are always \
+                          exact, from A/B's own sign.",
+                kind: ParamSpecKind::Bool { default: true },
+            },
+        ],
+    },
+    NodeDef {
+        kind: "redistance",
+        display_name: "Redistance",
+        category: "Converters",
+        tooltip: "Rebuilds an exact signed distance field from any SDF's own zero contour \u{2014} \
+                  fixes the false groove a boolean or warp can leave where hidden interior \
+                  edges used to be.",
+        inputs: &[PortSpec {
+            name: "sdf",
+            display_name: "Sdf",
+            port_type: PortType::Sdf,
+        }],
+        outputs: &[PortSpec {
+            name: "output",
+            display_name: "Sdf",
+            port_type: PortType::Sdf,
+        }],
+        params: &[ParamSpec {
+            name: "wrap",
+            display_name: "Wrap",
+            tooltip: "Distances stay correct up to 0.5 tile across the seam. Off treats the \
+                      field as a single, non-repeating island.",
+            kind: ParamSpecKind::Bool { default: true },
+        }],
+    },
+    NodeDef {
         kind: "channel_pack",
         display_name: "Channel Packer",
         category: "Converters",
@@ -4638,5 +4825,20 @@ mod tests {
         // Existing Gray/Color rules stay intact.
         assert!(ports_compatible(PortType::Gray, PortType::Color));
         assert!(!ports_compatible(PortType::Color, PortType::Gray));
+    }
+
+    /// HARDSURFACE_NODES.md §2: Sdf wires only ever connect to another Sdf
+    /// port — same no-broadcast rule Path has, for the same reason (this
+    /// carries geometric distance, not plain brightness).
+    #[test]
+    fn sdf_ports_only_connect_to_each_other() {
+        use super::ports_compatible;
+        assert!(ports_compatible(PortType::Sdf, PortType::Sdf));
+        assert!(!ports_compatible(PortType::Sdf, PortType::Gray));
+        assert!(!ports_compatible(PortType::Gray, PortType::Sdf));
+        assert!(!ports_compatible(PortType::Sdf, PortType::Color));
+        assert!(!ports_compatible(PortType::Color, PortType::Sdf));
+        assert!(!ports_compatible(PortType::Sdf, PortType::Path));
+        assert!(!ports_compatible(PortType::Path, PortType::Sdf));
     }
 }
