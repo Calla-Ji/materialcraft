@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use crate::{
     anisotropic_noise, bevel, bevel_profile, blend, block_shift, blur, channel_pack, channel_split,
     checker, circular_pattern, clamp, clouds, curvature_from_normal, curve, data_corrupt,
-    directional_blur, directional_warp, distance_field, dither_pattern, edge_detect,
+    directional_blur, directional_warp, distance_field, dither_pattern, edge_detect, edge_wear,
     fabric_generator, fasteners, fractal_sum, french_knot, gabor_noise, gradient_linear,
     gradient_map, gradient_radial, grayscale_conversion, height_to_ao, height_to_normal,
     histogram_scan, hsl_adjust, image_import, image_trace, invert, knit, levels, ordered_dither,
@@ -692,6 +692,27 @@ pub fn evaluate(
                             edge: &edge_key,
                             top: &top_key,
                             u: &u_key,
+                        },
+                        resolution,
+                        &params,
+                    );
+                }
+                "edge_wear" => {
+                    let sdf_key = resolve_optional_input("sdf");
+                    let height_key = resolve_optional_input("height");
+                    let wear_key = texture_key(id, "wear");
+                    let cavity_key = texture_key(id, "cavity");
+                    let height_out_key = texture_key(id, "height");
+                    let params = edge_wear::EdgeWearParams::from_graph(&node.params);
+                    edge_wear::dispatch(
+                        gpu,
+                        pool,
+                        sdf_key.as_deref(),
+                        height_key.as_deref(),
+                        edge_wear::EdgeWearOutputKeys {
+                            wear: &wear_key,
+                            cavity: &cavity_key,
+                            height: &height_out_key,
                         },
                         resolution,
                         &params,

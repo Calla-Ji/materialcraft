@@ -28,6 +28,7 @@ pub mod distance_field;
 mod dither_common;
 pub mod dither_pattern;
 pub mod edge_detect;
+pub mod edge_wear;
 pub mod export;
 pub mod fabric_generator;
 pub mod fasteners;

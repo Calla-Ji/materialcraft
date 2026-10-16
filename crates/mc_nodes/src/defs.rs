@@ -4508,6 +4508,134 @@ static NODE_DEFS: &[NodeDef] = &[
         ],
     },
     NodeDef {
+        kind: "edge_wear",
+        display_name: "Edge Wear",
+        category: "Converters",
+        tooltip: "Paints chipping on convex edges and a cavity mask for dirt in seams and \
+                  recesses \u{2014} exact from an Sdf, or estimated from any height map if no \
+                  Sdf is connected.",
+        inputs: &[
+            PortSpec {
+                name: "sdf",
+                display_name: "Sdf",
+                port_type: PortType::Sdf,
+            },
+            PortSpec {
+                name: "height",
+                display_name: "Height",
+                port_type: PortType::Gray,
+            },
+        ],
+        outputs: &[
+            PortSpec {
+                name: "wear",
+                display_name: "Wear",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "cavity",
+                display_name: "Cavity",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "height",
+                display_name: "Height",
+                port_type: PortType::Gray,
+            },
+        ],
+        params: &[
+            ParamSpec {
+                name: "band",
+                display_name: "Band",
+                tooltip: "Sdf input only \u{2014} how far the wear reaches from the edge, tile \
+                          units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0005,
+                    max: 0.1,
+                    default: 0.012,
+                },
+            },
+            ParamSpec {
+                name: "amount",
+                display_name: "Amount",
+                tooltip: "Overall wear strength.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 2.0,
+                    default: 0.5,
+                },
+            },
+            ParamSpec {
+                name: "falloff",
+                display_name: "Falloff",
+                tooltip: "Sdf input only \u{2014} how sharply wear fades away from the edge.",
+                kind: ParamSpecKind::Float {
+                    min: 0.1,
+                    max: 5.0,
+                    default: 1.5,
+                },
+            },
+            ParamSpec {
+                name: "chip_cells",
+                display_name: "Chip Cells",
+                tooltip: "Lattice size of the chip pattern's own noise.",
+                kind: ParamSpecKind::Int {
+                    min: 1,
+                    max: 64,
+                    default: 24,
+                },
+            },
+            ParamSpec {
+                name: "softness",
+                display_name: "Softness",
+                tooltip: "How soft the wear's own edge is.",
+                kind: ParamSpecKind::Float {
+                    min: 0.001,
+                    max: 0.5,
+                    default: 0.08,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes the chip pattern.",
+                kind: ParamSpecKind::Seed { default: 7 },
+            },
+            ParamSpec {
+                name: "cavity_width",
+                display_name: "Cavity Width",
+                tooltip: "Sdf input only \u{2014} how far the cavity mask reaches into seams \
+                          and recesses, tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0005,
+                    max: 0.1,
+                    default: 0.006,
+                },
+            },
+            ParamSpec {
+                name: "curvature_sigma",
+                display_name: "Curvature Sigma",
+                tooltip: "Height-map fallback only (no Sdf connected) \u{2014} the curvature \
+                          estimate's own blur radius, pixels.",
+                kind: ParamSpecKind::Float {
+                    min: 0.5,
+                    max: 5.0,
+                    default: 1.5,
+                },
+            },
+            ParamSpec {
+                name: "chip_depth",
+                display_name: "Chip Depth",
+                tooltip: "How deep the Height output's own chipping cuts.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 0.2,
+                    default: 0.04,
+                },
+            },
+        ],
+    },
+    NodeDef {
         kind: "channel_pack",
         display_name: "Channel Packer",
         category: "Converters",
