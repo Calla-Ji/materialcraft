@@ -140,8 +140,9 @@ Vulkan/Metal/DX12 driver (`wgpu`'s supported backends — no OpenGL fallback).
   prompts to install the Visual Studio Build Tools (the "Desktop development with C++"
   workload) the first time you build if they're missing. `wgpu` uses DX12.
 - **Linux**: `wgpu` uses Vulkan, so you need a Vulkan-capable driver (Mesa's RADV/ANV on
-  AMD/Intel, or the proprietary driver on Nvidia) plus your distro's windowing dev packages —
-  on Debian/Ubuntu: `apt install libxkbcommon-dev libx11-dev libwayland-dev mesa-vulkan-drivers`.
+  AMD/Intel, or the proprietary driver on Nvidia), your distro's windowing dev packages, and
+  `fontconfig` (the Type node's own font search) — on Debian/Ubuntu: `apt install
+  libxkbcommon-dev libx11-dev libwayland-dev mesa-vulkan-drivers libfontconfig1-dev`.
 
 ```sh
 cargo run -p mc_app   # launch the desktop app

@@ -30,11 +30,14 @@ jobs:
       # runners have no real GPU, and every test that touches the GPU
       # (`mc_gpu::Context::new_headless`, which is most of the test suite)
       # needs *some* Vulkan adapter to request, even a software one.
+      # libfontconfig1-dev is for font-kit's own Linux backend (Type node's
+      # font search, mc_nodes::type_text) — its yeslogic-fontconfig-sys
+      # build script pkg-config-looks-up fontconfig at compile time.
       - name: Install Linux test dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libx11-dev libwayland-dev mesa-vulkan-drivers
+          sudo apt-get install -y libxkbcommon-dev libx11-dev libwayland-dev mesa-vulkan-drivers libfontconfig1-dev
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -82,11 +85,14 @@ jobs:
       # README.md's own Linux build prerequisites (windowing dev headers —
       # wgpu loads the Vulkan driver itself at runtime, so no Vulkan SDK
       # needed here, just what's needed to compile against X11/Wayland).
+      # libfontconfig1-dev is for font-kit's own Linux backend (Type node's
+      # font search, mc_nodes::type_text) — its yeslogic-fontconfig-sys
+      # build script pkg-config-looks-up fontconfig at compile time.
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libx11-dev libwayland-dev
+          sudo apt-get install -y libxkbcommon-dev libx11-dev libwayland-dev libfontconfig1-dev
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
