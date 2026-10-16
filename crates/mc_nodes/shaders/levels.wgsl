@@ -28,7 +28,15 @@ struct LevelsParams {
 fn apply_levels(value: f32) -> f32 {
     let range = max(params.in_high - params.in_low, 0.0001);
     var v = clamp((value - params.in_low) / range, 0.0, 1.0);
-    v = pow(v, 1.0 / max(params.gamma, 0.0001));
+    // gamma = 1.0 (the default, "no curve") skips `pow` entirely rather
+    // than calling `pow(v, 1.0)` — mathematically a no-op, but GPU `pow` is
+    // typically `exp2(log2(x) * y)` under the hood, which isn't guaranteed
+    // bit-exact for y = 1.0 on every backend. Confirmed as a real
+    // cross-platform CI failure: identical on Metal/Vulkan, off by enough
+    // to flip an 8-bit-readback pixel on Windows' DX12 backend.
+    if params.gamma != 1.0 {
+        v = pow(v, 1.0 / max(params.gamma, 0.0001));
+    }
     return mix(params.out_low, params.out_high, v);
 }
 
