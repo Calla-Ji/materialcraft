@@ -8,9 +8,45 @@
 //! be even — see the shader's doc comment.
 
 use crate::shaders::full_source;
-use crate::tiling::TilingMode;
 
 const NODE_KIND: &str = "tile_generator";
+
+/// Which grid axes actually get a tile drawn — not the shared `tiling::
+/// TilingMode` (wrap-vs-clip at a sampled edge), a genuinely different
+/// concept: this governs the tile layout itself. `Both` is the standard
+/// full `rows` x `columns` grid; `HorizontalOnly`/`VerticalOnly` draw a
+/// single centered row/column of tiles at their normal (unstretched) size,
+/// leaving the rest of the canvas empty — e.g. distributing a connected
+/// Shape across one row or column instead of a full grid. No `Off` variant:
+/// "neither axis" has no sensible meaning for a pattern generator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PatternDistribution {
+    #[default]
+    Both,
+    HorizontalOnly,
+    VerticalOnly,
+}
+
+impl PatternDistribution {
+    pub const NAMES: [&'static str; 3] = ["Both (Seamless)", "Horizontal Only", "Vertical Only"];
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "Both (Seamless)" => Some(Self::Both),
+            "Horizontal Only" => Some(Self::HorizontalOnly),
+            "Vertical Only" => Some(Self::VerticalOnly),
+            _ => None,
+        }
+    }
+
+    fn as_u32(self) -> u32 {
+        match self {
+            Self::Both => 0,
+            Self::HorizontalOnly => 1,
+            Self::VerticalOnly => 2,
+        }
+    }
+}
 
 pub struct TileGeneratorParams {
     pub rows: u32,
@@ -25,12 +61,22 @@ pub struct TileGeneratorParams {
     pub size_jitter: f32,
     pub rotation_jitter: f32,
     pub luminance_jitter: f32,
-    pub tiling_mode: TilingMode,
+    pub distribution: PatternDistribution,
     /// Only used when a Shape is connected — see the shader's doc comment.
     pub shape_size: f32,
 }
 
 impl Default for TileGeneratorParams {
+    // NOTE: these are the *legacy-graph* fallback values for params missing
+    // from an older `.mcgraph` file saved before they existed (`from_graph`
+    // falls back here per-key) — not the same thing as a freshly-added
+    // node's own UI defaults (`defs.rs`'s `ParamSpec::default`, used by
+    // `NodeDef::instantiate`, which a new node always gets explicit stored
+    // values from). The two happen to have matched historically, but
+    // deliberately kept independent now: changing a *new* node's default
+    // shouldn't silently change how an existing saved example (e.g.
+    // `examples/graphs/fabric.mcgraph`, which predates size_jitter/
+    // luminance_jitter/shape_size) already renders.
     fn default() -> Self {
         Self {
             rows: 6,
@@ -42,9 +88,27 @@ impl Default for TileGeneratorParams {
             size_jitter: 0.08,
             rotation_jitter: 0.0,
             luminance_jitter: 0.15,
-            tiling_mode: TilingMode::default(),
+            distribution: PatternDistribution::default(),
             shape_size: 1.0,
         }
+    }
+}
+
+/// `rows`/`columns` as actually used for a dispatch: unchanged with no
+/// Shape connected (the built-in tile *wants* an asymmetric grid — e.g. the
+/// classic 6-row/4-column brick default), but forced square (both set to
+/// whichever was larger) once a Shape is connected, matching what the
+/// Parameters panel's own linked "Tile Count" slider already implies to the
+/// artist. Without this, a freshly-wired Shape renders stretched into
+/// whatever asymmetric grid the built-in tile happened to default to,
+/// before the artist ever touches that slider — reported as "the normal
+/// disc shape looks distorted."
+fn effective_grid(rows: u32, columns: u32, has_shape: bool) -> (u32, u32) {
+    if has_shape {
+        let n = rows.max(columns);
+        (n, n)
+    } else {
+        (rows, columns)
     }
 }
 
@@ -78,13 +142,13 @@ impl TileGeneratorParams {
             size_jitter: float("size_jitter", defaults.size_jitter),
             rotation_jitter: float("rotation_jitter", defaults.rotation_jitter),
             luminance_jitter: float("luminance_jitter", defaults.luminance_jitter),
-            tiling_mode: params
+            distribution: params
                 .get("tiling_mode")
                 .and_then(|v| match v {
-                    mc_core::ParamValue::Enum(name) => TilingMode::from_name(name),
+                    mc_core::ParamValue::Enum(name) => PatternDistribution::from_name(name),
                     _ => None,
                 })
-                .unwrap_or(defaults.tiling_mode),
+                .unwrap_or(defaults.distribution),
             shape_size: float("shape_size", defaults.shape_size),
         }
     }
@@ -171,10 +235,11 @@ pub fn dispatch(
 }
 
 fn pack_params(resolution: u32, params: &TileGeneratorParams, has_shape: bool) -> [u8; 64] {
+    let (rows, columns) = effective_grid(params.rows, params.columns, has_shape);
     let mut bytes = [0u8; 64];
     bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
-    bytes[4..8].copy_from_slice(&params.rows.to_le_bytes());
-    bytes[8..12].copy_from_slice(&params.columns.to_le_bytes());
+    bytes[4..8].copy_from_slice(&rows.to_le_bytes());
+    bytes[8..12].copy_from_slice(&columns.to_le_bytes());
     bytes[12..16].copy_from_slice(&params.seed.to_le_bytes());
     bytes[16..20].copy_from_slice(&params.offset.to_le_bytes());
     bytes[20..24].copy_from_slice(&params.gap.to_le_bytes());
@@ -182,7 +247,7 @@ fn pack_params(resolution: u32, params: &TileGeneratorParams, has_shape: bool) -
     bytes[28..32].copy_from_slice(&params.size_jitter.to_le_bytes());
     bytes[32..36].copy_from_slice(&params.rotation_jitter.to_le_bytes());
     bytes[36..40].copy_from_slice(&params.luminance_jitter.to_le_bytes());
-    bytes[40..44].copy_from_slice(&params.tiling_mode.as_u32().to_le_bytes());
+    bytes[40..44].copy_from_slice(&params.distribution.as_u32().to_le_bytes());
     bytes[44..48].copy_from_slice(&(has_shape as u32).to_le_bytes());
     bytes[48..52].copy_from_slice(&params.shape_size.to_le_bytes());
     bytes
@@ -190,9 +255,30 @@ fn pack_params(resolution: u32, params: &TileGeneratorParams, has_shape: bool) -
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch, TileGeneratorParams};
+    use super::{dispatch, effective_grid, PatternDistribution, TileGeneratorParams};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
-    use crate::tiling::TilingMode;
+
+    #[test]
+    fn effective_grid_is_unchanged_with_no_shape_connected() {
+        assert_eq!(effective_grid(6, 4, false), (6, 4));
+    }
+
+    #[test]
+    fn effective_grid_is_forced_square_once_a_shape_is_connected() {
+        assert_eq!(effective_grid(6, 4, true), (6, 6));
+        assert_eq!(effective_grid(4, 6, true), (6, 6));
+        assert_eq!(effective_grid(5, 5, true), (5, 5));
+    }
+
+    #[test]
+    fn every_distribution_name_round_trips() {
+        for name in PatternDistribution::NAMES {
+            assert!(
+                PatternDistribution::from_name(name).is_some(),
+                "{name:?} should parse"
+            );
+        }
+    }
 
     fn render(params: &TileGeneratorParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
@@ -233,34 +319,264 @@ mod tests {
 
     #[test]
     fn seed_changes_output() {
+        // Needs non-zero jitter — the seed only ever reaches rendered
+        // pixels through Size/Rotation/Luminance Jitter, all zero at this
+        // node's own defaults.
         let a = render(&TileGeneratorParams {
             seed: 1,
+            size_jitter: 0.08,
+            luminance_jitter: 0.15,
             ..TileGeneratorParams::default()
         });
         let b = render(&TileGeneratorParams {
             seed: 2,
+            size_jitter: 0.08,
+            luminance_jitter: 0.15,
             ..TileGeneratorParams::default()
         });
         assert_ne!(a, b, "different seeds produced identical pixels");
     }
 
-    /// Default params already stagger (offset=0.5), which is exactly the
-    /// case that pushes a row's column index past `columns - 1` and needs
-    /// wrapping for its per-tile hash — so disabling horizontal tiling here
-    /// should change that tile's randomized size/rotation/luminance.
+    /// Renders a connected disc Shape with the given distribution, no
+    /// stagger/jitter (keeps the geometry easy to reason about: a plain
+    /// 4x4 grid of discs, centered row/column index 2).
+    fn render_distribution(distribution: PatternDistribution) -> Vec<u8> {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        crate::shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "disc",
+            RESOLUTION,
+            &crate::shape::ShapeParams::default(),
+        );
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("disc"),
+            "test",
+            RESOLUTION,
+            &TileGeneratorParams {
+                rows: 4,
+                columns: 4,
+                offset: 0.0,
+                distribution,
+                ..TileGeneratorParams::default()
+            },
+        );
+        gpu.read_rgba8(pool.texture("test").unwrap(), RESOLUTION)
+    }
+
+    /// A disc never quite touches the edge of its own cell, so checking a
+    /// single pixel row/column is fragile — this checks the *whole band* of
+    /// pixel rows (or columns) a grid row (or column) index covers, 4x4
+    /// grid over `RESOLUTION`.
+    fn row_band_is_blank(pixels: &[u8], resolution: u32, grid_rows: u32, row_index: u32) -> bool {
+        let y0 = row_index * resolution / grid_rows;
+        let y1 = (row_index + 1) * resolution / grid_rows;
+        (y0..y1).all(|y| (0..resolution).all(|x| pixels[((y * resolution + x) * 4) as usize] == 0))
+    }
+
+    fn column_band_is_blank(
+        pixels: &[u8],
+        resolution: u32,
+        grid_columns: u32,
+        col_index: u32,
+    ) -> bool {
+        let x0 = col_index * resolution / grid_columns;
+        let x1 = (col_index + 1) * resolution / grid_columns;
+        (x0..x1).all(|x| (0..resolution).all(|y| pixels[((y * resolution + x) * 4) as usize] == 0))
+    }
+
     #[test]
-    fn tiling_off_changes_the_staggered_edge_tile() {
-        let wrapped = render(&TileGeneratorParams {
-            tiling_mode: TilingMode::Both,
+    fn horizontal_only_leaves_the_top_and_bottom_rows_blank() {
+        let pixels = render_distribution(PatternDistribution::HorizontalOnly);
+        assert!(
+            row_band_is_blank(&pixels, RESOLUTION, 4, 0),
+            "top grid row should be empty with Horizontal Only"
+        );
+        assert!(
+            row_band_is_blank(&pixels, RESOLUTION, 4, 3),
+            "bottom grid row should be empty with Horizontal Only"
+        );
+        assert!(
+            !row_band_is_blank(&pixels, RESOLUTION, 4, 2),
+            "the centered grid row should still show the shape with Horizontal Only"
+        );
+    }
+
+    #[test]
+    fn vertical_only_leaves_the_left_and_right_columns_blank() {
+        let pixels = render_distribution(PatternDistribution::VerticalOnly);
+        assert!(
+            column_band_is_blank(&pixels, RESOLUTION, 4, 0),
+            "left grid column should be empty with Vertical Only"
+        );
+        assert!(
+            column_band_is_blank(&pixels, RESOLUTION, 4, 3),
+            "right grid column should be empty with Vertical Only"
+        );
+        assert!(
+            !column_band_is_blank(&pixels, RESOLUTION, 4, 2),
+            "the centered grid column should still show the shape with Vertical Only"
+        );
+    }
+
+    /// Regression test: `rows`/`columns` = 6 (the real node's own default
+    /// Tile Count) is even, which is exactly the case a grid-aligned
+    /// "middle index" (e.g. `rows / 2`) lands half a cell off true center —
+    /// reported as "neither the horizontal nor the vertical version are
+    /// centered." Centering is done directly in UV space now (`uv == 0.5`),
+    /// independent of whether the tile count is even or odd, so the visible
+    /// band's margin above should match its margin below (and left should
+    /// match right) within one pixel of rounding.
+    #[test]
+    fn horizontal_and_vertical_only_are_centered_with_an_even_tile_count() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        crate::shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "disc",
+            RESOLUTION,
+            &crate::shape::ShapeParams::default(),
+        );
+        let base = TileGeneratorParams {
+            rows: 6,
+            columns: 6,
+            offset: 0.0,
             ..TileGeneratorParams::default()
-        });
-        let clamped = render(&TileGeneratorParams {
-            tiling_mode: TilingMode::Off,
-            ..TileGeneratorParams::default()
-        });
+        };
+
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("disc"),
+            "horizontal",
+            RESOLUTION,
+            &TileGeneratorParams {
+                distribution: PatternDistribution::HorizontalOnly,
+                ..base
+            },
+        );
+        let horizontal = gpu.read_rgba8(pool.texture("horizontal").unwrap(), RESOLUTION);
+        let first_row = (0..RESOLUTION)
+            .find(|&y| !row_band_is_blank(&horizontal, RESOLUTION, RESOLUTION, y))
+            .expect("Horizontal Only rendered nothing at all");
+        let last_row = (0..RESOLUTION)
+            .rev()
+            .find(|&y| !row_band_is_blank(&horizontal, RESOLUTION, RESOLUTION, y))
+            .unwrap();
+        let top_margin = first_row;
+        let bottom_margin = RESOLUTION - 1 - last_row;
+        assert!(
+            top_margin.abs_diff(bottom_margin) <= 1,
+            "Horizontal Only isn't centered: top margin {top_margin}, bottom margin {bottom_margin}"
+        );
+
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("disc"),
+            "vertical",
+            RESOLUTION,
+            &TileGeneratorParams {
+                distribution: PatternDistribution::VerticalOnly,
+                ..base
+            },
+        );
+        let vertical = gpu.read_rgba8(pool.texture("vertical").unwrap(), RESOLUTION);
+        let first_col = (0..RESOLUTION)
+            .find(|&x| !column_band_is_blank(&vertical, RESOLUTION, RESOLUTION, x))
+            .expect("Vertical Only rendered nothing at all");
+        let last_col = (0..RESOLUTION)
+            .rev()
+            .find(|&x| !column_band_is_blank(&vertical, RESOLUTION, RESOLUTION, x))
+            .unwrap();
+        let left_margin = first_col;
+        let right_margin = RESOLUTION - 1 - last_col;
+        assert!(
+            left_margin.abs_diff(right_margin) <= 1,
+            "Vertical Only isn't centered: left margin {left_margin}, right margin {right_margin}"
+        );
+    }
+
+    /// Regression test: staggering alternate rows sideways (`offset`) used
+    /// to knock every other tile of a single centered column out of frame —
+    /// reported as "the offset ... causes problems with the vertical only
+    /// setting." `offset` should now be ignored entirely outside Both.
+    #[test]
+    fn offset_has_no_effect_outside_both() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        crate::shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            "disc",
+            RESOLUTION,
+            &crate::shape::ShapeParams::default(),
+        );
+        for distribution in [
+            PatternDistribution::HorizontalOnly,
+            PatternDistribution::VerticalOnly,
+        ] {
+            dispatch(
+                &mut gpu,
+                &mut pool,
+                Some("disc"),
+                "no_offset",
+                RESOLUTION,
+                &TileGeneratorParams {
+                    rows: 6,
+                    columns: 6,
+                    offset: 0.0,
+                    distribution,
+                    ..TileGeneratorParams::default()
+                },
+            );
+            let no_offset = gpu.read_rgba8(pool.texture("no_offset").unwrap(), RESOLUTION);
+            dispatch(
+                &mut gpu,
+                &mut pool,
+                Some("disc"),
+                "with_offset",
+                RESOLUTION,
+                &TileGeneratorParams {
+                    rows: 6,
+                    columns: 6,
+                    offset: 0.5,
+                    distribution,
+                    ..TileGeneratorParams::default()
+                },
+            );
+            let with_offset = gpu.read_rgba8(pool.texture("with_offset").unwrap(), RESOLUTION);
+            assert_eq!(
+                no_offset, with_offset,
+                "{distribution:?}: Offset should have no effect outside Both"
+            );
+        }
+    }
+
+    #[test]
+    fn both_fills_the_whole_grid_unlike_either_single_axis_mode() {
+        let both = render_distribution(PatternDistribution::Both);
+        assert!(
+            !row_band_is_blank(&both, RESOLUTION, 4, 0),
+            "Both should fill every grid row, including the top one"
+        );
+        assert!(
+            !column_band_is_blank(&both, RESOLUTION, 4, 0),
+            "Both should fill every grid column, including the left one"
+        );
         assert_ne!(
-            wrapped, clamped,
-            "disabling tiling should change the staggered row's wrapped-edge tile"
+            both,
+            render_distribution(PatternDistribution::HorizontalOnly),
+            "Both should differ from Horizontal Only"
+        );
+        assert_ne!(
+            both,
+            render_distribution(PatternDistribution::VerticalOnly),
+            "Both should differ from Vertical Only"
         );
     }
 

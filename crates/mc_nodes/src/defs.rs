@@ -1024,11 +1024,13 @@ static NODE_DEFS: &[NodeDef] = &[
             ParamSpec {
                 name: "offset",
                 display_name: "Offset",
-                tooltip: "Stagger alternate rows by this fraction of a column (0.5 = brick).",
+                tooltip: "Stagger alternate rows by this fraction of a column (0.5 = brick). \
+                          Has no effect with Horizontal Only/Vertical Only Tiling \u{2014} \
+                          staggering only makes sense across a full grid.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
-                    default: 0.5,
+                    default: 0.0,
                 },
             },
             ParamSpec {
@@ -1039,7 +1041,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 0.4,
-                    default: 0.06,
+                    default: 0.0,
                 },
             },
             ParamSpec {
@@ -1060,7 +1062,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 0.4,
-                    default: 0.08,
+                    default: 0.0,
                 },
             },
             ParamSpec {
@@ -1072,7 +1074,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 kind: ParamSpecKind::Float {
                     min: 0.1,
                     max: 3.0,
-                    default: 1.0,
+                    default: 0.1,
                 },
             },
             ParamSpec {
@@ -1082,7 +1084,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
-                    default: 0.08,
+                    default: 0.0,
                 },
             },
             ParamSpec {
@@ -1102,7 +1104,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 kind: ParamSpecKind::Float {
                     min: 0.0,
                     max: 1.0,
-                    default: 0.15,
+                    default: 0.0,
                 },
             },
             ParamSpec {
@@ -1111,7 +1113,22 @@ static NODE_DEFS: &[NodeDef] = &[
                 tooltip: "Changes the per-tile randomness.",
                 kind: ParamSpecKind::Seed { default: 0 },
             },
-            tiling_mode_param(),
+            // Not the shared `tiling_mode_param()` (wrap-vs-clip at a
+            // sampled edge) — this is a different concept: which grid axes
+            // get a tile at all. Both is the standard full grid; Horizontal/
+            // Vertical Only draw a single centered row/column at normal
+            // (unstretched) tile size — e.g. distributing a connected Shape
+            // across one row or column instead of a full grid.
+            ParamSpec {
+                name: "tiling_mode",
+                display_name: "Tiling",
+                tooltip: "Both is the standard full grid. Horizontal/Vertical Only draw a single \
+                          centered row/column of tiles at their normal size instead.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::tile_generator::PatternDistribution::NAMES,
+                    default: "Both (Seamless)",
+                },
+            },
         ],
     },
     NodeDef {
