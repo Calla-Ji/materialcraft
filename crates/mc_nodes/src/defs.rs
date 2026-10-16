@@ -1954,6 +1954,108 @@ static NODE_DEFS: &[NodeDef] = &[
         ],
     },
     NodeDef {
+        kind: "fasteners",
+        display_name: "Fasteners",
+        category: "Generators/Path",
+        tooltip: "Places rivets, bolts, or screws evenly along a Path, seated on an optional \
+                  base height.",
+        inputs: &[
+            PortSpec {
+                name: "path",
+                display_name: "Path",
+                port_type: PortType::Path,
+            },
+            PortSpec {
+                name: "base",
+                display_name: "Base",
+                port_type: PortType::Gray,
+            },
+        ],
+        outputs: &[
+            PortSpec {
+                name: "height",
+                display_name: "Height",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "mask",
+                display_name: "Mask",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "fastener_id",
+                display_name: "Fastener ID",
+                port_type: PortType::Gray,
+            },
+        ],
+        params: &[
+            ParamSpec {
+                name: "kind",
+                display_name: "Kind",
+                tooltip: "Which fastener head to place.",
+                kind: ParamSpecKind::Enum {
+                    options: &crate::fasteners::FastenerKind::NAMES,
+                    default: "Rivet Dome",
+                },
+            },
+            ParamSpec {
+                name: "spacing",
+                display_name: "Spacing",
+                tooltip: "Target distance between fasteners along the path, tile units. Every \
+                          corner always gets one regardless.",
+                kind: ParamSpecKind::Float {
+                    min: 0.01,
+                    max: 0.3,
+                    default: 0.05,
+                },
+            },
+            ParamSpec {
+                name: "head_radius",
+                display_name: "Head Radius",
+                tooltip: "Tile units.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0005,
+                    max: 0.05,
+                    default: 0.006,
+                },
+            },
+            ParamSpec {
+                name: "head_height",
+                display_name: "Head Height",
+                tooltip: "Relative to the bevel depth units Bevel Profile uses (1.0 = a full \
+                          panel depth).",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.6,
+                },
+            },
+            ParamSpec {
+                name: "seed",
+                display_name: "Seed",
+                tooltip: "Changes which fasteners are missing and how each one is rotated.",
+                kind: ParamSpecKind::Seed { default: 1 },
+            },
+            ParamSpec {
+                name: "missing",
+                display_name: "Missing",
+                tooltip: "Probability a given fastener is absent.",
+                kind: ParamSpecKind::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "rotate",
+                display_name: "Rotate",
+                tooltip: "Each fastener gets its own random rotation. Off keeps every head \
+                          upright.",
+                kind: ParamSpecKind::Bool { default: true },
+            },
+        ],
+    },
+    NodeDef {
         kind: "knit",
         display_name: "Knit",
         category: "Generators/Patterns",

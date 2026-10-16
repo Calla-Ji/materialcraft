@@ -30,6 +30,7 @@ pub mod dither_pattern;
 pub mod edge_detect;
 pub mod export;
 pub mod fabric_generator;
+pub mod fasteners;
 pub mod fractal_sum;
 pub mod french_knot;
 pub mod gabor_noise;

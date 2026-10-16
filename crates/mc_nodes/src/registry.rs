@@ -12,13 +12,13 @@ use crate::{
     anisotropic_noise, bevel, bevel_profile, blend, block_shift, blur, channel_pack, channel_split,
     checker, circular_pattern, clamp, clouds, curvature_from_normal, curve, data_corrupt,
     directional_blur, directional_warp, distance_field, dither_pattern, edge_detect,
-    fabric_generator, fractal_sum, french_knot, gabor_noise, gradient_linear, gradient_map,
-    gradient_radial, grayscale_conversion, height_to_ao, height_to_normal, histogram_scan,
-    hsl_adjust, image_import, image_trace, invert, knit, levels, ordered_dither, palette_dither,
-    panel_layout, path, path_simplify, path_to_mask, path_to_sdf, perlin, redistance,
-    scanline_jitter, scattered_streaks, shape, shape_boolean, simplex_noise, slope_blur, stitch,
-    thread_shape, threshold, tile_generator, transform2d, type_text, uniform_color, voronoi, warp,
-    white_noise,
+    fabric_generator, fasteners, fractal_sum, french_knot, gabor_noise, gradient_linear,
+    gradient_map, gradient_radial, grayscale_conversion, height_to_ao, height_to_normal,
+    histogram_scan, hsl_adjust, image_import, image_trace, invert, knit, levels, ordered_dither,
+    palette_dither, panel_layout, path, path_simplify, path_to_mask, path_to_sdf, perlin,
+    redistance, scanline_jitter, scattered_streaks, shape, shape_boolean, simplex_noise,
+    slope_blur, stitch, thread_shape, threshold, tile_generator, transform2d, type_text,
+    uniform_color, voronoi, warp, white_noise,
 };
 
 /// The default output port name every single-output `NodeDef` uses.
@@ -787,6 +787,35 @@ pub fn evaluate(
                         .unwrap_or_default();
                     let params = path_to_sdf::PathToSdfParams::from_graph(&node.params);
                     path_to_sdf::dispatch(gpu, pool, &key, resolution, &input_path, &params);
+                }
+                "fasteners" => {
+                    // Same "read the Path input directly, bypassing the
+                    // texture pool" pattern as `path_to_sdf` above.
+                    let input_path = graph
+                        .upstream_from(id, "path")
+                        .and_then(|(upstream_id, _)| graph.node(upstream_id))
+                        .and_then(|n| n.params.get("path"))
+                        .and_then(mc_core::ParamValue::as_path)
+                        .cloned()
+                        .unwrap_or_default();
+                    let base_key = resolve_optional_input("base");
+                    let height_key = texture_key(id, "height");
+                    let mask_key = texture_key(id, "mask");
+                    let fastener_id_key = texture_key(id, "fastener_id");
+                    let params = fasteners::FastenersParams::from_graph(&node.params);
+                    fasteners::dispatch(
+                        gpu,
+                        pool,
+                        &input_path,
+                        base_key.as_deref(),
+                        fasteners::FastenersOutputKeys {
+                            height: &height_key,
+                            mask: &mask_key,
+                            fastener_id: &fastener_id_key,
+                        },
+                        resolution,
+                        &params,
+                    );
                 }
                 other => return Err(EvalError::UnknownKind(id, other.to_string())),
             }
