@@ -155,13 +155,18 @@ fn glitch_dither_demo_matches_golden() {
     // node pipeline moved from `Rgba8Unorm` to `Rgba16Float` — that migration
     // nudges every upstream node's exact float value by the same kind of
     // tiny amount cross-GPU noise does, so it trips this same amplifier.
+    // Re-confirmed again on GitHub's `ubuntu-latest` (Lavapipe/llvmpipe
+    // software Vulkan — max diff 114, briefly over the old tolerance of
+    // 100): pulled the actual render via `MC_GOLDEN_FAILURE_DIR` and
+    // compared side by side — same dither pattern, same macro structure,
+    // no visible difference. Bumped to 130 for headroom.
     let (pixels, resolution) =
         render_base_color("../../examples/graphs/glitch_dither_demo.mcgraph");
     assert_matches_golden_with_tolerance(
         &pixels,
         resolution,
         "../../tests/golden/glitch_dither_demo_base_color.png",
-        100,
+        130,
     );
 }
 

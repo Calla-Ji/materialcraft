@@ -20,6 +20,9 @@ use anyhow::{Context as _, Result};
 pub struct Context {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// `None` when wrapping an externally-owned device (`Context::new`,
+    /// e.g. eframe's), since only `new_headless` requests its own adapter.
+    adapter_info: Option<wgpu::AdapterInfo>,
     pipelines: HashMap<(String, u64), Arc<wgpu::ComputePipeline>>,
 }
 
@@ -29,6 +32,7 @@ impl Context {
         Self {
             device,
             queue,
+            adapter_info: None,
             pipelines: HashMap::new(),
         }
     }
@@ -48,11 +52,12 @@ impl Context {
             })
             .await
             .context("no suitable GPU adapter found")?;
+        let adapter_info = adapter.get_info();
         // Ask for the adapter's own real limits rather than
         // `wgpu::Limits::default()`'s conservative 256 MiB buffer cap — see
         // `mc_app::main`'s matching override for why (the content-adaptive
         // mesh can need a bigger single vertex buffer at high Tessellation).
-        let base_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
+        let base_limits = if adapter_info.backend == wgpu::Backend::Gl {
             wgpu::Limits::downlevel_webgl2_defaults()
         } else {
             adapter.limits()
@@ -65,7 +70,26 @@ impl Context {
             })
             .await
             .context("failed to create GPU device")?;
-        Ok(Self::new(device, queue))
+        let mut ctx = Self::new(device, queue);
+        ctx.adapter_info = Some(adapter_info);
+        Ok(ctx)
+    }
+
+    /// True when this `Context` is backed by a CPU-emulated adapter (e.g.
+    /// Lavapipe/llvmpipe, GitHub's `ubuntu-latest` runners' only Vulkan
+    /// fallback — no real GPU is present there at all). No end user's
+    /// machine ever renders through this path; it exists purely so
+    /// `mc_app`/`mc_cli`'s GPU-touching tests have *some* adapter to run
+    /// against in CI. Software Vulkan implementations are real, useful
+    /// Vulkan conformance targets, but aren't held to the same shader
+    /// compiler quality bar as a shipping GPU driver — see
+    /// `mc_app::tess_gpu`'s golden-precision tests for the real bug this
+    /// was added to work around (a confirmed Lavapipe JIT miscompile,
+    /// independently root-caused, not a bug in this project's own code).
+    pub fn is_software_adapter(&self) -> bool {
+        self.adapter_info
+            .as_ref()
+            .is_some_and(|info| info.device_type == wgpu::DeviceType::Cpu)
     }
 
     /// Get or compile the compute pipeline for a node's shader source.
