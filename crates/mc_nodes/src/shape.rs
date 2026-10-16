@@ -63,6 +63,12 @@ pub struct ShapeParams {
     pub scale_y: f32,
     pub softness: f32,
     pub rotation: f32,
+    /// Moves the shape's own center away from the tile's, tile units —
+    /// wraps (the shape reappears on the opposite edge past 0.5), so this
+    /// stays seamless without needing a separate Transform 2D node just to
+    /// reposition a single Shape.
+    pub offset_x: f32,
+    pub offset_y: f32,
     /// Star only: how deep the points cut in, 1.0..0.05. At 1.0 the star's
     /// inner and outer radius match, so it's indistinguishable from a plain
     /// Polygon of the same side count (e.g. a triangle at `sides = 3`);
@@ -96,6 +102,8 @@ impl Default for ShapeParams {
             // with a hard edge, not the old 0.05 default.
             softness: 0.0,
             rotation: 0.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
             point_depth: 0.5,
             curvature_top: 0.6,
             curvature_bottom: 0.6,
@@ -142,6 +150,14 @@ impl ShapeParams {
                 .get("rotation")
                 .and_then(mc_core::ParamValue::as_float)
                 .unwrap_or(defaults.rotation),
+            offset_x: params
+                .get("offset_x")
+                .and_then(mc_core::ParamValue::as_float)
+                .unwrap_or(defaults.offset_x),
+            offset_y: params
+                .get("offset_y")
+                .and_then(mc_core::ParamValue::as_float)
+                .unwrap_or(defaults.offset_y),
             point_depth: params
                 .get("point_depth")
                 .and_then(mc_core::ParamValue::as_float)
@@ -230,8 +246,8 @@ pub fn dispatch(
     gpu.queue.submit(Some(encoder.finish()));
 }
 
-fn pack_params(resolution: u32, params: &ShapeParams) -> [u8; 56] {
-    let mut bytes = [0u8; 56];
+fn pack_params(resolution: u32, params: &ShapeParams) -> [u8; 64] {
+    let mut bytes = [0u8; 64];
     bytes[0..4].copy_from_slice(&resolution.to_le_bytes());
     bytes[4..8].copy_from_slice(&params.kind.as_u32().to_le_bytes());
     bytes[8..12].copy_from_slice(&params.sides.to_le_bytes());
@@ -246,6 +262,8 @@ fn pack_params(resolution: u32, params: &ShapeParams) -> [u8; 56] {
     bytes[44..48].copy_from_slice(&params.middle_position.to_le_bytes());
     bytes[48..52].copy_from_slice(&params.scale_x.to_le_bytes());
     bytes[52..56].copy_from_slice(&params.scale_y.to_le_bytes());
+    bytes[56..60].copy_from_slice(&params.offset_x.to_le_bytes());
+    bytes[60..64].copy_from_slice(&params.offset_y.to_le_bytes());
     bytes
 }
 
@@ -594,6 +612,26 @@ mod tests {
         }
     }
 
+    /// Size's own UI minimum is 0.01 (defs.rs) — every kind should still
+    /// dispatch cleanly at that floor, not just at the old 0.1 minimum.
+    #[test]
+    fn renders_without_panicking_at_minimum_size() {
+        for kind in [
+            ShapeKind::Disc,
+            ShapeKind::Square,
+            ShapeKind::Polygon,
+            ShapeKind::Star,
+            ShapeKind::Leaf,
+        ] {
+            let params = ShapeParams {
+                kind,
+                size: 0.01,
+                ..ShapeParams::default()
+            };
+            render(&params);
+        }
+    }
+
     #[test]
     fn default_softness_is_zero() {
         assert_eq!(ShapeParams::default().softness, 0.0);
@@ -687,5 +725,74 @@ mod tests {
             "a scale_x = 2.0 ellipse rotated a quarter turn should now be tall, not wide \
              (horizontal={horizontal_extent}, vertical={vertical_extent}, ratio={ratio})"
         );
+    }
+
+    /// `offset_x`/`offset_y` move the shape's own center away from the
+    /// tile's — the default center should go from shape to background, and
+    /// the new center (tile center + offset) should go from background to
+    /// shape.
+    #[test]
+    fn offset_moves_the_shape_away_from_the_tile_center() {
+        let r = RESOLUTION as usize;
+        let params = ShapeParams {
+            kind: ShapeKind::Disc,
+            size: 0.3,
+            offset_x: 0.25,
+            offset_y: 0.0,
+            ..ShapeParams::default()
+        };
+        let pixels = render(&params);
+        let tile_center = pixels[(r / 2 * r + r / 2) * 4];
+        let new_center_x = (r / 2 + r / 4).min(r - 1);
+        let shifted_center = pixels[(r / 2 * r + new_center_x) * 4];
+        assert!(
+            tile_center < 10,
+            "the tile's own center should now be background, got {tile_center}"
+        );
+        assert!(
+            shifted_center > 200,
+            "offset_x = 0.25 should put the shape a quarter-tile to the right, got \
+             {shifted_center}"
+        );
+    }
+
+    /// An offset past 0.5 wraps instead of sliding the shape off the tile —
+    /// the shape should reappear on the opposite edge, keeping this
+    /// seamless with no separate Transform 2D node.
+    #[test]
+    fn offset_wraps_past_the_tile_edge() {
+        let no_offset = ShapeParams {
+            kind: ShapeKind::Disc,
+            size: 0.3,
+            ..ShapeParams::default()
+        };
+        let want = render(&no_offset);
+
+        let wrapped = ShapeParams {
+            kind: ShapeKind::Disc,
+            size: 0.3,
+            offset_x: 1.0,
+            offset_y: 1.0,
+            ..ShapeParams::default()
+        };
+        let got = render(&wrapped);
+
+        assert_eq!(
+            got, want,
+            "offsetting by exactly one full tile should wrap back to an identical image"
+        );
+    }
+
+    #[test]
+    fn offset_preserves_seamless_tiling() {
+        let params = ShapeParams {
+            kind: ShapeKind::Disc,
+            size: 0.3,
+            offset_x: 0.4,
+            offset_y: 0.35,
+            ..ShapeParams::default()
+        };
+        let pixels = render(&params);
+        assert_tiles_seamlessly(&pixels, RESOLUTION);
     }
 }

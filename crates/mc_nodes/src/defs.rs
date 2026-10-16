@@ -2165,7 +2165,7 @@ static NODE_DEFS: &[NodeDef] = &[
                 tooltip: "How large the shape is. Past 1.0 the shape grows larger than the \
                           tile itself, cropped by its edge.",
                 kind: ParamSpecKind::Float {
-                    min: 0.1,
+                    min: 0.01,
                     max: 3.0,
                     default: 0.6,
                 },
@@ -2210,6 +2210,28 @@ static NODE_DEFS: &[NodeDef] = &[
                 tooltip: "Fraction of a full turn.",
                 kind: ParamSpecKind::Float {
                     min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "offset_x",
+                display_name: "Offset X",
+                tooltip: "Moves the shape away from the tile's center, tile units. Wraps past \
+                          0.5, so the shape reappears on the opposite edge \u{2014} no separate \
+                          Transform 2D node needed just to reposition it.",
+                kind: ParamSpecKind::Float {
+                    min: -1.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+            },
+            ParamSpec {
+                name: "offset_y",
+                display_name: "Offset Y",
+                tooltip: "Same as Offset X, for the vertical axis.",
+                kind: ParamSpecKind::Float {
+                    min: -1.0,
                     max: 1.0,
                     default: 0.0,
                 },

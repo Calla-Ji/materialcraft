@@ -53,6 +53,8 @@ struct ShapeParams {
     middle_position: f32,
     scale_x: f32,
     scale_y: f32,
+    offset_x: f32,
+    offset_y: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: ShapeParams;
@@ -191,7 +193,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let uv = (vec2<f32>(id.xy) + 0.5) / f32(params.resolution);
-    var p = uv - vec2<f32>(0.5, 0.5);
+    // Offset wraps (fract), not clamps, so a shape pushed past one edge
+    // reappears on the opposite one instead of sliding off — keeps this
+    // seamless without a separate Transform 2D node just to reposition it.
+    let shifted = fract(uv - vec2<f32>(params.offset_x, params.offset_y));
+    var p = shifted - vec2<f32>(0.5, 0.5);
     let sides_f = f32(params.sides);
     // Rotate the world-space query point into the shape's own local frame
     // first (the existing, already-correct step every kind's rotation
