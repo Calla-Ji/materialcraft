@@ -565,6 +565,9 @@ fn build_fabric_graph() -> mc_core::Graph {
             .with_param("columns", mc_core::ParamValue::Int(24)),
     );
     graph.connect(thread, "height", weave, "fiber").unwrap();
+    graph
+        .connect(thread, "ply_id", weave, "fiber_ply_id")
+        .unwrap();
 
     let fiber_noise = graph.add_node(
         mc_core::Node::new("fractal_sum")
@@ -600,6 +603,42 @@ fn build_fabric_graph() -> mc_core::Graph {
         .connect(combined, "output", colorize, "input")
         .unwrap();
 
+    // Thread's own per-ply color data (3 plies, matching `thread` above),
+    // mapped to genuinely contrasting fleck colors (not just lighter/darker
+    // shades of the same denim blue — multiplying same-hue stops onto a
+    // dark base only dims it, it doesn't read as multicolor) and composited
+    // with Copy so each ply's own color actually shows through, the classic
+    // heathered-yarn look.
+    let ply_color = graph.add_node(mc_core::Node::new("gradient_map").with_param(
+        "gradient",
+        mc_core::ParamValue::Gradient(vec![
+            mc_core::GradientStop {
+                position: 0.0,
+                color: [0.12, 0.16, 0.35, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 0.5,
+                color: [0.55, 0.30, 0.12, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 1.0,
+                color: [0.80, 0.75, 0.60, 1.0],
+            },
+        ]),
+    ));
+    graph.connect(weave, "ply_id", ply_color, "input").unwrap();
+    let base_color = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Copy".to_string()))
+            .with_param("opacity", mc_core::ParamValue::Float(0.5)),
+    );
+    graph
+        .connect(colorize, "output", base_color, "base")
+        .unwrap();
+    graph
+        .connect(ply_color, "output", base_color, "blend")
+        .unwrap();
+
     let normal = graph.add_node(
         mc_core::Node::new("height_to_normal")
             .with_param("intensity", mc_core::ParamValue::Float(0.8)),
@@ -623,7 +662,7 @@ fn build_fabric_graph() -> mc_core::Graph {
     let out_ao = graph.add_node(mc_core::Node::new("output_ambient_occlusion"));
 
     graph
-        .connect(colorize, "output", out_base_color, "input")
+        .connect(base_color, "output", out_base_color, "input")
         .unwrap();
     graph
         .connect(normal, "output", out_normal, "input")

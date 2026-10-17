@@ -148,11 +148,19 @@ fn pack_params(resolution: u32, params: &FabricGeneratorParams) -> [u8; 48] {
     bytes
 }
 
+/// Where `dispatch` writes its two outputs — mirrors
+/// [`crate::thread_shape::ThreadOutputKeys`].
+pub struct FabricGeneratorOutputKeys<'a> {
+    pub height: &'a str,
+    pub ply_id: &'a str,
+}
+
 pub fn dispatch(
     gpu: &mut mc_gpu::Context,
     pool: &mut mc_gpu::TexturePool,
     fiber_key: Option<&str>,
-    output_key: &str,
+    fiber_ply_id_key: Option<&str>,
+    outputs: FabricGeneratorOutputKeys,
     resolution: u32,
     params: &FabricGeneratorParams,
 ) {
@@ -162,19 +170,22 @@ pub fn dispatch(
     // Blend's mask or Scanline Jitter's own mask above. A single straight
     // (untwisted, unplied) round strand filling one row — `threads: 1`
     // makes Thread's own `thickness` mean "fraction of the whole tile
-    // height", matching what this fallback always meant.
-    let default_fiber_key = format!("{output_key}__default_fiber_height");
-    let fiber_key = match fiber_key {
-        Some(key) => key,
+    // height", matching what this fallback always meant. This internal
+    // Thread already generates a real Ply ID too, so the fallback fiber
+    // path below carries it straight through instead of discarding it.
+    let default_fiber_height_key = format!("{}__default_fiber_height", outputs.height);
+    let default_fiber_ply_id_key = format!("{}__default_fiber_ply_id", outputs.height);
+    let (fiber_key, fallback_ply_id_key) = match fiber_key {
+        Some(key) => (key, None),
         None => {
             crate::thread_shape::dispatch(
                 gpu,
                 pool,
                 crate::thread_shape::ThreadOutputKeys {
-                    height: &default_fiber_key,
-                    ply_id: &format!("{output_key}__default_fiber_ply_id"),
-                    fiber: &format!("{output_key}__default_fiber_fiber"),
-                    mask: &format!("{output_key}__default_fiber_mask"),
+                    height: &default_fiber_height_key,
+                    ply_id: &default_fiber_ply_id_key,
+                    fiber: &format!("{}__default_fiber_fiber", outputs.height),
+                    mask: &format!("{}__default_fiber_mask", outputs.height),
                 },
                 resolution,
                 &crate::thread_shape::ThreadShapeParams {
@@ -185,12 +196,42 @@ pub fn dispatch(
                     ..crate::thread_shape::ThreadShapeParams::default()
                 },
             );
-            &default_fiber_key
+            (
+                default_fiber_height_key.as_str(),
+                Some(default_fiber_ply_id_key.as_str()),
+            )
         }
     };
     let fiber_view = pool
         .view(fiber_key)
         .unwrap_or_else(|| panic!("fabric_generator: no texture at fiber key {fiber_key:?}"))
+        .clone();
+
+    // A real Thread is wired in but its Ply ID output wasn't separately
+    // connected: fall back to a flat "single ply" value (every strand reads
+    // as ply 1 of 1), the same sensible-default convention as every other
+    // optional input in this engine.
+    let single_ply_key = format!("{}__single_ply_fallback", outputs.height);
+    let fiber_ply_id_key = match fiber_ply_id_key.or(fallback_ply_id_key) {
+        Some(key) => key.to_string(),
+        None => {
+            crate::uniform_color::dispatch(
+                gpu,
+                pool,
+                &single_ply_key,
+                resolution,
+                &crate::uniform_color::UniformColorParams {
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
+            );
+            single_ply_key.clone()
+        }
+    };
+    let fiber_ply_id_view = pool
+        .view(&fiber_ply_id_key)
+        .unwrap_or_else(|| {
+            panic!("fabric_generator: no texture at fiber ply id key {fiber_ply_id_key:?}")
+        })
         .clone();
 
     let shader_source = full_source("fabric_generator.wgsl");
@@ -205,12 +246,22 @@ pub fn dispatch(
     });
     gpu.queue.write_buffer(&param_buffer, 0, &param_bytes);
 
-    let view = pool.get_or_create(
-        &gpu.device,
-        output_key,
-        resolution,
-        wgpu::TextureFormat::Rgba16Float,
-    );
+    let view = pool
+        .get_or_create(
+            &gpu.device,
+            outputs.height,
+            resolution,
+            wgpu::TextureFormat::Rgba16Float,
+        )
+        .clone();
+    let ply_id_view = pool
+        .get_or_create(
+            &gpu.device,
+            outputs.ply_id,
+            resolution,
+            wgpu::TextureFormat::Rgba16Float,
+        )
+        .clone();
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);
     let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -227,7 +278,15 @@ pub fn dispatch(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::TextureView(view),
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&fiber_ply_id_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&ply_id_view),
             },
         ],
     });
@@ -252,14 +311,46 @@ pub fn dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch, FabricGeneratorParams, WeaveType};
+    use super::{dispatch, FabricGeneratorOutputKeys, FabricGeneratorParams, WeaveType};
     use crate::test_support::{assert_tiles_seamlessly, RESOLUTION};
 
     fn render(params: &FabricGeneratorParams) -> Vec<u8> {
         let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
         let mut pool = mc_gpu::TexturePool::default();
-        dispatch(&mut gpu, &mut pool, None, "test", RESOLUTION, params);
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            None,
+            None,
+            FabricGeneratorOutputKeys {
+                height: "test",
+                ply_id: "test_ply_id",
+            },
+            RESOLUTION,
+            params,
+        );
         let texture = pool.texture("test").expect("fabric_generator texture");
+        gpu.read_rgba8(texture, RESOLUTION)
+    }
+
+    fn render_ply_id(params: &FabricGeneratorParams) -> Vec<u8> {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            None,
+            None,
+            FabricGeneratorOutputKeys {
+                height: "test",
+                ply_id: "test_ply_id",
+            },
+            RESOLUTION,
+            params,
+        );
+        let texture = pool
+            .texture("test_ply_id")
+            .expect("fabric_generator ply_id texture");
         gpu.read_rgba8(texture, RESOLUTION)
     }
 
@@ -403,7 +494,18 @@ mod tests {
         let mut pool = mc_gpu::TexturePool::default();
         let params = FabricGeneratorParams::default();
 
-        dispatch(&mut gpu, &mut pool, None, "fallback", RESOLUTION, &params);
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            None,
+            None,
+            FabricGeneratorOutputKeys {
+                height: "fallback",
+                ply_id: "fallback_ply_id",
+            },
+            RESOLUTION,
+            &params,
+        );
         let fallback = gpu.read_rgba8(pool.texture("fallback").unwrap(), RESOLUTION);
 
         crate::thread_shape::dispatch(
@@ -428,7 +530,11 @@ mod tests {
             &mut gpu,
             &mut pool,
             Some("thin_fiber_height"),
-            "with_fiber",
+            None,
+            FabricGeneratorOutputKeys {
+                height: "with_fiber",
+                ply_id: "with_fiber_ply_id",
+            },
             RESOLUTION,
             &params,
         );
@@ -498,7 +604,11 @@ mod tests {
             &mut gpu,
             &mut pool,
             Some("loose_height"),
-            "with_straight",
+            None,
+            FabricGeneratorOutputKeys {
+                height: "with_straight",
+                ply_id: "with_straight_ply_id",
+            },
             RESOLUTION,
             &params,
         );
@@ -506,7 +616,11 @@ mod tests {
             &mut gpu,
             &mut pool,
             Some("tight_height"),
-            "with_twisted",
+            None,
+            FabricGeneratorOutputKeys {
+                height: "with_twisted",
+                ply_id: "with_twisted_ply_id",
+            },
             RESOLUTION,
             &params,
         );
@@ -516,6 +630,111 @@ mod tests {
         assert_ne!(
             with_straight, with_twisted,
             "a twisted 3-ply fiber should weave differently than the same fiber untwisted"
+        );
+    }
+
+    #[test]
+    fn ply_id_tiles_seamlessly() {
+        assert_tiles_seamlessly(
+            &render_ply_id(&FabricGeneratorParams::default()),
+            RESOLUTION,
+        );
+    }
+
+    #[test]
+    fn ply_id_is_deterministic() {
+        let params = FabricGeneratorParams {
+            seed: 7,
+            ..FabricGeneratorParams::default()
+        };
+        assert_eq!(render_ply_id(&params), render_ply_id(&params));
+    }
+
+    /// Stockinette never samples a fiber cross-section at all — its Ply ID
+    /// output should read as flat 0, not leftover/undefined data.
+    #[test]
+    fn stockinette_ply_id_is_flat_zero() {
+        let params = FabricGeneratorParams {
+            weave_type: WeaveType::Stockinette,
+            rows: 24,
+            columns: 24,
+            ..FabricGeneratorParams::default()
+        };
+        let pixels = render_ply_id(&params);
+        assert!(
+            pixels.iter().step_by(4).all(|&r| r == 0),
+            "Stockinette's Ply ID output should be uniformly zero"
+        );
+    }
+
+    /// Wiring a real multi-ply Thread's Ply ID output in should actually
+    /// change Fabric Generator's own Ply ID output, not just be plumbing
+    /// that's silently discarded (the bug this whole feature started from —
+    /// the internal fallback Thread already generated a real Ply ID that
+    /// used to be thrown away).
+    #[test]
+    fn a_connected_fiber_ply_id_changes_the_ply_id_output() {
+        let mut gpu = mc_gpu::Context::new_headless().expect("headless GPU context");
+        let mut pool = mc_gpu::TexturePool::default();
+        let params = FabricGeneratorParams {
+            rows: 24,
+            columns: 24,
+            size_jitter: 0.0,
+            ..FabricGeneratorParams::default()
+        };
+
+        crate::thread_shape::dispatch(
+            &mut gpu,
+            &mut pool,
+            crate::thread_shape::ThreadOutputKeys {
+                height: "yarn_height",
+                ply_id: "yarn_ply_id",
+                fiber: "yarn_fiber",
+                mask: "yarn_mask",
+            },
+            RESOLUTION,
+            &crate::thread_shape::ThreadShapeParams {
+                plies: 3,
+                thickness: 0.7,
+                fiber_mode: crate::thread_shape::FiberMode::None,
+                ..crate::thread_shape::ThreadShapeParams::default()
+            },
+        );
+
+        // Fiber connected, Ply ID left unconnected: flat single-ply fallback.
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("yarn_height"),
+            None,
+            FabricGeneratorOutputKeys {
+                height: "no_ply_id_height",
+                ply_id: "no_ply_id_ply_id",
+            },
+            RESOLUTION,
+            &params,
+        );
+        let flat = gpu.read_rgba8(pool.texture("no_ply_id_ply_id").unwrap(), RESOLUTION);
+
+        // Both Fiber and its matching Ply ID connected: real per-ply data.
+        dispatch(
+            &mut gpu,
+            &mut pool,
+            Some("yarn_height"),
+            Some("yarn_ply_id"),
+            FabricGeneratorOutputKeys {
+                height: "with_ply_id_height",
+                ply_id: "with_ply_id_ply_id",
+            },
+            RESOLUTION,
+            &params,
+        );
+        let real = gpu.read_rgba8(pool.texture("with_ply_id_ply_id").unwrap(), RESOLUTION);
+
+        assert_ne!(
+            flat, real,
+            "connecting a real multi-ply Thread's Ply ID should change Fabric Generator's own \
+             Ply ID output, not be silently discarded"
         );
     }
 }

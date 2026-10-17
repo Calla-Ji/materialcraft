@@ -187,12 +187,18 @@ pub fn evaluate(
                 }
                 "fabric_generator" => {
                     let fiber_key = resolve_optional_input("fiber");
+                    let fiber_ply_id_key = resolve_optional_input("fiber_ply_id");
+                    let ply_id_key = texture_key(id, "ply_id");
                     let params = fabric_generator::FabricGeneratorParams::from_graph(&node.params);
                     fabric_generator::dispatch(
                         gpu,
                         pool,
                         fiber_key.as_deref(),
-                        &key,
+                        fiber_ply_id_key.as_deref(),
+                        fabric_generator::FabricGeneratorOutputKeys {
+                            height: &key,
+                            ply_id: &ply_id_key,
+                        },
                         resolution,
                         &params,
                     );

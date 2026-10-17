@@ -356,7 +356,9 @@ fn resolve_upstream_type(
 pub fn input_is_optional(kind: &str, port_name: &str) -> bool {
     matches!(
         (kind, port_name),
-        ("fabric_generator", "fiber") | ("tile_generator", "shape")
+        ("fabric_generator", "fiber")
+            | ("fabric_generator", "fiber_ply_id")
+            | ("tile_generator", "shape")
     )
 }
 
@@ -1142,16 +1144,30 @@ static NODE_DEFS: &[NodeDef] = &[
         display_name: "Fabric Generator",
         category: "Generators/Patterns",
         tooltip: "Woven and knit base shapes for building fabric materials from scratch.",
-        inputs: &[PortSpec {
-            name: "fiber",
-            display_name: "Thread",
-            port_type: PortType::Gray,
-        }],
-        outputs: &[PortSpec {
-            name: "output",
-            display_name: "Output",
-            port_type: PortType::Gray,
-        }],
+        inputs: &[
+            PortSpec {
+                name: "fiber",
+                display_name: "Thread",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "fiber_ply_id",
+                display_name: "Thread Ply ID",
+                port_type: PortType::Gray,
+            },
+        ],
+        outputs: &[
+            PortSpec {
+                name: "output",
+                display_name: "Output",
+                port_type: PortType::Gray,
+            },
+            PortSpec {
+                name: "ply_id",
+                display_name: "Ply ID",
+                port_type: PortType::Gray,
+            },
+        ],
         params: &[
             ParamSpec {
                 name: "weave_type",

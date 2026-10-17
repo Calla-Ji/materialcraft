@@ -16,10 +16,20 @@
 //          actually unbound. Stockinette's loops aren't straight thread
 //          segments with a cross-section — it keeps its own built-in "V"
 //          stitch shape regardless of what's wired into Fiber.
+//          `ply_id_tex` — Thread's own Ply ID output (see
+//          `thread_shape.wgsl`), sampled at the exact same coordinates as
+//          whichever `fiber_tex` sample actually won at each pixel, so a
+//          downstream Gradient Map can color each ply consistently with the
+//          woven structure. If nothing's wired into the new "Thread Ply ID"
+//          input, `dispatch` binds a flat "single ply" fallback.
 // Output:  `output` — a height-like value tracing a woven or knit fabric's
 //          thread structure, 0 in the valleys between threads up to 1 on a
 //          thread's own ridge. Chain into Height to Normal the same way
 //          Pattern Generator's output is meant to be used.
+//          `ply_id_out` — the winning sample's own Ply ID, carried straight
+//          through unmodified. Always 0 for Stockinette, which never
+//          samples a fiber cross-section at all (its own built-in "V"
+//          stitch shape has no ply data to report).
 // Params:
 //   weave_type         — 0 Plain Weave, 1 Twill, 2 Rib Knit, 3 Stockinette
 //                         (Jersey Knit)
@@ -67,6 +77,8 @@ struct FabricGeneratorParams {
 @group(0) @binding(0) var<uniform> params: FabricGeneratorParams;
 @group(0) @binding(1) var fiber_tex: texture_2d<f32>;
 @group(0) @binding(2) var output: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var ply_id_tex: texture_2d<f32>;
+@group(0) @binding(4) var ply_id_out: texture_storage_2d<rgba16float, write>;
 
 const WEAVE_PLAIN: u32 = 0u;
 const WEAVE_TWILL: u32 = 1u;
@@ -92,6 +104,17 @@ fn fiber_height(t: f32, along_frac: f32, width_scale: f32) -> f32 {
     return textureLoad(fiber_tex, vec2<i32>(x, y), 0).r;
 }
 
+// Same coordinate mapping as `fiber_height`, sampling `ply_id_tex` instead
+// — call it with the exact same `(t, along_frac, width_scale)` as whichever
+// `fiber_height` call it should carry the ply data for.
+fn fiber_ply_id(t: f32, along_frac: f32, width_scale: f32) -> f32 {
+    let size = i32(params.resolution);
+    let sample_t = clamp(t / max(width_scale, 0.0001), -0.5, 0.5);
+    let y = clamp(i32((sample_t + 0.5) * f32(size)), 0, size - 1);
+    let x = clamp(i32(fract(along_frac) * f32(size)), 0, size - 1);
+    return textureLoad(ply_id_tex, vec2<i32>(x, y), 0).r;
+}
+
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= params.resolution || id.y >= params.resolution) {
@@ -115,6 +138,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let luminance = 1.0 - params.luminance_jitter * h2;
 
     var value = 0.0;
+    var ply = 0.0;
     if params.weave_type == WEAVE_RIB_KNIT {
         let rib_width = max(i32(params.rib_width), 1);
         let raised = wrap_i(col, rib_width * 2) < rib_width;
@@ -123,6 +147,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         // loops without simulating each individual one.
         h = h * (0.9 + 0.1 * cos(yp * 6.28318530718));
         value = select(h * 0.45, h, raised);
+        ply = fiber_ply_id(xp, yp + 0.5, width_scale);
     } else if params.weave_type == WEAVE_STOCKINETTE {
         // Reuses Pattern Generator's own running-bond stagger (alternate
         // rows offset by half a column) so loops interlock the way real
@@ -144,7 +169,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let d = abs(lx) * 2.2 + abs(ly) * 1.3;
         let edge = clamp(params.thread_width, 0.05, 1.0) * loop_width_scale;
         value = clamp(1.0 - d / edge, 0.0, 1.0) * (1.0 - params.luminance_jitter * lh2);
+        // Stockinette never samples a fiber cross-section — no ply data.
         textureStore(output, vec2<i32>(id.xy), vec4<f32>(value, value, value, 1.0));
+        textureStore(ply_id_out, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
         return;
     } else {
         // Plain Weave and Twill both cross a vertical and a horizontal
@@ -152,6 +179,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         // top" at a given crossing.
         let v_h = fiber_height(xp, yp + 0.5, width_scale);
         let h_h = fiber_height(yp, xp + 0.5, width_scale);
+        let v_ply = fiber_ply_id(xp, yp + 0.5, width_scale);
+        let h_ply = fiber_ply_id(yp, xp + 0.5, width_scale);
 
         var vertical_on_top: bool;
         if params.weave_type == WEAVE_TWILL {
@@ -164,16 +193,25 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
         var top_h = h_h;
         var bottom_h = v_h;
+        var top_ply = h_ply;
+        var bottom_ply = v_ply;
         if vertical_on_top {
             top_h = v_h;
             bottom_h = h_h;
+            top_ply = v_ply;
+            bottom_ply = h_ply;
         }
         // The "under" thread is visibly recessed relative to the "over"
         // thread at each crossing — the ridge pattern that makes this read
         // as woven rather than a flat grid.
         value = max(top_h, bottom_h * 0.55);
+        // Ply ID follows whichever sample actually won the max() above, not
+        // just `vertical_on_top` — the "under" thread can still win if its
+        // own recessed height is brighter than the "over" thread's.
+        ply = select(bottom_ply, top_ply, top_h >= bottom_h * 0.55);
     }
 
     value = clamp(value * luminance, 0.0, 1.0);
     textureStore(output, vec2<i32>(id.xy), vec4<f32>(value, value, value, 1.0));
+    textureStore(ply_id_out, vec2<i32>(id.xy), vec4<f32>(ply, ply, ply, 1.0));
 }
