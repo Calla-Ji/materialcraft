@@ -188,9 +188,9 @@
         "color": {
           "type": "Color",
           "value": [
-            0.6,
-            0.6,
-            0.62,
+            0.35,
+            0.38,
+            0.42,
             1.0
           ]
         }
@@ -201,35 +201,210 @@
       ]
     },
     "9": {
-      "kind": "output_base_color",
-      "params": {},
+      "kind": "uniform_color",
+      "params": {
+        "color": {
+          "type": "Color",
+          "value": [
+            0.72,
+            0.7,
+            0.64,
+            1.0
+          ]
+        }
+      },
       "position": [
-        1500.0,
-        500.0
+        0.0,
+        620.0
       ]
     },
     "10": {
-      "kind": "output_normal",
-      "params": {},
+      "kind": "uniform_color",
+      "params": {
+        "color": {
+          "type": "Color",
+          "value": [
+            0.1,
+            0.09,
+            0.08,
+            1.0
+          ]
+        }
+      },
       "position": [
-        1500.0,
-        250.0
+        0.0,
+        870.0
       ]
     },
     "11": {
-      "kind": "output_height",
-      "params": {},
+      "kind": "blend",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": "Copy"
+        }
+      },
+      "position": [
+        1250.0,
+        500.0
+      ]
+    },
+    "12": {
+      "kind": "blend",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": "Copy"
+        }
+      },
       "position": [
         1500.0,
         0.0
       ]
     },
-    "12": {
+    "13": {
+      "kind": "uniform_color",
+      "params": {
+        "color": {
+          "type": "Color",
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "position": [
+        0.0,
+        1120.0
+      ]
+    },
+    "14": {
+      "kind": "uniform_color",
+      "params": {
+        "color": {
+          "type": "Color",
+          "value": [
+            0.5,
+            0.5,
+            0.5,
+            1.0
+          ]
+        }
+      },
+      "position": [
+        0.0,
+        1370.0
+      ]
+    },
+    "15": {
+      "kind": "blend",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": "Add"
+        }
+      },
+      "position": [
+        1250.0,
+        790.0
+      ]
+    },
+    "16": {
+      "kind": "blend",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": "Add"
+        }
+      },
+      "position": [
+        1500.0,
+        290.0
+      ]
+    },
+    "17": {
+      "kind": "uniform_color",
+      "params": {
+        "color": {
+          "type": "Color",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      },
+      "position": [
+        0.0,
+        1620.0
+      ]
+    },
+    "18": {
+      "kind": "blend",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": "Add"
+        },
+        "opacity": {
+          "type": "Float",
+          "value": 0.9
+        }
+      },
+      "position": [
+        1250.0,
+        1080.0
+      ]
+    },
+    "19": {
+      "kind": "output_base_color",
+      "params": {},
+      "position": [
+        1750.0,
+        500.0
+      ]
+    },
+    "20": {
+      "kind": "output_normal",
+      "params": {},
+      "position": [
+        1750.0,
+        250.0
+      ]
+    },
+    "21": {
+      "kind": "output_height",
+      "params": {},
+      "position": [
+        1750.0,
+        0.0
+      ]
+    },
+    "22": {
       "kind": "output_ambient_occlusion",
       "params": {},
       "position": [
-        1500.0,
+        1750.0,
         750.0
+      ]
+    },
+    "23": {
+      "kind": "output_roughness",
+      "params": {},
+      "position": [
+        1750.0,
+        1000.0
+      ]
+    },
+    "24": {
+      "kind": "output_metallic",
+      "params": {},
+      "position": [
+        1750.0,
+        1250.0
       ]
     }
   },
@@ -297,25 +472,127 @@
     {
       "from_node": 8,
       "from_port": "output",
-      "to_node": 9,
+      "to_node": 11,
+      "to_port": "base"
+    },
+    {
+      "from_node": 9,
+      "from_port": "output",
+      "to_node": 11,
+      "to_port": "blend"
+    },
+    {
+      "from_node": 5,
+      "from_port": "wear",
+      "to_node": 11,
+      "to_port": "mask"
+    },
+    {
+      "from_node": 11,
+      "from_port": "output",
+      "to_node": 12,
+      "to_port": "base"
+    },
+    {
+      "from_node": 10,
+      "from_port": "output",
+      "to_node": 12,
+      "to_port": "blend"
+    },
+    {
+      "from_node": 5,
+      "from_port": "cavity",
+      "to_node": 12,
+      "to_port": "mask"
+    },
+    {
+      "from_node": 14,
+      "from_port": "output",
+      "to_node": 15,
+      "to_port": "base"
+    },
+    {
+      "from_node": 13,
+      "from_port": "output",
+      "to_node": 15,
+      "to_port": "blend"
+    },
+    {
+      "from_node": 5,
+      "from_port": "wear",
+      "to_node": 15,
+      "to_port": "mask"
+    },
+    {
+      "from_node": 15,
+      "from_port": "output",
+      "to_node": 16,
+      "to_port": "base"
+    },
+    {
+      "from_node": 13,
+      "from_port": "output",
+      "to_node": 16,
+      "to_port": "blend"
+    },
+    {
+      "from_node": 5,
+      "from_port": "cavity",
+      "to_node": 16,
+      "to_port": "mask"
+    },
+    {
+      "from_node": 17,
+      "from_port": "output",
+      "to_node": 18,
+      "to_port": "base"
+    },
+    {
+      "from_node": 13,
+      "from_port": "output",
+      "to_node": 18,
+      "to_port": "blend"
+    },
+    {
+      "from_node": 5,
+      "from_port": "wear",
+      "to_node": 18,
+      "to_port": "mask"
+    },
+    {
+      "from_node": 12,
+      "from_port": "output",
+      "to_node": 19,
       "to_port": "input"
     },
     {
       "from_node": 6,
       "from_port": "output",
-      "to_node": 10,
+      "to_node": 20,
       "to_port": "input"
     },
     {
       "from_node": 5,
       "from_port": "height",
-      "to_node": 11,
+      "to_node": 21,
       "to_port": "input"
     },
     {
       "from_node": 7,
       "from_port": "output",
-      "to_node": 12,
+      "to_node": 22,
+      "to_port": "input"
+    },
+    {
+      "from_node": 16,
+      "from_port": "output",
+      "to_node": 23,
+      "to_port": "input"
+    },
+    {
+      "from_node": 18,
+      "from_port": "output",
+      "to_node": 24,
       "to_port": "input"
     }
   ]

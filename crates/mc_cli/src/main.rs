@@ -684,15 +684,104 @@ fn build_hardsurface_demo_graph() -> mc_core::Graph {
     graph.connect(wear, "height", normal, "input").unwrap();
     let ao = graph.add_node(mc_core::Node::new("height_to_ao"));
     graph.connect(wear, "height", ao, "input").unwrap();
-    let base_color = graph.add_node(
+
+    // Base Color: painted panels with Wear exposing bare metal underneath
+    // and Cavity darkening seams/recesses with dirt — actually using the
+    // two masks Edge Wear exists to produce, not just a flat fill.
+    let paint_color = graph.add_node(
         mc_core::Node::new("uniform_color")
-            .with_param("color", mc_core::ParamValue::Color([0.6, 0.6, 0.62, 1.0])),
+            .with_param("color", mc_core::ParamValue::Color([0.35, 0.38, 0.42, 1.0])),
     );
+    let metal_color = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.72, 0.70, 0.64, 1.0])),
+    );
+    let dirt_color = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.10, 0.09, 0.08, 1.0])),
+    );
+    let worn_color = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Copy".to_string())),
+    );
+    graph
+        .connect(paint_color, "output", worn_color, "base")
+        .unwrap();
+    graph
+        .connect(metal_color, "output", worn_color, "blend")
+        .unwrap();
+    graph.connect(wear, "wear", worn_color, "mask").unwrap();
+    let base_color = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Copy".to_string())),
+    );
+    graph
+        .connect(worn_color, "output", base_color, "base")
+        .unwrap();
+    graph
+        .connect(dirt_color, "output", base_color, "blend")
+        .unwrap();
+    graph.connect(wear, "cavity", base_color, "mask").unwrap();
+
+    // Roughness/Metallic: both driven by the same two masks — scratched
+    // and dirty patches read rougher, and Wear's exposed metal reads
+    // partially metallic, the paint around it fully dielectric. A single
+    // `white` fill is reused as every "how much" `blend` layer below;
+    // each mask (not `opacity`) is what varies the result per pixel
+    // (`combine() = clamp(base + blend, 0, 1)`, then `mix(base, combine(),
+    // mask * opacity)` — opacity just scales the mask uniformly, so a
+    // mask value of 0.6 at `opacity: 1.0` already lands at exactly 0.6
+    // of the way from `base` to the fully-added result).
+    let white = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([1.0, 1.0, 1.0, 1.0])),
+    );
+    let roughness_base = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.5, 0.5, 0.5, 1.0])),
+    );
+    let roughness_worn = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Add".to_string())),
+    );
+    graph
+        .connect(roughness_base, "output", roughness_worn, "base")
+        .unwrap();
+    graph
+        .connect(white, "output", roughness_worn, "blend")
+        .unwrap();
+    graph.connect(wear, "wear", roughness_worn, "mask").unwrap();
+    let roughness = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Add".to_string())),
+    );
+    graph
+        .connect(roughness_worn, "output", roughness, "base")
+        .unwrap();
+    graph.connect(white, "output", roughness, "blend").unwrap();
+    graph.connect(wear, "cavity", roughness, "mask").unwrap();
+
+    let metallic_base = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.0, 0.0, 0.0, 1.0])),
+    );
+    let metallic = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Add".to_string()))
+            .with_param("opacity", mc_core::ParamValue::Float(0.9)),
+    );
+    graph
+        .connect(metallic_base, "output", metallic, "base")
+        .unwrap();
+    graph.connect(white, "output", metallic, "blend").unwrap();
+    graph.connect(wear, "wear", metallic, "mask").unwrap();
 
     let out_base_color = graph.add_node(mc_core::Node::new("output_base_color"));
     let out_normal = graph.add_node(mc_core::Node::new("output_normal"));
     let out_height = graph.add_node(mc_core::Node::new("output_height"));
     let out_ao = graph.add_node(mc_core::Node::new("output_ambient_occlusion"));
+    let out_roughness = graph.add_node(mc_core::Node::new("output_roughness"));
+    let out_metallic = graph.add_node(mc_core::Node::new("output_metallic"));
     graph
         .connect(base_color, "output", out_base_color, "input")
         .unwrap();
@@ -701,6 +790,12 @@ fn build_hardsurface_demo_graph() -> mc_core::Graph {
         .unwrap();
     graph.connect(wear, "height", out_height, "input").unwrap();
     graph.connect(ao, "output", out_ao, "input").unwrap();
+    graph
+        .connect(roughness, "output", out_roughness, "input")
+        .unwrap();
+    graph
+        .connect(metallic, "output", out_metallic, "input")
+        .unwrap();
 
     graph
 }
