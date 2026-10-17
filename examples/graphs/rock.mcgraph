@@ -12,19 +12,19 @@
       "params": {
         "jitter": {
           "type": "Float",
-          "value": 0.9
+          "value": 0.85
         },
         "mode": {
           "type": "Enum",
-          "value": "Edges"
+          "value": "F1"
         },
         "scale": {
           "type": "Int",
-          "value": 8
+          "value": 5
         },
         "seed": {
           "type": "Seed",
-          "value": 11
+          "value": 20
         }
       },
       "position": [
@@ -33,6 +33,23 @@
       ]
     },
     "1": {
+      "kind": "bevel",
+      "params": {
+        "convexity": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "distance": {
+          "type": "Float",
+          "value": 0.08
+        }
+      },
+      "position": [
+        250.0,
+        0.0
+      ]
+    },
+    "2": {
       "kind": "fractal_sum",
       "params": {
         "gain": {
@@ -57,7 +74,87 @@
         250.0
       ]
     },
-    "2": {
+    "3": {
+      "kind": "blend",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": "Overlay"
+        },
+        "opacity": {
+          "type": "Float",
+          "value": 0.3
+        }
+      },
+      "position": [
+        500.0,
+        0.0
+      ]
+    },
+    "4": {
+      "kind": "voronoi",
+      "params": {
+        "jitter": {
+          "type": "Float",
+          "value": 0.9
+        },
+        "mode": {
+          "type": "Enum",
+          "value": "Edges"
+        },
+        "scale": {
+          "type": "Int",
+          "value": 8
+        },
+        "seed": {
+          "type": "Seed",
+          "value": 11
+        }
+      },
+      "position": [
+        0.0,
+        500.0
+      ]
+    },
+    "5": {
+      "kind": "voronoi",
+      "params": {
+        "jitter": {
+          "type": "Float",
+          "value": 0.95
+        },
+        "mode": {
+          "type": "Enum",
+          "value": "Edges"
+        },
+        "scale": {
+          "type": "Int",
+          "value": 14
+        },
+        "seed": {
+          "type": "Seed",
+          "value": 17
+        }
+      },
+      "position": [
+        0.0,
+        750.0
+      ]
+    },
+    "6": {
+      "kind": "blend",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": "Max"
+        }
+      },
+      "position": [
+        250.0,
+        250.0
+      ]
+    },
+    "7": {
       "kind": "uniform_color",
       "params": {
         "color": {
@@ -72,10 +169,10 @@
       },
       "position": [
         0.0,
-        500.0
+        1000.0
       ]
     },
-    "3": {
+    "8": {
       "kind": "blend",
       "params": {
         "mode": {
@@ -88,11 +185,11 @@
         }
       },
       "position": [
-        250.0,
-        0.0
+        750.0,
+        290.0
       ]
     },
-    "4": {
+    "9": {
       "kind": "gradient_map",
       "params": {
         "gradient": {
@@ -129,11 +226,147 @@
         }
       },
       "position": [
-        500.0,
+        1000.0,
         0.0
       ]
     },
-    "5": {
+    "10": {
+      "kind": "fractal_sum",
+      "params": {
+        "gain": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "octaves": {
+          "type": "Int",
+          "value": 3
+        },
+        "scale": {
+          "type": "Int",
+          "value": 3
+        },
+        "seed": {
+          "type": "Seed",
+          "value": 33
+        }
+      },
+      "position": [
+        0.0,
+        1250.0
+      ]
+    },
+    "11": {
+      "kind": "blend",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": "Overlay"
+        },
+        "opacity": {
+          "type": "Float",
+          "value": 0.3
+        }
+      },
+      "position": [
+        1250.0,
+        0.0
+      ]
+    },
+    "12": {
+      "kind": "fractal_sum",
+      "params": {
+        "gain": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "octaves": {
+          "type": "Int",
+          "value": 2
+        },
+        "scale": {
+          "type": "Int",
+          "value": 4
+        },
+        "seed": {
+          "type": "Seed",
+          "value": 44
+        }
+      },
+      "position": [
+        0.0,
+        1500.0
+      ]
+    },
+    "13": {
+      "kind": "threshold",
+      "params": {
+        "threshold": {
+          "type": "Float",
+          "value": 0.6
+        }
+      },
+      "position": [
+        250.0,
+        540.0
+      ]
+    },
+    "14": {
+      "kind": "invert",
+      "params": {},
+      "position": [
+        500.0,
+        290.0
+      ]
+    },
+    "15": {
+      "kind": "blend",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": "Multiply"
+        }
+      },
+      "position": [
+        750.0,
+        0.0
+      ]
+    },
+    "16": {
+      "kind": "uniform_color",
+      "params": {
+        "color": {
+          "type": "Color",
+          "value": [
+            0.22,
+            0.35,
+            0.16,
+            1.0
+          ]
+        }
+      },
+      "position": [
+        0.0,
+        1750.0
+      ]
+    },
+    "17": {
+      "kind": "blend",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": "Copy"
+        },
+        "opacity": {
+          "type": "Float",
+          "value": 0.8
+        }
+      },
+      "position": [
+        1500.0,
+        0.0
+      ]
+    },
+    "18": {
       "kind": "height_to_normal",
       "params": {
         "intensity": {
@@ -142,11 +375,11 @@
         }
       },
       "position": [
-        500.0,
+        1000.0,
         250.0
       ]
     },
-    "6": {
+    "19": {
       "kind": "uniform_color",
       "params": {
         "color": {
@@ -161,10 +394,10 @@
       },
       "position": [
         0.0,
-        750.0
+        2000.0
       ]
     },
-    "7": {
+    "20": {
       "kind": "uniform_color",
       "params": {
         "color": {
@@ -179,59 +412,65 @@
       },
       "position": [
         0.0,
-        1000.0
+        2250.0
       ]
     },
-    "8": {
+    "21": {
       "kind": "output_base_color",
       "params": {},
       "position": [
-        750.0,
-        500.0
-      ]
-    },
-    "9": {
-      "kind": "output_normal",
-      "params": {},
-      "position": [
-        750.0,
-        750.0
-      ]
-    },
-    "10": {
-      "kind": "output_height",
-      "params": {},
-      "position": [
-        750.0,
+        1750.0,
         0.0
       ]
     },
-    "11": {
+    "22": {
+      "kind": "output_normal",
+      "params": {},
+      "position": [
+        1750.0,
+        750.0
+      ]
+    },
+    "23": {
+      "kind": "output_height",
+      "params": {},
+      "position": [
+        1750.0,
+        250.0
+      ]
+    },
+    "24": {
       "kind": "output_roughness",
       "params": {},
       "position": [
-        750.0,
+        1750.0,
         1000.0
       ]
     },
-    "12": {
+    "25": {
       "kind": "output_metallic",
       "params": {},
       "position": [
-        750.0,
+        1750.0,
         1250.0
       ]
     },
-    "13": {
+    "26": {
       "kind": "output_ambient_occlusion",
       "params": {},
       "position": [
-        750.0,
-        250.0
+        1750.0,
+        500.0
       ]
     }
   },
   "connections": [
+    {
+      "from_node": 0,
+      "from_port": "output",
+      "to_node": 1,
+      "to_port": "input"
+    },
     {
       "from_node": 1,
       "from_port": "output",
@@ -245,57 +484,135 @@
       "to_port": "blend"
     },
     {
-      "from_node": 0,
-      "from_port": "output",
-      "to_node": 3,
-      "to_port": "mask"
-    },
-    {
-      "from_node": 3,
-      "from_port": "output",
-      "to_node": 4,
-      "to_port": "input"
-    },
-    {
-      "from_node": 3,
-      "from_port": "output",
-      "to_node": 5,
-      "to_port": "input"
-    },
-    {
       "from_node": 4,
       "from_port": "output",
-      "to_node": 8,
-      "to_port": "input"
+      "to_node": 6,
+      "to_port": "base"
     },
     {
       "from_node": 5,
+      "from_port": "output",
+      "to_node": 6,
+      "to_port": "blend"
+    },
+    {
+      "from_node": 3,
+      "from_port": "output",
+      "to_node": 8,
+      "to_port": "base"
+    },
+    {
+      "from_node": 7,
+      "from_port": "output",
+      "to_node": 8,
+      "to_port": "blend"
+    },
+    {
+      "from_node": 6,
+      "from_port": "output",
+      "to_node": 8,
+      "to_port": "mask"
+    },
+    {
+      "from_node": 8,
       "from_port": "output",
       "to_node": 9,
       "to_port": "input"
     },
     {
-      "from_node": 3,
+      "from_node": 9,
       "from_port": "output",
-      "to_node": 10,
+      "to_node": 11,
+      "to_port": "base"
+    },
+    {
+      "from_node": 10,
+      "from_port": "output",
+      "to_node": 11,
+      "to_port": "blend"
+    },
+    {
+      "from_node": 12,
+      "from_port": "output",
+      "to_node": 13,
       "to_port": "input"
     },
     {
       "from_node": 6,
       "from_port": "output",
-      "to_node": 11,
+      "to_node": 14,
       "to_port": "input"
     },
     {
-      "from_node": 7,
+      "from_node": 13,
       "from_port": "output",
-      "to_node": 12,
+      "to_node": 15,
+      "to_port": "base"
+    },
+    {
+      "from_node": 14,
+      "from_port": "output",
+      "to_node": 15,
+      "to_port": "blend"
+    },
+    {
+      "from_node": 11,
+      "from_port": "output",
+      "to_node": 17,
+      "to_port": "base"
+    },
+    {
+      "from_node": 16,
+      "from_port": "output",
+      "to_node": 17,
+      "to_port": "blend"
+    },
+    {
+      "from_node": 15,
+      "from_port": "output",
+      "to_node": 17,
+      "to_port": "mask"
+    },
+    {
+      "from_node": 8,
+      "from_port": "output",
+      "to_node": 18,
       "to_port": "input"
     },
     {
-      "from_node": 3,
+      "from_node": 17,
       "from_port": "output",
-      "to_node": 13,
+      "to_node": 21,
+      "to_port": "input"
+    },
+    {
+      "from_node": 18,
+      "from_port": "output",
+      "to_node": 22,
+      "to_port": "input"
+    },
+    {
+      "from_node": 8,
+      "from_port": "output",
+      "to_node": 23,
+      "to_port": "input"
+    },
+    {
+      "from_node": 19,
+      "from_port": "output",
+      "to_node": 24,
+      "to_port": "input"
+    },
+    {
+      "from_node": 20,
+      "from_port": "output",
+      "to_node": 25,
+      "to_port": "input"
+    },
+    {
+      "from_node": 8,
+      "from_port": "output",
+      "to_node": 26,
       "to_port": "input"
     }
   ]

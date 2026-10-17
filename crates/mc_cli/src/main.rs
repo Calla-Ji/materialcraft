@@ -210,26 +210,35 @@ fn build_glitch_dither_demo_graph() -> mc_core::Graph {
     graph
 }
 
-/// CLAUDE.md §10's M6 example graph: Voronoi "Edges" (cell cracks) blended
-/// with a surface fractal, colorized gray/tan by height.
+/// CLAUDE.md §10's M6 example graph: chunky Voronoi "F1" rock lumps, rounded
+/// with Bevel, carved by two overlapping Voronoi "Edges" crack networks,
+/// with mottled color variation and a sparse moss overlay favoring flat
+/// tops over crevices.
 fn build_rock_graph() -> mc_core::Graph {
     let mut graph = mc_core::Graph::new();
     graph.settings.resolution = 512;
     // Chunky bevel relief needs more headroom than the other examples.
     graph.settings.height_scale = 0.12;
 
-    // "Edges" reads bright exactly at a cell boundary and ~0 everywhere
-    // else (confirmed by rendering it alone) — the opposite polarity of
-    // what a height map wants (cracks recessed/dark, faces raised/bright),
-    // so it's used as a *mask* carving black into the surface noise below,
-    // not blended directly into the driving signal itself.
-    let cracks = graph.add_node(
+    // F1's own distance field already domes smoothly within each cell —
+    // a rock-chunk shape for free, with no extra shaping needed before
+    // Bevel rounds its cell-boundary edges further below.
+    let rock_shapes = graph.add_node(
         mc_core::Node::new("voronoi")
-            .with_param("scale", mc_core::ParamValue::Int(8))
-            .with_param("jitter", mc_core::ParamValue::Float(0.9))
-            .with_param("mode", mc_core::ParamValue::Enum("Edges".to_string()))
-            .with_param("seed", mc_core::ParamValue::Seed(11)),
+            .with_param("scale", mc_core::ParamValue::Int(5))
+            .with_param("jitter", mc_core::ParamValue::Float(0.85))
+            .with_param("mode", mc_core::ParamValue::Enum("F1".to_string()))
+            .with_param("seed", mc_core::ParamValue::Seed(20)),
     );
+    let rock_shapes_round = graph.add_node(
+        mc_core::Node::new("bevel")
+            .with_param("distance", mc_core::ParamValue::Float(0.08))
+            .with_param("convexity", mc_core::ParamValue::Float(0.5)),
+    );
+    graph
+        .connect(rock_shapes, "output", rock_shapes_round, "input")
+        .unwrap();
+
     let surface_noise = graph.add_node(
         mc_core::Node::new("fractal_sum")
             .with_param("scale", mc_core::ParamValue::Int(6))
@@ -237,20 +246,66 @@ fn build_rock_graph() -> mc_core::Graph {
             .with_param("gain", mc_core::ParamValue::Float(0.55))
             .with_param("seed", mc_core::ParamValue::Seed(12)),
     );
+    let combined_shape = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Overlay".to_string()))
+            .with_param("opacity", mc_core::ParamValue::Float(0.3)),
+    );
+    graph
+        .connect(rock_shapes_round, "output", combined_shape, "base")
+        .unwrap();
+    graph
+        .connect(surface_noise, "output", combined_shape, "blend")
+        .unwrap();
+
+    // "Edges" reads bright exactly at a cell boundary and ~0 everywhere
+    // else (confirmed by rendering it alone) — the opposite polarity of
+    // what a height map wants (cracks recessed/dark, faces raised/bright),
+    // so it's used as a *mask* carving black into the shape above, not
+    // blended directly into the driving signal itself. Two independent
+    // scales (coarse fissures + fine secondary cracking), merged with Max
+    // so either layer's own edge wins.
+    let cracks = graph.add_node(
+        mc_core::Node::new("voronoi")
+            .with_param("scale", mc_core::ParamValue::Int(8))
+            .with_param("jitter", mc_core::ParamValue::Float(0.9))
+            .with_param("mode", mc_core::ParamValue::Enum("Edges".to_string()))
+            .with_param("seed", mc_core::ParamValue::Seed(11)),
+    );
+    let cracks2 = graph.add_node(
+        mc_core::Node::new("voronoi")
+            .with_param("scale", mc_core::ParamValue::Int(14))
+            .with_param("jitter", mc_core::ParamValue::Float(0.95))
+            .with_param("mode", mc_core::ParamValue::Enum("Edges".to_string()))
+            .with_param("seed", mc_core::ParamValue::Seed(17)),
+    );
+    let cracks_combined = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Max".to_string())),
+    );
+    graph
+        .connect(cracks, "output", cracks_combined, "base")
+        .unwrap();
+    graph
+        .connect(cracks2, "output", cracks_combined, "blend")
+        .unwrap();
+
     let black = graph.add_node(
         mc_core::Node::new("uniform_color")
             .with_param("color", mc_core::ParamValue::Color([0.0, 0.0, 0.0, 1.0])),
     );
-    let combined = graph.add_node(
+    let height = graph.add_node(
         mc_core::Node::new("blend")
             .with_param("mode", mc_core::ParamValue::Enum("Multiply".to_string()))
             .with_param("opacity", mc_core::ParamValue::Float(0.85)),
     );
     graph
-        .connect(surface_noise, "output", combined, "base")
+        .connect(combined_shape, "output", height, "base")
         .unwrap();
-    graph.connect(black, "output", combined, "blend").unwrap();
-    graph.connect(cracks, "output", combined, "mask").unwrap();
+    graph.connect(black, "output", height, "blend").unwrap();
+    graph
+        .connect(cracks_combined, "output", height, "mask")
+        .unwrap();
 
     let colorize = graph.add_node(mc_core::Node::new("gradient_map").with_param(
         "gradient",
@@ -269,15 +324,93 @@ fn build_rock_graph() -> mc_core::Graph {
             },
         ]),
     ));
+    graph.connect(height, "output", colorize, "input").unwrap();
+
+    // A large-scale, independent noise lightens/darkens patches of the
+    // surface — real color variation, not just a single smooth
+    // height-driven tone.
+    let color_variation_noise = graph.add_node(
+        mc_core::Node::new("fractal_sum")
+            .with_param("scale", mc_core::ParamValue::Int(3))
+            .with_param("octaves", mc_core::ParamValue::Int(3))
+            .with_param("gain", mc_core::ParamValue::Float(0.5))
+            .with_param("seed", mc_core::ParamValue::Seed(33)),
+    );
+    let color_with_variation = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Overlay".to_string()))
+            .with_param("opacity", mc_core::ParamValue::Float(0.3)),
+    );
     graph
-        .connect(combined, "output", colorize, "input")
+        .connect(colorize, "output", color_with_variation, "base")
+        .unwrap();
+    graph
+        .connect(
+            color_variation_noise,
+            "output",
+            color_with_variation,
+            "blend",
+        )
+        .unwrap();
+
+    // A sparse, high-threshold noise mask, favoring flat tops over
+    // crevices (multiplied by the inverted crack mask) — a very partial
+    // moss overlay, not a wholesale green tint.
+    let moss_noise = graph.add_node(
+        mc_core::Node::new("fractal_sum")
+            .with_param("scale", mc_core::ParamValue::Int(4))
+            .with_param("octaves", mc_core::ParamValue::Int(2))
+            .with_param("gain", mc_core::ParamValue::Float(0.6))
+            .with_param("seed", mc_core::ParamValue::Seed(44)),
+    );
+    // FractalSum's own output rarely spans the full 0..1 range (2 octaves
+    // at this gain measured ~0.3..0.7 in practice) — 0.6 lands around its
+    // own 90th percentile, not 0..1's, for genuinely sparse (~10%) coverage
+    // rather than an empty mask.
+    let moss_mask = graph.add_node(
+        mc_core::Node::new("threshold").with_param("threshold", mc_core::ParamValue::Float(0.6)),
+    );
+    graph
+        .connect(moss_noise, "output", moss_mask, "input")
+        .unwrap();
+    let cracks_inverted = graph.add_node(mc_core::Node::new("invert"));
+    graph
+        .connect(cracks_combined, "output", cracks_inverted, "input")
+        .unwrap();
+    let moss_mask_final = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Multiply".to_string())),
+    );
+    graph
+        .connect(moss_mask, "output", moss_mask_final, "base")
+        .unwrap();
+    graph
+        .connect(cracks_inverted, "output", moss_mask_final, "blend")
+        .unwrap();
+    let moss_green = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.22, 0.35, 0.16, 1.0])),
+    );
+    let base_color = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Copy".to_string()))
+            .with_param("opacity", mc_core::ParamValue::Float(0.8)),
+    );
+    graph
+        .connect(color_with_variation, "output", base_color, "base")
+        .unwrap();
+    graph
+        .connect(moss_green, "output", base_color, "blend")
+        .unwrap();
+    graph
+        .connect(moss_mask_final, "output", base_color, "mask")
         .unwrap();
 
     let normal = graph.add_node(
         mc_core::Node::new("height_to_normal")
             .with_param("intensity", mc_core::ParamValue::Float(1.5)),
     );
-    graph.connect(combined, "output", normal, "input").unwrap();
+    graph.connect(height, "output", normal, "input").unwrap();
 
     let roughness = graph.add_node(
         mc_core::Node::new("uniform_color")
@@ -296,13 +429,13 @@ fn build_rock_graph() -> mc_core::Graph {
     let out_ao = graph.add_node(mc_core::Node::new("output_ambient_occlusion"));
 
     graph
-        .connect(colorize, "output", out_base_color, "input")
+        .connect(base_color, "output", out_base_color, "input")
         .unwrap();
     graph
         .connect(normal, "output", out_normal, "input")
         .unwrap();
     graph
-        .connect(combined, "output", out_height, "input")
+        .connect(height, "output", out_height, "input")
         .unwrap();
     graph
         .connect(roughness, "output", out_roughness, "input")
@@ -312,7 +445,7 @@ fn build_rock_graph() -> mc_core::Graph {
         .unwrap();
     // Crevices between rock faces (where cracks/surface noise are dark) read
     // as occluded — the same crude-but-plausible proxy `bricks` uses.
-    graph.connect(combined, "output", out_ao, "input").unwrap();
+    graph.connect(height, "output", out_ao, "input").unwrap();
 
     graph
 }
