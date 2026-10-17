@@ -1,0 +1,92 @@
+name: Bug report
+description: Something crashed, looks wrong, or doesn't work as expected.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Short and simple is fine — screenshots help most.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem in a sentence or two.
+      placeholder: When I connect a Blur node to Height to Normal, the 3D preview turns black.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we make it happen again?
+      description: The steps you took, one per line.
+      placeholder: |
+        1. Open examples/graphs/bricks.mcgraph
+        2. Add a Blur node
+        3. Connect it to ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where in the app?
+      options:
+        - Node graph / editing
+        - A specific node (name it below)
+        - 2D preview
+        - 3D viewport
+        - Export (PNG / EXR / presets)
+        - Saving / loading .mcgraph files
+        - Crash on start
+        - Command line (mc_cli)
+        - Other / not sure
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node name (if it's about a specific node)
+      placeholder: e.g. Thread, Panel Layout, Voronoi
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: MaterialCreator version
+      description: The release you downloaded (e.g. v0.1.0), or the commit if you built it yourself.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card (GPU)
+      description: Optional, but very helpful for preview or crash issues.
+      placeholder: e.g. NVIDIA RTX 3060, Apple M2, AMD RX 6700
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshots, graph file, or log
+      description: Drag images or a zipped .mcgraph file into this box. For crashes, paste any text the app or terminal printed.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send
+      options:
+        - label: I searched existing issues and this hasn't been reported yet.
+          required: true

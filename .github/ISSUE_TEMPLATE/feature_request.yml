@@ -1,0 +1,24 @@
+name: Feature or node idea
+description: Suggest a new node, export option, or improvement.
+title: "[Idea]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      placeholder: A node that generates woven basket patterns.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What would you use it for?
+      description: The material or workflow you're trying to make. Reference images are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else?
+      description: Please describe the idea in your own words and images — don't paste node graphs or files from other commercial tools.
