@@ -76,8 +76,43 @@ paper trail for that.
   [KinoGlitch](https://github.com/keijiro/KinoGlitch) (Keijiro Takahashi, MIT) for
   general glitch-node ideas, reimplemented in WGSL rather than ported.
 
+## Hard-surface
+
+- **Panel Layout** — a tileable guillotine subdivision (recursive rectangle splitting, each
+  split seeded so it's deterministic and periodic at the tile edge) — a standard CAD/procedural-
+  layout technique with no single canonical paper; this project's own formulation of the
+  recursion and its seeding.
+- **Distance Field** — an exact signed distance field from an arbitrary mask's own 0.5 iso-line,
+  computed directly (brute-force nearest-feature search per pixel, not a blurred approximation)
+  — the same standard definition of an SDF used throughout computer graphics, independently
+  implemented.
+- **Shape Boolean** — unions/subtracts/intersects two SDFs with Inigo Quilez's widely-published
+  smooth-minimum formula (see [iquilezles.org](https://iquilezles.org/articles/smin/)) for the
+  smooth blend mode, and round/chamfer/groove boolean operators in the style described by
+  [hg_sdf](https://mercury.sexy/hg_sdf/) (Mercury Demogroup, MIT-licensed) — see
+  [THIRD_PARTY.md](THIRD_PARTY.md). Both are referenced as published formulas, not copied shader
+  code: this project's own WGSL is an independent implementation.
+- **Redistance** — rebuilds an exact distance field from any SDF's own zero contour (a thin
+  wrapper reusing Distance Field above), erasing the false interior seams a boolean or warp
+  otherwise leaves for a later Bevel Profile to expose — a standard SDF-hygiene technique, no
+  single canonical source.
+- **Bevel Profile** — shapes an exact SDF into a height map through a chosen edge profile (flat,
+  round, chamfer) directly from the known distance-to-edge, rather than the usual blur-then-
+  curve-then-histogram approximation a height map alone would need — this project's own
+  derivation, since it depends on Distance Field/Shape Boolean already existing upstream.
+- **Fasteners** — procedural rivet/bolt/screw head shapes (6 kinds), stamped along a Path —
+  original geometry, no external technique.
+- **Edge Wear** — wear on convex edges and a cavity mask for dirt, either directly from an SDF's
+  own curvature (exact) or, with only a height map available, from a Laplacian-of-Gaussian
+  curvature estimate — LoG (the "Marr-Hildreth" edge/blob operator) is a standard, widely-taught
+  image-processing technique; the wear/cavity thresholding built on top of it is original to
+  this project.
+
 ## Fabric & yarn
 
+- **Fabric Generator** — Plain Weave/Twill/Rib Knit/Stockinette structure (which thread crosses
+  over which, per weave type) is original compositing logic written for this project, built on
+  top of Thread's own geometry below — no external technique.
 - **Thread** (`mc_nodes::thread_shape`) — plied-yarn geometry (ply packing, the S/Z helix twist
   convention, balanced-vs-crepe fiber twist, cable/helix-of-helices construction) derived from
   the owner's own textile reference book's yarn-construction chapter, not from any other
@@ -105,6 +140,16 @@ paper trail for that.
   glTF's own material model included): Brent Burley's *Physically Based Shading at Disney*
   (SIGGRAPH 2012 course notes) and Brian Karis's *Real Shading in Unreal Engine 4* (SIGGRAPH
   2013 course notes), both public and widely cited.
+- **GPU vertex-pulling tessellation** (`viewport3d.wgsl`'s `vs_main_tess`, `mc_app::tess_mesh`/
+  `tess_gpu`) — subdivides a small fixed base mesh into detail triangles directly in the vertex
+  shader (decode a sub-triangle lattice index, evaluate position/normal/UV procedurally, draw
+  instanced with no CPU-built vertex buffer), used because WebGPU/wgpu has no hardware
+  tessellation stage (see [gpuweb/gpuweb#445](https://github.com/gpuweb/gpuweb/issues/445) and
+  [gfx-rs/wgpu#222](https://github.com/gfx-rs/wgpu/issues/222)). Vertex pulling/sub-triangle
+  lattice decoding is a published real-time-graphics technique with no single canonical paper;
+  this project's own implementation, independently authored from a from-scratch spec and a
+  Python/numpy ground-truth reference, golden-tested against it
+  (`crates/mc_app/testdata/tess_golden/`) — not derived from any commercial tool's own code.
 
 ## Shape math
 

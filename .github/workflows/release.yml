@@ -1,0 +1,135 @@
+name: Release
+
+# Triggers on pushing a version tag (e.g. `v0.1.0`) — builds, tests, and
+# packages all three platforms, then publishes a GitHub Release with the
+# binaries attached. `workflow_dispatch` is included so a release can be
+# re-run by hand (e.g. after fixing a packaging issue) without re-tagging.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (must already exist)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Linux test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libx11-dev libwayland-dev mesa-vulkan-drivers libfontconfig1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: MaterialCreator-windows
+            archive_name: MaterialCreator-windows.zip
+            binary_path: target/release/mc_app.exe
+            nav_file: NAVIGATION-Windows.md
+          - os: ubuntu-latest
+            artifact_name: MaterialCreator-linux
+            archive_name: MaterialCreator-linux.tar.gz
+            binary_path: target/release/mc_app
+            nav_file: NAVIGATION-Linux.md
+          - os: macos-latest
+            artifact_name: MaterialCreator-macos
+            archive_name: MaterialCreator-macos.tar.gz
+            binary_path: target/release/mc_app
+            nav_file: NAVIGATION-macOS.md
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libx11-dev libwayland-dev libfontconfig1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p mc_app
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path staging | Out-Null
+          Copy-Item ${{ matrix.binary_path }} staging/MaterialCreator.exe
+          Copy-Item ${{ matrix.nav_file }} staging/NAVIGATION.md
+          Copy-Item README.md staging/README.md
+          Copy-Item LICENSE-MIT staging/LICENSE-MIT
+          Copy-Item LICENSE-APACHE staging/LICENSE-APACHE
+          Compress-Archive -Path staging/* -DestinationPath ${{ matrix.archive_name }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir staging
+          cp ${{ matrix.binary_path }} staging/MaterialCreator
+          cp ${{ matrix.nav_file }} staging/NAVIGATION.md
+          cp README.md LICENSE-MIT LICENSE-APACHE staging/
+          tar -czf ${{ matrix.archive_name }} -C staging .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.archive_name }}
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: ${{ inputs.tag || github.ref_name }}
+          draft: true
+          generate_release_notes: true
+          files: dist/*

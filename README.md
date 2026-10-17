@@ -6,9 +6,11 @@ Connect nodes — noises, patterns, filters, blends — into a graph that output
 tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready for
 **Blender** and **Unreal Engine**.
 
-> Status: early development (v0.1, pre-release). New to the workspace? See the
-> navigation/shortcuts reference for your OS:
+> Status: v0.1 — first public release. New to the workspace? See the navigation/shortcuts
+> reference for your OS:
 > [macOS](NAVIGATION-macOS.md) · [Windows](NAVIGATION-Windows.md) · [Linux](NAVIGATION-Linux.md).
+
+![The full app: node graph, 2D view, 3D view, and parameter panel](assets/screenshots/hero.png)
 
 ## Features
 
@@ -26,12 +28,18 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
   Color debug mode, an Exposure slider, and a Pixel/Nearest filtering toggle for inspecting
   dither/pixel-art materials crisply. The Alpha output channel drives real transparency in the
   preview, not just an exported mask.
+
+  ![3D viewport under a PBR material, HDRI-lit](assets/screenshots/3d-viewport.png)
+
 - **Seamless tiling, guaranteed — with an escape hatch.** Every generator is periodic and every
   filter samples with wrap-around addressing by default; each node ships with its own automated
   tiling test. Nodes that read past a tile's edge (an offset, a blur, a noise lattice, ...)
   also expose a per-axis Tiling Mode, for the times you want that edge to clip instead of wrap.
   Resolution-independent by design — a graph looks the same at 512px and 4096px, detail
   aside.
+
+  ![2D view with the 2x2 tiling toggle on, seam-free](assets/screenshots/tiling.png)
+
 - **Deterministic.** Same graph, same seed, same pixels — every time, on the same GPU.
 - **A custom node-graph canvas** — pan, zoom (including trackpad pinch-to-zoom, working
   anywhere on the canvas), box-select, duplicate, undo/redo, and a category-colored,
@@ -40,6 +48,9 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
   widget. Every node card is color-coded by category, matching a dedicated Node Library panel
   along the canvas's left edge for browsing and adding nodes by icon. New nodes always land
   wherever you last clicked on the canvas.
+
+  ![Node graph canvas, category-colored nodes and wires](assets/screenshots/node-graph.png)
+
 - **Crash-safe autosave and error toasts.** The current graph is snapshotted to a recovery file
   every 30 seconds; if MaterialCreator doesn't shut down cleanly, the next launch offers to
   restore it. Failed opens/saves and graph evaluation errors surface as a dismissable
@@ -51,7 +62,7 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 
 ## Nodes
 
-40 nodes, each with its own tiling and determinism tests.
+63 nodes, each with its own tiling and determinism tests.
 
 ### Generators — Noise
 - **Perlin Noise** — classic gradient noise, smooth and organic.
@@ -61,21 +72,43 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
 - **White Noise** — fully uncorrelated random cells, no interpolation.
 - **Fractal Sum** — several octaves of a chosen base noise, summed (fBm).
 - **Clouds** — an fBm preset tuned for a cloud-like look.
+- **Anisotropic Noise** — directional, stretched noise for brushed-metal/wood-grain streaks.
+- **Gabor Noise** — oriented, band-limited noise for fine, controllable grain/fabric-like
+  texture.
+- **Streaks** — scattered directional streak strokes, for scratches and fine fibrous detail.
 
 ### Generators — Patterns
 - **Pattern Generator** — a brick or grid pattern, with gap, edge darkening (a flat luminance
-  fade toward the gap), and per-tile size/rotation/luminance jitter.
+  fade toward the gap), per-tile size/rotation/luminance jitter, and an optional connected
+  Shape to stamp instead of the built-in tile.
 - **Shape** — a disc, square, polygon, star, or leaf, centered in the tile. The star and leaf
   are original constructions, not smoothed approximations: the star's points are exact
   straight edges that can "unfold" a plain polygon into a star via one setting, and the leaf
   is a single continuous curve with independently shapeable top, middle, and bottom
   curvature, plus control over where its widest point sits.
+- **Circular Pattern** — shapes or noise arranged radially around a center, for dials, gears,
+  and radial ornament.
 - **Gradient Linear** — a ramp from black to white, rotatable in quarter turns.
 - **Gradient Radial** — a ramp from the center outward to a given radius.
 - **Checker** — an alternating black/white grid.
 - **Uniform Color** — a flat, solid color fill.
+- **Image Import** — bring in your own PNG/JPEG/EXR as a node input.
 - **Dither Pattern** — a Bayer, blue noise, or halftone dot mask, for use in Blend, Threshold,
   and similar nodes.
+- **Type** — render real text from any installed font, for embossed/engraved labels and
+  embroidery-style graphs.
+- **Panel Layout** — a seamless, tileable guillotine subdivision into armor/hard-surface
+  panels, with per-panel SDF, ID, and a fastener placement path — no flood fill, so no seams
+  at the tile edge.
+- **Fabric Generator** — Plain Weave, Twill, Rib Knit, or Stockinette cloth structure, with an
+  optional Thread input for a custom fiber shape and its own Ply ID output for coloring
+  individual plies.
+- **Thread** — genuine plied-yarn geometry: round tube plies on a helical centerline, with a
+  real top-surface-height occlusion test deciding which ply shows where (not a blend). Outputs
+  Height, Ply ID (for per-ply coloring via Gradient Map), Fiber (groove detail), and Mask.
+- **Knit** — a single-ply stockinette/rib knit loop structure, independent of the Fabric
+  Generator + Thread combination above.
+- **Stitch** — a repeating hand/machine-stitch mark pattern along a Path.
 
 ### Filters — Adjustments
 - **Levels** — remap an input/output range, with a gamma curve in between.
@@ -118,11 +151,31 @@ tileable PBR texture set, previews it live in 2D and 3D, and exports maps ready 
   Convexity control from a plain chamfer through a rounded dome to a concave scoop. Chain into
   Height to Normal for the usual beveled-edge normal look.
 
+### Generators — Path
+- **Path** — an authored or procedural vector path, the shared input every node below builds on.
+- **Image Trace** — extract a path from an image's own edges.
+- **Path Simplify** — reduce a path's point count while preserving its shape.
+- **Path to Mask** and **Path to SDF** — rasterize a path to a filled mask or an exact signed
+  distance field.
+- **Fasteners** — rivets, bolts, or screws placed evenly along a path in 6 head shapes, seated
+  on an optional base height.
+
 ### Converters
 - **Height to Normal** — a tangent-space normal map from a height map, Sobel-based, with an
   OpenGL/DirectX toggle.
 - **Height to AO** — a screen-space-style ambient occlusion pass from height.
 - **Curvature from Normal** — convex edges read bright, concave crevices read dark.
+- **Distance Field** — an exact signed distance field from any mask's own edge, not a blurred
+  approximation.
+- **Shape Boolean** — union/subtract/intersect two SDFs with a real boolean, in 5 edge-blend
+  modes (hard, smooth, round, chamfer, groove).
+- **Redistance** — rebuilds an exact distance field from any SDF's zero contour, erasing the
+  hidden internal seams a boolean or warp can otherwise leave for a later Bevel to expose.
+- **Bevel Profile** — shapes an exact SDF into a real height map through a chosen edge profile
+  (flat, round, chamfer), instead of the usual blur-then-curve-then-histogram approximation.
+- **Edge Wear** — chipped-paint wear on convex edges and a cavity mask for dirt/recesses, from
+  an SDF (exact) or a height map (curvature-estimated) fallback.
+- **Channel Packer** — pack up to 4 grayscale inputs into one RGBA texture's own channels.
 
 ### Outputs
 One pass-through marker node per PBR channel: Base Color, Normal, Roughness, Metallic,
