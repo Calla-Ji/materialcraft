@@ -399,21 +399,29 @@ fn build_brushed_metal_graph() -> mc_core::Graph {
     graph
 }
 
-/// CLAUDE.md §10's M6 example graph: a small woven grid (Pattern Generator)
-/// overlaid with fine fiber noise, colorized as denim.
+/// Real plied-yarn geometry (Thread) woven into cloth (Fabric Generator) —
+/// not Pattern Generator standing in with brick-sized tiles shrunk down to
+/// look vaguely thread-like, which is what this example used to do before
+/// both of those nodes existed.
 fn build_fabric_graph() -> mc_core::Graph {
     let mut graph = mc_core::Graph::new();
     graph.settings.resolution = 512;
 
-    let weave = graph.add_node(
-        mc_core::Node::new("tile_generator")
-            .with_param("rows", mc_core::ParamValue::Int(48))
-            .with_param("columns", mc_core::ParamValue::Int(48))
-            .with_param("offset", mc_core::ParamValue::Float(0.5))
-            .with_param("gap", mc_core::ParamValue::Float(0.12))
-            .with_param("bevel", mc_core::ParamValue::Float(0.3))
-            .with_param("seed", mc_core::ParamValue::Seed(31)),
+    let thread = graph.add_node(
+        mc_core::Node::new("thread_shape").with_param("plies", mc_core::ParamValue::Int(3)),
     );
+
+    let weave = graph.add_node(
+        mc_core::Node::new("fabric_generator")
+            .with_param(
+                "weave_type",
+                mc_core::ParamValue::Enum("Plain Weave".to_string()),
+            )
+            .with_param("rows", mc_core::ParamValue::Int(24))
+            .with_param("columns", mc_core::ParamValue::Int(24)),
+    );
+    graph.connect(thread, "height", weave, "fiber").unwrap();
+
     let fiber_noise = graph.add_node(
         mc_core::Node::new("fractal_sum")
             .with_param("scale", mc_core::ParamValue::Int(32))

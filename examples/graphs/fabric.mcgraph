@@ -7,31 +7,11 @@
   },
   "nodes": {
     "0": {
-      "kind": "tile_generator",
+      "kind": "thread_shape",
       "params": {
-        "bevel": {
-          "type": "Float",
-          "value": 0.3
-        },
-        "columns": {
+        "plies": {
           "type": "Int",
-          "value": 48
-        },
-        "gap": {
-          "type": "Float",
-          "value": 0.12
-        },
-        "offset": {
-          "type": "Float",
-          "value": 0.5
-        },
-        "rows": {
-          "type": "Int",
-          "value": 48
-        },
-        "seed": {
-          "type": "Seed",
-          "value": 31
+          "value": 3
         }
       },
       "position": [
@@ -40,6 +20,27 @@
       ]
     },
     "1": {
+      "kind": "fabric_generator",
+      "params": {
+        "columns": {
+          "type": "Int",
+          "value": 24
+        },
+        "rows": {
+          "type": "Int",
+          "value": 24
+        },
+        "weave_type": {
+          "type": "Enum",
+          "value": "Plain Weave"
+        }
+      },
+      "position": [
+        250.0,
+        0.0
+      ]
+    },
+    "2": {
       "kind": "fractal_sum",
       "params": {
         "gain": {
@@ -61,10 +62,10 @@
       },
       "position": [
         0.0,
-        250.0
+        310.0
       ]
     },
-    "2": {
+    "3": {
       "kind": "blend",
       "params": {
         "mode": {
@@ -77,11 +78,11 @@
         }
       },
       "position": [
-        250.0,
+        500.0,
         0.0
       ]
     },
-    "3": {
+    "4": {
       "kind": "gradient_map",
       "params": {
         "gradient": {
@@ -109,11 +110,11 @@
         }
       },
       "position": [
-        500.0,
+        750.0,
         0.0
       ]
     },
-    "4": {
+    "5": {
       "kind": "height_to_normal",
       "params": {
         "intensity": {
@@ -122,26 +123,8 @@
         }
       },
       "position": [
-        500.0,
+        750.0,
         250.0
-      ]
-    },
-    "5": {
-      "kind": "uniform_color",
-      "params": {
-        "color": {
-          "type": "Color",
-          "value": [
-            0.9,
-            0.9,
-            0.9,
-            1.0
-          ]
-        }
-      },
-      "position": [
-        0.0,
-        500.0
       ]
     },
     "6": {
@@ -150,6 +133,24 @@
         "color": {
           "type": "Color",
           "value": [
+            0.9,
+            0.9,
+            0.9,
+            1.0
+          ]
+        }
+      },
+      "position": [
+        0.0,
+        560.0
+      ]
+    },
+    "7": {
+      "kind": "uniform_color",
+      "params": {
+        "color": {
+          "type": "Color",
+          "value": [
             0.0,
             0.0,
             0.0,
@@ -159,54 +160,54 @@
       },
       "position": [
         0.0,
-        750.0
-      ]
-    },
-    "7": {
-      "kind": "output_base_color",
-      "params": {},
-      "position": [
-        750.0,
-        500.0
+        810.0
       ]
     },
     "8": {
-      "kind": "output_normal",
+      "kind": "output_base_color",
       "params": {},
       "position": [
-        750.0,
-        750.0
+        1000.0,
+        500.0
       ]
     },
     "9": {
-      "kind": "output_height",
+      "kind": "output_normal",
       "params": {},
       "position": [
-        750.0,
-        0.0
+        1000.0,
+        750.0
       ]
     },
     "10": {
-      "kind": "output_roughness",
+      "kind": "output_height",
       "params": {},
       "position": [
-        750.0,
-        1000.0
+        1000.0,
+        0.0
       ]
     },
     "11": {
-      "kind": "output_metallic",
+      "kind": "output_roughness",
       "params": {},
       "position": [
-        750.0,
-        1250.0
+        1000.0,
+        1000.0
       ]
     },
     "12": {
+      "kind": "output_metallic",
+      "params": {},
+      "position": [
+        1000.0,
+        1250.0
+      ]
+    },
+    "13": {
       "kind": "output_ambient_occlusion",
       "params": {},
       "position": [
-        750.0,
+        1000.0,
         250.0
       ]
     }
@@ -214,24 +215,24 @@
   "connections": [
     {
       "from_node": 0,
-      "from_port": "output",
-      "to_node": 2,
-      "to_port": "base"
+      "from_port": "height",
+      "to_node": 1,
+      "to_port": "fiber"
     },
     {
       "from_node": 1,
       "from_port": "output",
-      "to_node": 2,
-      "to_port": "blend"
+      "to_node": 3,
+      "to_port": "base"
     },
     {
       "from_node": 2,
       "from_port": "output",
       "to_node": 3,
-      "to_port": "input"
+      "to_port": "blend"
     },
     {
-      "from_node": 2,
+      "from_node": 3,
       "from_port": "output",
       "to_node": 4,
       "to_port": "input"
@@ -239,7 +240,7 @@
     {
       "from_node": 3,
       "from_port": "output",
-      "to_node": 7,
+      "to_node": 5,
       "to_port": "input"
     },
     {
@@ -249,13 +250,13 @@
       "to_port": "input"
     },
     {
-      "from_node": 2,
+      "from_node": 5,
       "from_port": "output",
       "to_node": 9,
       "to_port": "input"
     },
     {
-      "from_node": 5,
+      "from_node": 3,
       "from_port": "output",
       "to_node": 10,
       "to_port": "input"
@@ -267,9 +268,15 @@
       "to_port": "input"
     },
     {
-      "from_node": 2,
+      "from_node": 7,
       "from_port": "output",
       "to_node": 12,
+      "to_port": "input"
+    },
+    {
+      "from_node": 3,
+      "from_port": "output",
+      "to_node": 13,
       "to_port": "input"
     }
   ]
