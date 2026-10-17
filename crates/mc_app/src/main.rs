@@ -43,6 +43,29 @@ use canvas::CanvasState;
 /// matching how those two already don't share it with each other.
 const RESOLUTIONS: [u32; 5] = [256, 512, 1024, 2048, 4096];
 
+/// (display name, path relative to the repo root) — the same `.mcgraph`
+/// files `mc_cli`'s own `main` builds and saves, picked up here by path
+/// rather than re-building them in-process. Relative, matching `mc_cli`'s
+/// own assumption that the process's working directory is the repo root
+/// (true for every `cargo run`-based workflow this project has today; a
+/// packaged release build picking its own working directory is a gap
+/// shared with `mc_cli`, not a new one introduced here).
+const EXAMPLE_GRAPHS: &[(&str, &str)] = &[
+    ("Bricks", "examples/graphs/bricks.mcgraph"),
+    ("Rock", "examples/graphs/rock.mcgraph"),
+    ("Brushed Metal", "examples/graphs/brushed_metal.mcgraph"),
+    ("Fabric", "examples/graphs/fabric.mcgraph"),
+    ("Wood", "examples/graphs/wood.mcgraph"),
+    (
+        "Glitch & Dither Demo",
+        "examples/graphs/glitch_dither_demo.mcgraph",
+    ),
+    (
+        "Hard-Surface Demo",
+        "examples/graphs/hardsurface_demo.mcgraph",
+    ),
+];
+
 /// 2D View's own pan/zoom/tiling-preview state — view-only, not part of the
 /// graph or any node's params.
 struct TwoDViewState {
@@ -262,7 +285,14 @@ impl eframe::App for MaterialCreatorApp {
                     }
                     ui.add_space(4.0);
                     ui.separator();
-                    ui.label("Examples");
+                    ui.menu_button("Examples", |ui| {
+                        for &(name, path) in EXAMPLE_GRAPHS {
+                            if ui.button(name).clicked() {
+                                self.load_example(path);
+                                ui.close();
+                            }
+                        }
+                    });
                 });
             });
 
@@ -1291,6 +1321,23 @@ impl MaterialCreatorApp {
                 log::warn!("failed to open {}: {err}", path.display());
                 self.toasts
                     .error(format!("Couldn't open {}: {err}", path.display()));
+            }
+        }
+    }
+
+    /// Loads one of `EXAMPLE_GRAPHS` as a fresh starting point — deliberately
+    /// `replace_graph(graph, None)`, not `open_path`'s own `Some(path)`:
+    /// an example is a template to build on, the same way the splash
+    /// screen's own Blender/Unreal presets are, not a real file the artist
+    /// is now editing in place. Leaving `current_path` unset means "Save"
+    /// prompts "Save As" instead of silently overwriting the checked-in
+    /// example.
+    fn load_example(&mut self, path: &str) {
+        match mc_core::Graph::load_from_file(path) {
+            Ok(graph) => self.replace_graph(graph, None),
+            Err(err) => {
+                log::warn!("failed to open example {path}: {err}");
+                self.toasts.error(format!("Couldn't open {path}: {err}"));
             }
         }
     }
