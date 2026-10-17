@@ -688,54 +688,188 @@ fn build_fabric_graph() -> mc_core::Graph {
     graph
 }
 
-/// CLAUDE.md §10's M6 example graph: a fractal noise squashed heavily along
-/// one axis (Transform 2D) into grain lines, colorized brown.
+/// Herringbone parquet, not a single squashed noise: one "V" repeat unit
+/// (two `Shape` rectangles rotated to \u{b1}45\u{b0} — safe to rotate at any
+/// angle since a single centered Shape is a pure procedural SDF evaluated
+/// directly per pixel, never resampled across a wrapped boundary the way
+/// `Transform2D`'s own "only 0.25-turn multiples stay exactly tileable"
+/// warning is about), tiled via two separate `Pattern Generator`s sharing
+/// one grid so each diagonal direction's own mask survives independently
+/// for per-plank-orientation color variation, plus grain noise and a couple
+/// of sparse knots.
 fn build_wood_graph() -> mc_core::Graph {
     let mut graph = mc_core::Graph::new();
     graph.settings.resolution = 512;
-    // Grain lines read as moderate relief, not deep canyons.
+    // Plank relief reads as moderate, not deep canyons.
     graph.settings.height_scale = 0.05;
 
+    // The repeat unit's fundamental domain of a 45\u{b0} herringbone weave is
+    // an ordinary axis-aligned square (one full zigzag "V") — no outer
+    // rotation/offset needed at the grid level at all, calibrated visually
+    // (see commit history) against `/tmp/herringbone_v_unit.png` renders
+    // until the two diagonals interlocked with no overlap and the 4\u{d7}4
+    // grid repeated with no seam.
+    let plank_a = graph.add_node(
+        mc_core::Node::new("shape")
+            .with_param("kind", mc_core::ParamValue::Enum("Square".to_string()))
+            .with_param("scale_x", mc_core::ParamValue::Float(0.45))
+            .with_param("scale_y", mc_core::ParamValue::Float(1.9))
+            .with_param("rotation", mc_core::ParamValue::Float(0.125))
+            .with_param("offset_x", mc_core::ParamValue::Float(-0.25)),
+    );
+    let plank_b = graph.add_node(
+        mc_core::Node::new("shape")
+            .with_param("kind", mc_core::ParamValue::Enum("Square".to_string()))
+            .with_param("scale_x", mc_core::ParamValue::Float(0.45))
+            .with_param("scale_y", mc_core::ParamValue::Float(1.9))
+            .with_param("rotation", mc_core::ParamValue::Float(0.375))
+            .with_param("offset_x", mc_core::ParamValue::Float(0.25)),
+    );
+    // Kept as two separate Pattern Generators (not one shape merged before
+    // tiling) specifically so each diagonal direction's own mask survives
+    // independently, for the per-orientation color tint below — both share
+    // identical rows/columns/shape_size so their grids line up exactly.
+    // `shape_size = 1/columns`: Pattern Generator's own `shape_size` is
+    // tile-absolute, scaled by column count internally, so this is what
+    // maps one full authored Shape canvas onto exactly one grid cell.
+    let herringbone_a = graph.add_node(
+        mc_core::Node::new("tile_generator")
+            .with_param("rows", mc_core::ParamValue::Int(4))
+            .with_param("columns", mc_core::ParamValue::Int(4))
+            .with_param("shape_size", mc_core::ParamValue::Float(0.25)),
+    );
+    graph
+        .connect(plank_a, "output", herringbone_a, "shape")
+        .unwrap();
+    let herringbone_b = graph.add_node(
+        mc_core::Node::new("tile_generator")
+            .with_param("rows", mc_core::ParamValue::Int(4))
+            .with_param("columns", mc_core::ParamValue::Int(4))
+            .with_param("shape_size", mc_core::ParamValue::Float(0.25)),
+    );
+    graph
+        .connect(plank_b, "output", herringbone_b, "shape")
+        .unwrap();
+
+    let height = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Max".to_string())),
+    );
+    graph
+        .connect(herringbone_a, "output", height, "base")
+        .unwrap();
+    graph
+        .connect(herringbone_b, "output", height, "blend")
+        .unwrap();
+
+    // Per-plank-orientation color: a dark seam color everywhere, tinted to
+    // one wood tone under `herringbone_a`'s own planks and a second, subtly
+    // different tone under `herringbone_b`'s — alternating diagonals
+    // reading as genuinely different boards, the way real herringbone
+    // flooring does under directional light.
+    let seam_color = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.08, 0.05, 0.03, 1.0])),
+    );
+    let tone_a = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.45, 0.28, 0.14, 1.0])),
+    );
+    let tone_b = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.38, 0.23, 0.12, 1.0])),
+    );
+    let with_tone_a = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Copy".to_string())),
+    );
+    graph
+        .connect(seam_color, "output", with_tone_a, "base")
+        .unwrap();
+    graph
+        .connect(tone_a, "output", with_tone_a, "blend")
+        .unwrap();
+    graph
+        .connect(herringbone_a, "output", with_tone_a, "mask")
+        .unwrap();
+    let oriented_color = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Copy".to_string())),
+    );
+    graph
+        .connect(with_tone_a, "output", oriented_color, "base")
+        .unwrap();
+    graph
+        .connect(tone_b, "output", oriented_color, "blend")
+        .unwrap();
+    graph
+        .connect(herringbone_b, "output", oriented_color, "mask")
+        .unwrap();
+
+    // Fine grain, multiplied on at low opacity — the same streaky fBm the
+    // previous (much simpler) version of this graph used for its own
+    // surface detail.
     let grain_noise = graph.add_node(
         mc_core::Node::new("fractal_sum")
-            .with_param("scale", mc_core::ParamValue::Int(5))
-            .with_param("octaves", mc_core::ParamValue::Int(5))
+            .with_param("scale", mc_core::ParamValue::Int(8))
+            .with_param("octaves", mc_core::ParamValue::Int(4))
             .with_param("gain", mc_core::ParamValue::Float(0.5))
             .with_param("seed", mc_core::ParamValue::Seed(41)),
     );
-    let grain = graph.add_node(
-        mc_core::Node::new("transform2d")
-            .with_param("scale_x", mc_core::ParamValue::Float(6.0))
-            .with_param("scale_y", mc_core::ParamValue::Float(1.0)),
+    let with_grain = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Multiply".to_string()))
+            .with_param("opacity", mc_core::ParamValue::Float(0.25)),
     );
     graph
-        .connect(grain_noise, "output", grain, "input")
+        .connect(oriented_color, "output", with_grain, "base")
+        .unwrap();
+    graph
+        .connect(grain_noise, "output", with_grain, "blend")
         .unwrap();
 
-    let colorize = graph.add_node(mc_core::Node::new("gradient_map").with_param(
-        "gradient",
-        mc_core::ParamValue::Gradient(vec![
-            mc_core::GradientStop {
-                position: 0.0,
-                color: [0.20, 0.11, 0.05, 1.0],
-            },
-            mc_core::GradientStop {
-                position: 0.5,
-                color: [0.42, 0.26, 0.13, 1.0],
-            },
-            mc_core::GradientStop {
-                position: 1.0,
-                color: [0.65, 0.46, 0.28, 1.0],
-            },
-        ]),
-    ));
-    graph.connect(grain, "output", colorize, "input").unwrap();
-
-    let normal = graph.add_node(
-        mc_core::Node::new("height_to_normal")
-            .with_param("intensity", mc_core::ParamValue::Float(1.0)),
+    // A couple of sparse, soft, dark knots — Voronoi F1's own naturally
+    // near-0..1 range needs no recalibration the way a compressed-range
+    // FractalSum mask would (see the Rock graph's own moss mask).
+    let knot_shapes = graph.add_node(
+        mc_core::Node::new("voronoi")
+            .with_param("scale", mc_core::ParamValue::Int(3))
+            .with_param("jitter", mc_core::ParamValue::Float(0.9))
+            .with_param("mode", mc_core::ParamValue::Enum("F1".to_string()))
+            .with_param("seed", mc_core::ParamValue::Seed(60)),
     );
-    graph.connect(grain, "output", normal, "input").unwrap();
+    // Voronoi F1's own output measured ~0.0..0.87 in practice (not the full
+    // 0..1) — 0.78 lands around its own 97th percentile, not 0..1's, for a
+    // couple of genuinely sparse knots rather than an empty mask.
+    let knot_mask = graph.add_node(
+        mc_core::Node::new("threshold").with_param("threshold", mc_core::ParamValue::Float(0.78)),
+    );
+    graph
+        .connect(knot_shapes, "output", knot_mask, "input")
+        .unwrap();
+    let knot_color = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.12, 0.07, 0.04, 1.0])),
+    );
+    let base_color = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Copy".to_string()))
+            .with_param("opacity", mc_core::ParamValue::Float(0.6)),
+    );
+    graph
+        .connect(with_grain, "output", base_color, "base")
+        .unwrap();
+    graph
+        .connect(knot_color, "output", base_color, "blend")
+        .unwrap();
+    graph
+        .connect(knot_mask, "output", base_color, "mask")
+        .unwrap();
+
+    let normal = graph.add_node(mc_core::Node::new("height_to_normal"));
+    graph.connect(height, "output", normal, "input").unwrap();
+    let ao = graph.add_node(mc_core::Node::new("height_to_ao"));
+    graph.connect(height, "output", ao, "input").unwrap();
 
     let roughness = graph.add_node(
         mc_core::Node::new("uniform_color")
@@ -754,19 +888,21 @@ fn build_wood_graph() -> mc_core::Graph {
     let out_ao = graph.add_node(mc_core::Node::new("output_ambient_occlusion"));
 
     graph
-        .connect(colorize, "output", out_base_color, "input")
+        .connect(base_color, "output", out_base_color, "input")
         .unwrap();
     graph
         .connect(normal, "output", out_normal, "input")
         .unwrap();
-    graph.connect(grain, "output", out_height, "input").unwrap();
+    graph
+        .connect(height, "output", out_height, "input")
+        .unwrap();
     graph
         .connect(roughness, "output", out_roughness, "input")
         .unwrap();
     graph
         .connect(metallic, "output", out_metallic, "input")
         .unwrap();
-    graph.connect(grain, "output", out_ao, "input").unwrap();
+    graph.connect(ao, "output", out_ao, "input").unwrap();
 
     graph
 }
