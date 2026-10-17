@@ -3,7 +3,8 @@
   "settings": {
     "resolution": 512,
     "seed": 0,
-    "normal_format": "OpenGl"
+    "normal_format": "OpenGl",
+    "height_scale": 0.03
   },
   "nodes": {
     "0": {

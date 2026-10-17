@@ -1277,6 +1277,7 @@ impl MaterialCreatorApp {
         // `recompute_in_progress`'s own doc comment).
         self.recompute_in_progress = true;
         self.last_known_resolution = self.graph.settings.resolution;
+        self.viewport3d.height_scale = self.graph.settings.height_scale;
     }
 
     fn do_new(&mut self) {
@@ -1343,6 +1344,7 @@ impl MaterialCreatorApp {
     }
 
     fn save_to(&mut self, path: std::path::PathBuf) {
+        self.graph.settings.height_scale = self.viewport3d.height_scale;
         match self.graph.save_to_file(&path) {
             Ok(()) => {
                 self.toasts.info(format!("Saved {}", path.display()));

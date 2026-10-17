@@ -40,11 +40,25 @@ pub enum NormalFormat {
     DirectX,
 }
 
+/// Matches `Viewport3d::new()`'s own real-world default
+/// (`crates/mc_app/src/viewport3d.rs`) — kept in sync by hand since
+/// `mc_core` can't depend on the app crate.
+fn default_height_scale() -> f32 {
+    0.15
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphSettings {
     pub resolution: u32,
     pub seed: u32,
     pub normal_format: NormalFormat,
+    /// How strongly Height displaces the 3D viewport's mesh. Saved per
+    /// graph (rather than a single global UI setting) so each example's
+    /// own relief — a few millimeters of brushed-metal scratch versus a
+    /// whole hard-surface panel bevel — gets a sensible starting point
+    /// instead of one slider value fighting every graph at once.
+    #[serde(default = "default_height_scale")]
+    pub height_scale: f32,
 }
 
 impl Default for GraphSettings {
@@ -53,6 +67,7 @@ impl Default for GraphSettings {
             resolution: 1024,
             seed: 0,
             normal_format: NormalFormat::OpenGl,
+            height_scale: default_height_scale(),
         }
     }
 }
@@ -418,6 +433,7 @@ impl Graph {
             .settings
             .resolution
             .clamp(MIN_RESOLUTION, MAX_RESOLUTION);
+        graph.settings.height_scale = graph.settings.height_scale.clamp(0.0, 0.5);
         Ok(graph)
     }
 

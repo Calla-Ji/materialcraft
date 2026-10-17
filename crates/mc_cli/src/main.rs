@@ -24,6 +24,9 @@ use anyhow::Context;
 fn build_bricks_graph() -> mc_core::Graph {
     let mut graph = mc_core::Graph::new();
     graph.settings.resolution = 512;
+    // Grout depth is fine relative to a whole tile — the global 0.15
+    // default over-displaces it.
+    graph.settings.height_scale = 0.08;
 
     let bricks = graph.add_node(
         mc_core::Node::new("tile_generator")
@@ -130,6 +133,8 @@ fn build_bricks_graph() -> mc_core::Graph {
 fn build_glitch_dither_demo_graph() -> mc_core::Graph {
     let mut graph = mc_core::Graph::new();
     graph.settings.resolution = 512;
+    // Not a real height map semantically — just keep displacement subtle.
+    graph.settings.height_scale = 0.03;
 
     let noise = graph.add_node(
         mc_core::Node::new("perlin_noise")
@@ -210,6 +215,8 @@ fn build_glitch_dither_demo_graph() -> mc_core::Graph {
 fn build_rock_graph() -> mc_core::Graph {
     let mut graph = mc_core::Graph::new();
     graph.settings.resolution = 512;
+    // Chunky bevel relief needs more headroom than the other examples.
+    graph.settings.height_scale = 0.12;
 
     // "Edges" reads bright exactly at a cell boundary and ~0 everywhere
     // else (confirmed by rendering it alone) — the opposite polarity of
@@ -316,6 +323,8 @@ fn build_rock_graph() -> mc_core::Graph {
 fn build_brushed_metal_graph() -> mc_core::Graph {
     let mut graph = mc_core::Graph::new();
     graph.settings.resolution = 512;
+    // Fine brush streaks, minimal real relief.
+    graph.settings.height_scale = 0.02;
 
     let noise = graph.add_node(
         mc_core::Node::new("fractal_sum")
@@ -406,6 +415,8 @@ fn build_brushed_metal_graph() -> mc_core::Graph {
 fn build_fabric_graph() -> mc_core::Graph {
     let mut graph = mc_core::Graph::new();
     graph.settings.resolution = 512;
+    // Fine thread texture — the global 0.15 default reads as a furry cube.
+    graph.settings.height_scale = 0.03;
 
     let thread = graph.add_node(
         mc_core::Node::new("thread_shape").with_param("plies", mc_core::ParamValue::Int(3)),
@@ -503,6 +514,8 @@ fn build_fabric_graph() -> mc_core::Graph {
 fn build_wood_graph() -> mc_core::Graph {
     let mut graph = mc_core::Graph::new();
     graph.settings.resolution = 512;
+    // Grain lines read as moderate relief, not deep canyons.
+    graph.settings.height_scale = 0.05;
 
     let grain_noise = graph.add_node(
         mc_core::Node::new("fractal_sum")
@@ -594,6 +607,8 @@ fn build_wood_graph() -> mc_core::Graph {
 fn build_hardsurface_demo_graph() -> mc_core::Graph {
     let mut graph = mc_core::Graph::new();
     graph.settings.resolution = 512;
+    // Panel bevels/rivets at tile-unit scale, not canyon-deep.
+    graph.settings.height_scale = 0.06;
 
     let panels = graph.add_node(mc_core::Node::new("panel_layout"));
 
