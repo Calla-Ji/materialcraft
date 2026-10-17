@@ -539,6 +539,28 @@ pub fn auto_layout(
         columns[column[&id] as usize].push(id);
     }
 
+    // Every `output_*` node is always a graph leaf (nothing ever reads
+    // from one), so moving them all into one shared final column — to the
+    // right of everything else, regardless of each one's own natural
+    // topological depth — is purely cosmetic and never disturbs a real
+    // dependency, scoped selection or not.
+    let mut output_ids: Vec<NodeId> = Vec::new();
+    for nodes_in_column in &mut columns {
+        nodes_in_column.retain(|&id| {
+            let is_output = graph
+                .node(id)
+                .is_some_and(|node| node.kind.starts_with("output_"));
+            if is_output {
+                output_ids.push(id);
+            }
+            !is_output
+        });
+    }
+    columns.retain(|nodes_in_column| !nodes_in_column.is_empty());
+    if !output_ids.is_empty() {
+        columns.push(output_ids);
+    }
+
     // Barycenter row ordering: processed column by column, left to right,
     // so by the time a node's own row is needed as an upstream reference
     // for a later column, it's already been assigned.

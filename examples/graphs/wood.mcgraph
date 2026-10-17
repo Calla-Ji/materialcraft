@@ -44,7 +44,7 @@
         }
       },
       "position": [
-        0.0,
+        250.0,
         0.0
       ]
     },
@@ -85,7 +85,7 @@
         }
       },
       "position": [
-        0.0,
+        500.0,
         0.0
       ]
     },
@@ -98,8 +98,8 @@
         }
       },
       "position": [
-        0.0,
-        0.0
+        500.0,
+        250.0
       ]
     },
     "4": {
@@ -117,7 +117,7 @@
       },
       "position": [
         0.0,
-        0.0
+        250.0
       ]
     },
     "5": {
@@ -135,30 +135,30 @@
       },
       "position": [
         0.0,
-        0.0
+        500.0
       ]
     },
     "6": {
       "kind": "output_base_color",
       "params": {},
       "position": [
-        0.0,
-        0.0
+        750.0,
+        500.0
       ]
     },
     "7": {
       "kind": "output_normal",
       "params": {},
       "position": [
-        0.0,
-        0.0
+        750.0,
+        1000.0
       ]
     },
     "8": {
       "kind": "output_height",
       "params": {},
       "position": [
-        0.0,
+        750.0,
         0.0
       ]
     },
@@ -166,24 +166,24 @@
       "kind": "output_roughness",
       "params": {},
       "position": [
-        0.0,
-        0.0
+        750.0,
+        750.0
       ]
     },
     "10": {
       "kind": "output_metallic",
       "params": {},
       "position": [
-        0.0,
-        0.0
+        750.0,
+        1250.0
       ]
     },
     "11": {
       "kind": "output_ambient_occlusion",
       "params": {},
       "position": [
-        0.0,
-        0.0
+        750.0,
+        250.0
       ]
     }
   },

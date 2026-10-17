@@ -697,6 +697,132 @@ fn build_hardsurface_demo_graph() -> mc_core::Graph {
     graph
 }
 
+/// Column = topological depth from a source node, row = barycenter-ordered
+/// within that column to cut down on wire crossings — the same algorithm
+/// `mc_app::canvas::auto_layout` uses interactively, re-implemented here
+/// rather than shared: `mc_app` is a GUI binary crate with no `[lib]`
+/// target `mc_cli` could depend on, and pulling in `egui`/`eframe` as a
+/// dependency of this headless tool just to reuse one function would be
+/// backwards. Every node built in code above starts at `[0, 0]`
+/// (`mc_core::Node`'s own default) — without this, every example graph
+/// opened in the app shows every node stacked on top of the next at the
+/// origin, confirmed by the owner's own screenshot of `hardsurface_demo`'s
+/// Node Graph panel.
+fn auto_layout_for_save(graph: &mut mc_core::Graph) {
+    let Ok(order) = graph.topological_order() else {
+        return;
+    };
+    if order.is_empty() {
+        return;
+    }
+
+    let mut column: std::collections::HashMap<mc_core::NodeId, u32> =
+        std::collections::HashMap::new();
+    for &id in &order {
+        let col = graph
+            .connections()
+            .iter()
+            .filter(|c| c.to_node == id)
+            .filter_map(|c| column.get(&c.from_node))
+            .max()
+            .map(|&upstream| upstream + 1)
+            .unwrap_or(0);
+        column.insert(id, col);
+    }
+
+    let column_count = column.values().max().map(|&c| c + 1).unwrap_or(0) as usize;
+    let mut columns: Vec<Vec<mc_core::NodeId>> = vec![Vec::new(); column_count];
+    for &id in &order {
+        columns[column[&id] as usize].push(id);
+    }
+
+    // Every `output_*` node is always a graph leaf (nothing ever reads
+    // from one), so moving them all into one shared final column — to
+    // the right of everything else, regardless of each one's own natural
+    // topological depth — is purely cosmetic and never disturbs a real
+    // dependency. Matches the owner's own explicit request for example
+    // graphs: "all output nodes are in one column".
+    let mut output_ids: Vec<mc_core::NodeId> = Vec::new();
+    for nodes_in_column in &mut columns {
+        nodes_in_column.retain(|&id| {
+            let is_output = graph
+                .node(id)
+                .is_some_and(|node| node.kind.starts_with("output_"));
+            if is_output {
+                output_ids.push(id);
+            }
+            !is_output
+        });
+    }
+    columns.retain(|nodes_in_column| !nodes_in_column.is_empty());
+    if !output_ids.is_empty() {
+        columns.push(output_ids);
+    }
+
+    let mut row_of: std::collections::HashMap<mc_core::NodeId, f32> =
+        std::collections::HashMap::new();
+    for nodes_in_column in &mut columns {
+        nodes_in_column.sort_by(|&a, &b| {
+            let barycenter = |id: mc_core::NodeId| -> f32 {
+                let upstream_rows: Vec<f32> = graph
+                    .connections()
+                    .iter()
+                    .filter(|c| c.to_node == id)
+                    .filter_map(|c| row_of.get(&c.from_node).copied())
+                    .collect();
+                if upstream_rows.is_empty() {
+                    0.0
+                } else {
+                    upstream_rows.iter().sum::<f32>() / upstream_rows.len() as f32
+                }
+            };
+            barycenter(a)
+                .partial_cmp(&barycenter(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for (row, &id) in nodes_in_column.iter().enumerate() {
+            row_of.insert(id, row as f32);
+        }
+    }
+
+    // Mirrors `mc_app::canvas`'s own node-box constants exactly, so a
+    // graph built here lays out the same way the in-app "Auto Layout"
+    // button would arrange it.
+    const NODE_WIDTH: f32 = 170.0;
+    const HEADER_HEIGHT: f32 = 24.0;
+    const PORT_ROW_HEIGHT: f32 = 20.0;
+    const BODY_PADDING: f32 = 6.0;
+    const THUMBNAIL_SIZE: f32 = NODE_WIDTH - 2.0 * BODY_PADDING;
+    const COLUMN_GAP: f32 = 80.0;
+    const ROW_GAP: f32 = 30.0;
+
+    let node_height = |kind: &str| -> f32 {
+        let port_rows = mc_nodes::defs::node_def(kind)
+            .map(|def| def.inputs.len().max(def.outputs.len()).max(1))
+            .unwrap_or(1) as f32;
+        HEADER_HEIGHT
+            + BODY_PADDING
+            + port_rows * PORT_ROW_HEIGHT
+            + BODY_PADDING
+            + THUMBNAIL_SIZE
+            + BODY_PADDING
+    };
+
+    let mut x = 0.0f32;
+    for nodes_in_column in &columns {
+        let mut y = 0.0f32;
+        for &id in nodes_in_column {
+            let _ = graph.set_node_position(id, [x, y]);
+            let height = graph
+                .node(id)
+                .map(|node| node_height(&node.kind))
+                .unwrap_or(0.0);
+            y += height + ROW_GAP;
+        }
+        x += NODE_WIDTH + COLUMN_GAP;
+    }
+}
+
 /// Saves `graph` to `examples/graphs/{name}.mcgraph`, reloads it (the real
 /// file round trip, not just in-memory), evaluates it, and writes its
 /// Output: Base Color to `{out_dir}/{name}_base_color.png` — the common
@@ -707,9 +833,10 @@ fn save_evaluate_and_render_base_color(
     gpu: &mut mc_gpu::Context,
     pool: &mut mc_gpu::TexturePool,
     name: &str,
-    graph: mc_core::Graph,
+    mut graph: mc_core::Graph,
     out_dir: &str,
 ) -> anyhow::Result<()> {
+    auto_layout_for_save(&mut graph);
     let graph_path = format!("examples/graphs/{name}.mcgraph");
     graph.save_to_file(&graph_path)?;
     let mut graph = mc_core::Graph::load_from_file(&graph_path)
@@ -743,7 +870,9 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(out_dir)?;
 
     let graph_path = "examples/graphs/bricks.mcgraph";
-    build_bricks_graph().save_to_file(graph_path)?;
+    let mut bricks_graph = build_bricks_graph();
+    auto_layout_for_save(&mut bricks_graph);
+    bricks_graph.save_to_file(graph_path)?;
     let mut graph = mc_core::Graph::load_from_file(graph_path)
         .with_context(|| format!("failed to load {graph_path}"))?;
 
