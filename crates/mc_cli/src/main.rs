@@ -571,6 +571,132 @@ fn build_wood_graph() -> mc_core::Graph {
     graph
 }
 
+/// Hard-Surface Nodes' own demo chain (`docs/hardsurface_nodes/
+/// HARDSURFACE_NODES.md` §4): Panel Layout -> a per-panel 0.75/1.0/1.25
+/// height variety (`lvl`, a Gradient Map with razor-thin transition
+/// bands — not Blend, since `blend.wgsl`'s own `combine()` result is
+/// always clamped to `[0, 1]` regardless of mode, so no chain of Blend
+/// nodes could ever reach `1.25` at all; `graph.connect` itself does no
+/// port-type validation, confirmed by reading `mc_core::Graph::connect`
+/// directly, so Gradient Map's declared-`Color` output can freely feed
+/// an `Sdf`/`Gray` input the same way the editor's own Gray<->Color
+/// broadcast already treats them) -> Bevel Profile -> Fasteners seated
+/// on the beveled, leveled height -> Edge Wear. Verified against
+/// `golden/demo_height.png` by `tests/hardsurface_demo.rs`.
+fn build_hardsurface_demo_graph() -> mc_core::Graph {
+    let mut graph = mc_core::Graph::new();
+    graph.settings.resolution = 512;
+
+    let panels = graph.add_node(mc_core::Node::new("panel_layout"));
+
+    // lvl = 0.75 / 1.0 / 1.25 below/within/above the [0.25, 0.85] band,
+    // matching the reference's own `where(pid<0.25, 0.75, where(pid>0.85,
+    // 1.25, 1.0))`. A single Gradient Map with razor-thin transition bands
+    // (width 0.0002, far narrower than any gap between this seed's 18
+    // panels' own hashed IDs could ever land inside) reproduces that hard
+    // step directly — deliberately *not* Blend for this: `blend.wgsl`'s
+    // own `combine()` result is always clamped to `[0, 1]` regardless of
+    // mode, so no chain of Blend nodes can ever produce `1.25` at all.
+    // Gradient Map's own interpolated color has no such clamp.
+    let lvl = graph.add_node(mc_core::Node::new("gradient_map").with_param(
+        "gradient",
+        mc_core::ParamValue::Gradient(vec![
+            mc_core::GradientStop {
+                position: 0.0,
+                color: [0.75, 0.75, 0.75, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 0.2499,
+                color: [0.75, 0.75, 0.75, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 0.2501,
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 0.8499,
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 0.8501,
+                color: [1.25, 1.25, 1.25, 1.0],
+            },
+            mc_core::GradientStop {
+                position: 1.0,
+                color: [1.25, 1.25, 1.25, 1.0],
+            },
+        ]),
+    ));
+    graph.connect(panels, "panel_id", lvl, "input").unwrap();
+
+    // Depth: 0.5 pre-folds the reference's own separate `* 0.5` — height
+    // scales linearly with depth (base = 0), so bevel(depth=0.5) ==
+    // bevel(depth=1.0) * 0.5 exactly.
+    let bevel = graph.add_node(
+        mc_core::Node::new("bevel_profile")
+            .with_param("preset", mc_core::ParamValue::Enum("Round".to_string()))
+            .with_param("width", mc_core::ParamValue::Float(0.006))
+            .with_param("wall", mc_core::ParamValue::Float(0.35))
+            .with_param("depth", mc_core::ParamValue::Float(0.5)),
+    );
+    graph.connect(panels, "sdf", bevel, "sdf").unwrap();
+
+    let leveled_height = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Multiply".to_string())),
+    );
+    graph
+        .connect(bevel, "height", leveled_height, "base")
+        .unwrap();
+    graph
+        .connect(lvl, "output", leveled_height, "blend")
+        .unwrap();
+
+    let fasteners = graph.add_node(
+        mc_core::Node::new("fasteners")
+            .with_param("kind", mc_core::ParamValue::Enum("Rivet Dome".to_string()))
+            .with_param("spacing", mc_core::ParamValue::Float(0.045))
+            .with_param("head_radius", mc_core::ParamValue::Float(0.0055))
+            .with_param("head_height", mc_core::ParamValue::Float(0.22))
+            .with_param("seed", mc_core::ParamValue::Seed(3))
+            .with_param("missing", mc_core::ParamValue::Float(0.04)),
+    );
+    graph.connect(panels, "path", fasteners, "path").unwrap();
+    graph
+        .connect(leveled_height, "output", fasteners, "base")
+        .unwrap();
+
+    let wear = graph.add_node(
+        mc_core::Node::new("edge_wear").with_param("amount", mc_core::ParamValue::Float(0.45)),
+    );
+    graph.connect(panels, "sdf", wear, "sdf").unwrap();
+    graph.connect(fasteners, "height", wear, "height").unwrap();
+
+    let normal = graph.add_node(mc_core::Node::new("height_to_normal"));
+    graph.connect(wear, "height", normal, "input").unwrap();
+    let ao = graph.add_node(mc_core::Node::new("height_to_ao"));
+    graph.connect(wear, "height", ao, "input").unwrap();
+    let base_color = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.6, 0.6, 0.62, 1.0])),
+    );
+
+    let out_base_color = graph.add_node(mc_core::Node::new("output_base_color"));
+    let out_normal = graph.add_node(mc_core::Node::new("output_normal"));
+    let out_height = graph.add_node(mc_core::Node::new("output_height"));
+    let out_ao = graph.add_node(mc_core::Node::new("output_ambient_occlusion"));
+    graph
+        .connect(base_color, "output", out_base_color, "input")
+        .unwrap();
+    graph
+        .connect(normal, "output", out_normal, "input")
+        .unwrap();
+    graph.connect(wear, "height", out_height, "input").unwrap();
+    graph.connect(ao, "output", out_ao, "input").unwrap();
+
+    graph
+}
+
 /// Saves `graph` to `examples/graphs/{name}.mcgraph`, reloads it (the real
 /// file round trip, not just in-memory), evaluates it, and writes its
 /// Output: Base Color to `{out_dir}/{name}_base_color.png` — the common
@@ -707,6 +833,7 @@ fn main() -> anyhow::Result<()> {
         ("brushed_metal", build_brushed_metal_graph()),
         ("fabric", build_fabric_graph()),
         ("wood", build_wood_graph()),
+        ("hardsurface_demo", build_hardsurface_demo_graph()),
     ] {
         save_evaluate_and_render_base_color(&mut gpu, &mut pool, name, graph, out_dir)?;
     }
