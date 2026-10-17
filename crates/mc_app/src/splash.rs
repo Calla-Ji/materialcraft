@@ -245,6 +245,25 @@ pub fn show(ctx: &egui::Context, state: &mut SplashState) -> Option<(StartChoice
                 egui::FontId::proportional(15.0),
                 crate::theme::SUPERNOVA_LIGHT,
             );
+            // Lets the artist dismiss this without picking a starting
+            // point — the same "New" invocation that opened it already
+            // left whatever graph was open untouched (`do_new` only sets
+            // `self.splash.open = true`), so closing here just cancels
+            // that, same as it would on a fresh launch with no graph to
+            // lose. Shares `dialog_chrome.rs`'s own close button drawing
+            // for the same glyph/hover styling every other dialog's X
+            // already uses.
+            let close_rect = egui::Rect::from_center_size(
+                header_rect.right_center()
+                    - egui::vec2(
+                        LEFT_MARGIN + crate::dialog_chrome::CLOSE_BUTTON_SIZE / 2.0,
+                        0.0,
+                    ),
+                egui::Vec2::splat(crate::dialog_chrome::CLOSE_BUTTON_SIZE),
+            );
+            if crate::dialog_chrome::close_button(ui, "splash", close_rect) {
+                state.open = false;
+            }
             ui.painter().hline(
                 header_rect.x_range(),
                 header_rect.bottom(),

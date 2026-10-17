@@ -24,7 +24,11 @@ const HEADER_HEIGHT: f32 = 28.0;
 const HEADER_GAP: f32 = 8.0;
 const CONTENT_PADDING: f32 = 12.0;
 const CORNER_RADIUS: f32 = 8.0;
-const CLOSE_BUTTON_SIZE: f32 = 20.0;
+/// Also used by `splash.rs`'s own hand-rolled header, which needs this
+/// to size the close button it positions itself (see that module's own
+/// doc comment for why it doesn't use this file's `show` wrapper
+/// wholesale).
+pub(crate) const CLOSE_BUTTON_SIZE: f32 = 20.0;
 /// "close", confirmed against Google's own
 /// `MaterialIconsRound-Regular.codepoints` file — same convention every
 /// other icon glyph constant in this app follows.
@@ -34,7 +38,9 @@ const CLOSE_GLYPH: char = '\u{e5cd}';
 /// primitives (same reasoning as `twod_toolbar.rs`'s own `icon_button`)
 /// so it reads as a real app control rather than `egui::Window`'s own
 /// default title-bar X, which `title_bar(false)` removes entirely.
-fn close_button(ui: &mut egui::Ui, id_source: &str, rect: egui::Rect) -> bool {
+/// `pub(crate)` so `splash.rs` can share the same glyph/hover styling
+/// for its own header's close button instead of redrawing it by hand.
+pub(crate) fn close_button(ui: &mut egui::Ui, id_source: &str, rect: egui::Rect) -> bool {
     let response = ui.interact(
         rect,
         ui.id().with((id_source, "close")),
