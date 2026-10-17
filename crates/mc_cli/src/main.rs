@@ -33,7 +33,7 @@ fn build_bricks_graph() -> mc_core::Graph {
             .with_param("rows", mc_core::ParamValue::Int(6))
             .with_param("columns", mc_core::ParamValue::Int(4))
             .with_param("offset", mc_core::ParamValue::Float(0.5))
-            .with_param("gap", mc_core::ParamValue::Float(0.06))
+            .with_param("gap", mc_core::ParamValue::Float(0.03))
             .with_param("bevel", mc_core::ParamValue::Float(0.1))
             .with_param("size_jitter", mc_core::ParamValue::Float(0.1))
             .with_param("luminance_jitter", mc_core::ParamValue::Float(0.2))
@@ -53,16 +53,19 @@ fn build_bricks_graph() -> mc_core::Graph {
             .with_param("mode", mc_core::ParamValue::Enum("Copy".to_string())),
     );
 
+    // Clouds' soft, blobby fBm reads as the classic mottled color
+    // variegation real fired clay brick faces have — masked to brick area
+    // only (below) so mortar stays a flat, uniform color.
     let variation_noise = graph.add_node(
-        mc_core::Node::new("perlin_noise")
-            .with_param("scale", mc_core::ParamValue::Int(10))
-            .with_param("octaves", mc_core::ParamValue::Int(3))
+        mc_core::Node::new("clouds")
+            .with_param("scale", mc_core::ParamValue::Int(6))
+            .with_param("softness", mc_core::ParamValue::Float(0.6))
             .with_param("seed", mc_core::ParamValue::Seed(7)),
     );
     let varied_color = graph.add_node(
         mc_core::Node::new("blend")
             .with_param("mode", mc_core::ParamValue::Enum("Multiply".to_string()))
-            .with_param("opacity", mc_core::ParamValue::Float(0.2)),
+            .with_param("opacity", mc_core::ParamValue::Float(0.3)),
     );
 
     let normal = graph.add_node(
@@ -100,8 +103,12 @@ fn build_bricks_graph() -> mc_core::Graph {
     graph
         .connect(variation_noise, "output", varied_color, "blend")
         .unwrap();
-    // `varied_color`'s mask is left unconnected — it falls back to the
-    // documented solid-white default, so the Multiply applies everywhere.
+    // `bricks`' own output doubles as the brick/mortar mask (same texture
+    // already used as `colorize`'s own mask above) — confines the Clouds
+    // variegation to brick faces, leaving mortar a flat, uniform color.
+    graph
+        .connect(bricks, "output", varied_color, "mask")
+        .unwrap();
 
     graph.connect(bricks, "output", normal, "input").unwrap();
 
@@ -872,20 +879,21 @@ fn build_hardsurface_demo_graph() -> mc_core::Graph {
     let ao = graph.add_node(mc_core::Node::new("height_to_ao"));
     graph.connect(wear, "height", ao, "input").unwrap();
 
-    // Base Color: painted panels with Wear exposing bare metal underneath
-    // and Cavity darkening seams/recesses with dirt — actually using the
-    // two masks Edge Wear exists to produce, not just a flat fill.
+    // Base Color: painted panels with Wear exposing rusty bare metal
+    // underneath and Cavity darkening seams/recesses with rust-stained
+    // dirt — actually using the two masks Edge Wear exists to produce,
+    // not just a flat fill.
     let paint_color = graph.add_node(
         mc_core::Node::new("uniform_color")
-            .with_param("color", mc_core::ParamValue::Color([0.35, 0.38, 0.42, 1.0])),
+            .with_param("color", mc_core::ParamValue::Color([0.30, 0.31, 0.33, 1.0])),
     );
-    let metal_color = graph.add_node(
+    let rust_color = graph.add_node(
         mc_core::Node::new("uniform_color")
-            .with_param("color", mc_core::ParamValue::Color([0.72, 0.70, 0.64, 1.0])),
+            .with_param("color", mc_core::ParamValue::Color([0.45, 0.24, 0.11, 1.0])),
     );
     let dirt_color = graph.add_node(
         mc_core::Node::new("uniform_color")
-            .with_param("color", mc_core::ParamValue::Color([0.10, 0.09, 0.08, 1.0])),
+            .with_param("color", mc_core::ParamValue::Color([0.16, 0.10, 0.06, 1.0])),
     );
     let worn_color = graph.add_node(
         mc_core::Node::new("blend")
@@ -895,20 +903,44 @@ fn build_hardsurface_demo_graph() -> mc_core::Graph {
         .connect(paint_color, "output", worn_color, "base")
         .unwrap();
     graph
-        .connect(metal_color, "output", worn_color, "blend")
+        .connect(rust_color, "output", worn_color, "blend")
         .unwrap();
     graph.connect(wear, "wear", worn_color, "mask").unwrap();
-    let base_color = graph.add_node(
+    let dirtied_color = graph.add_node(
         mc_core::Node::new("blend")
             .with_param("mode", mc_core::ParamValue::Enum("Copy".to_string())),
     );
     graph
-        .connect(worn_color, "output", base_color, "base")
+        .connect(worn_color, "output", dirtied_color, "base")
         .unwrap();
     graph
-        .connect(dirt_color, "output", base_color, "blend")
+        .connect(dirt_color, "output", dirtied_color, "blend")
         .unwrap();
-    graph.connect(wear, "cavity", base_color, "mask").unwrap();
+    graph
+        .connect(wear, "cavity", dirtied_color, "mask")
+        .unwrap();
+
+    // Rivets read a touch darker than the surrounding panel regardless of
+    // wear/dirt state underneath — composited last via Fasteners' own
+    // `mask` output (every rivet head's footprint).
+    let rivet_color = graph.add_node(
+        mc_core::Node::new("uniform_color")
+            .with_param("color", mc_core::ParamValue::Color([0.18, 0.19, 0.20, 1.0])),
+    );
+    let base_color = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Copy".to_string()))
+            .with_param("opacity", mc_core::ParamValue::Float(0.6)),
+    );
+    graph
+        .connect(dirtied_color, "output", base_color, "base")
+        .unwrap();
+    graph
+        .connect(rivet_color, "output", base_color, "blend")
+        .unwrap();
+    graph
+        .connect(fasteners, "mask", base_color, "mask")
+        .unwrap();
 
     // Roughness/Metallic: both driven by the same two masks — scratched
     // and dirty patches read rougher, and Wear's exposed metal reads
@@ -948,20 +980,34 @@ fn build_hardsurface_demo_graph() -> mc_core::Graph {
     graph.connect(white, "output", roughness, "blend").unwrap();
     graph.connect(wear, "cavity", roughness, "mask").unwrap();
 
+    // A painted metal panel reads with a subtle metallic sheen overall
+    // (0.18, not 0.0 — flat 0 is what read as plastic), but rust and dirt
+    // are dielectric, not shiny exposed steel, so both masks *subtract*
+    // metallic back toward 0 instead of adding to it.
     let metallic_base = graph.add_node(
         mc_core::Node::new("uniform_color")
-            .with_param("color", mc_core::ParamValue::Color([0.0, 0.0, 0.0, 1.0])),
+            .with_param("color", mc_core::ParamValue::Color([0.18, 0.18, 0.18, 1.0])),
     );
-    let metallic = graph.add_node(
+    let metallic_worn = graph.add_node(
         mc_core::Node::new("blend")
-            .with_param("mode", mc_core::ParamValue::Enum("Add".to_string()))
-            .with_param("opacity", mc_core::ParamValue::Float(0.9)),
+            .with_param("mode", mc_core::ParamValue::Enum("Subtract".to_string())),
     );
     graph
-        .connect(metallic_base, "output", metallic, "base")
+        .connect(metallic_base, "output", metallic_worn, "base")
+        .unwrap();
+    graph
+        .connect(white, "output", metallic_worn, "blend")
+        .unwrap();
+    graph.connect(wear, "wear", metallic_worn, "mask").unwrap();
+    let metallic = graph.add_node(
+        mc_core::Node::new("blend")
+            .with_param("mode", mc_core::ParamValue::Enum("Subtract".to_string())),
+    );
+    graph
+        .connect(metallic_worn, "output", metallic, "base")
         .unwrap();
     graph.connect(white, "output", metallic, "blend").unwrap();
-    graph.connect(wear, "wear", metallic, "mask").unwrap();
+    graph.connect(wear, "cavity", metallic, "mask").unwrap();
 
     let out_base_color = graph.add_node(mc_core::Node::new("output_base_color"));
     let out_normal = graph.add_node(mc_core::Node::new("output_normal"));

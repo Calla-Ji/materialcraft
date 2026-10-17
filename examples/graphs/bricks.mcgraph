@@ -20,7 +20,7 @@
         },
         "gap": {
           "type": "Float",
-          "value": 0.06
+          "value": 0.03
         },
         "luminance_jitter": {
           "type": "Float",
@@ -98,19 +98,19 @@
       ]
     },
     "4": {
-      "kind": "perlin_noise",
+      "kind": "clouds",
       "params": {
-        "octaves": {
-          "type": "Int",
-          "value": 3
-        },
         "scale": {
           "type": "Int",
-          "value": 10
+          "value": 6
         },
         "seed": {
           "type": "Seed",
           "value": 7
+        },
+        "softness": {
+          "type": "Float",
+          "value": 0.6
         }
       },
       "position": [
@@ -127,7 +127,7 @@
         },
         "opacity": {
           "type": "Float",
-          "value": 0.2
+          "value": 0.3
         }
       },
       "position": [
@@ -263,6 +263,12 @@
       "from_port": "output",
       "to_node": 5,
       "to_port": "blend"
+    },
+    {
+      "from_node": 0,
+      "from_port": "output",
+      "to_node": 5,
+      "to_port": "mask"
     },
     {
       "from_node": 0,
